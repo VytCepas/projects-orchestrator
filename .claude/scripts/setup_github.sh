@@ -152,7 +152,7 @@ fi
 echo ""
 echo "Provisioning GitHub Project board fields..."
 
-PROJECT_NUMBER="${PROJECT_NUMBER:-1}"
+PROJECT_NUMBER="${PROJECT_NUMBER:-7}"
 
 # Use PROJECT_TOKEN if set, otherwise fall through to default gh auth
 if [ -n "${PROJECT_TOKEN:-}" ]; then

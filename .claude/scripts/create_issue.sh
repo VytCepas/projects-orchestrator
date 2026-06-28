@@ -409,13 +409,13 @@ ISSUE_NUMBER=$(echo "$ISSUE_URL" | grep -oE '[0-9]+$')
 # board. They are also written into the issue body above (PI-201) so the issue
 # is self-contained and passes issue-validation.yml; the board copy makes them
 # sortable/filterable for humans.
-# PROJECT_NUMBER defaults to 1; override with the env var if needed.
+# PROJECT_NUMBER defaults to 7 (this repo's board); override with the env var if needed.
 # ---------------------------------------------------------------------------
 sync_project_fields() {
   local issue_num="$1"
   local project_num owner repo_name project_data project_id item_id
 
-  project_num="${PROJECT_NUMBER:-1}"
+  project_num="${PROJECT_NUMBER:-7}"
   owner=$(gh repo view --json owner -q .owner.login)
   repo_name=$(gh repo view --json name -q .name)
 
