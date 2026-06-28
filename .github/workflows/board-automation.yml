@@ -30,7 +30,7 @@ jobs:
       GH_REPO: ${{ github.repository }}
       OWNER: ${{ github.repository_owner }}
       REPO_NAME: ${{ github.event.repository.name }}
-      PROJECT_NUMBER: 1
+      PROJECT_NUMBER: 7
 
     steps:
       - name: Determine issue and status
