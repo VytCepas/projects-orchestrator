@@ -1,0 +1,241 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Optimization: Only run CI when relevant files change
+  # Uncomment and adjust paths as needed for your project
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+
+  # PI-214: derive the test matrix from requires-python at runtime, so the
+  # version floor can never drift from what the project itself declares (a
+  # hardcoded matrix would reintroduce the PI-208 drift). This job reads
+  # requires-python and emits every supported version that satisfies it;
+  # lint-and-test then fans out across them. KNOWN is the only maintained
+  # list — the *ceiling* set enumerated up to; bump it (or let Renovate) when
+  # a new CPython is released. The floor is always taken from requires-python.
+  python-matrix:
+    name: Resolve Python matrix
+    runs-on: ubuntu-24.04
+    outputs:
+      versions: ${{ steps.resolve.outputs.versions }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          version: "0.11.7"
+
+      - name: Resolve versions satisfying requires-python
+        id: resolve
+        run: |
+          uv run --no-project --with packaging python - <<'PY'
+          import json
+          import os
+          import pathlib
+          import tomllib
+
+          from packaging.specifiers import InvalidSpecifier, SpecifierSet
+
+          # Maintained ceiling set — every CPython this template is willing to
+          # test. The floor comes from requires-python (below), never from here.
+          KNOWN = ["3.11", "3.12", "3.13", "3.14"]
+
+          spec = ""
+          pyproject = pathlib.Path("pyproject.toml")
+          if pyproject.is_file():
+              try:
+                  data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+                  spec = data.get("project", {}).get("requires-python", "") or ""
+              except (tomllib.TOMLDecodeError, OSError):
+                  spec = ""
+
+          if spec:
+              try:
+                  allowed = SpecifierSet(spec)
+                  versions = [v for v in KNOWN if allowed.contains(v + ".0")]
+              except InvalidSpecifier:
+                  # Present but malformed — fall back to the full set rather
+                  # than failing the job on a bad requires-python.
+                  versions = list(KNOWN)
+          else:
+              # No declared floor yet (e.g. a fresh scaffold) — test the full set.
+              versions = list(KNOWN)
+          if not versions:
+              # requires-python excludes every KNOWN version — fall back to the
+              # newest so CI still runs instead of erroring on an empty matrix.
+              versions = [KNOWN[-1]]
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write("versions=" + json.dumps(versions) + "\n")
+          print("requires-python:", spec or "(none) -> full KNOWN set")
+          print("matrix:", versions)
+          PY
+
+
+  lint-and-test:
+    name: Lint and test
+    runs-on: ubuntu-24.04
+
+    needs: python-matrix
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ${{ fromJSON(needs.python-matrix.outputs.versions) }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          version: "0.11.7"
+          # Pin this job to the matrix version (PI-214). Not the PI-208 drift:
+          # every matrix entry is >= the requires-python floor by construction
+          # (see the python-matrix job), so the floor can't drift below what
+          # the project declares.
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
+
+      # CI invokes the same justfile recipes agents and humans use (PI-139),
+      # so the command surface is defined exactly once.
+      - name: Install just
+        uses: extractions/setup-just@v4
+
+      - name: Sync dev dependencies
+        run: just setup
+
+      - name: Lint
+        run: just lint
+
+      # Coverage gate (PI-138): activates automatically once pytest-cov is in
+      # dev dependencies; runs plain tests until then. Tune --cov-fail-under
+      # in the justfile's test-cov recipe to your project's baseline.
+      - name: Tests — parallel, coverage-gated
+        run: |
+          if uv run python -c "import pytest_cov" 2>/dev/null; then
+            just test-cov
+          else
+            echo "pytest-cov not installed — running without the coverage gate."
+            echo "Add pytest-cov to dev dependencies to enable it."
+            just test
+          fi
+
+
+
+
+      - name: Post failure summary
+        if: failure() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          FAILED_STEPS=$(cat <<'SUMMARY'
+          Lint or tests failed in this run. Check the details and fix before re-pushing.
+          SUMMARY
+          )
+          gh pr comment "$PR_NUMBER" --body "## CI failed
+
+          **Run:** $RUN_URL
+
+          To see what failed:
+          \`\`\`bash
+          gh run view --log-failed
+          \`\`\`
+
+          Fix the issues, then run \`.claude/scripts/push_branch.sh\` to re-trigger CI."
+
+
+  # Optimization #2: Split heavyweight tests into separate job
+  # Only run integration/smoke tests after fast lint+unit tests pass
+  # Adjust this job based on your actual integration test needs
+  integration-tests:
+    name: Integration tests
+    runs-on: ubuntu-24.04
+    needs: lint-and-test
+    # Optional: Only run on main branch or when tests change significantly
+    # if: github.ref == 'refs/heads/main' || contains(github.event.pull_request.files[*].name, 'tests/')
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          version: "0.11.7"
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
+
+      # uv sync installs the project's required Python (.python-version /
+      # requires-python) — no version to drift (PI-208).
+      - name: Sync dev dependencies
+        run: uv sync --group dev
+
+      # Check if integration tests directory exists before running
+      # This prevents masking real test failures with "No integration tests" message
+      - name: Run integration tests
+        run: |
+          if [ -d tests/integration/ ]; then
+            uv run pytest tests/integration/ -v --tb=short
+          else
+            echo "No integration tests directory found (tests/integration/)"
+            echo "Create tests/integration/ when you have integration tests to run"
+          fi
+
+  # Test-quality verification via mutation testing (PI-138). Mutmut is slow,
+  # so it runs nightly, not per-PR. Uncomment to enable; requires mutmut in
+  # dev dependencies and a [tool.mutmut] section in pyproject.toml.
+  # mutation-tests:
+  #   name: Mutation tests (mutmut)
+  #   runs-on: ubuntu-24.04
+  #   if: github.event_name == 'schedule'
+  #   steps:
+  #     - uses: actions/checkout@v6
+  #     - uses: astral-sh/setup-uv@v8.1.0
+  #       with:
+  #         version: "0.11.7"
+  #     - run: uv sync --group dev
+  #     - run: uv run mutmut run
+  # (also add to the top-level `on:` block:)
+  #   schedule:
+  #     - cron: "0 3 * * *"
+
+
+  
+
+  # ADR-007: agent-agnostic secret-scanning backstop. The pre-commit git hook
+  # gives fast local feedback but is fail-open; this job is the hard gate.
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Full history so leaked commits are caught, not just the latest diff
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          # GITLEAKS_LICENSE is required only for organization-owned repos
+          # (free key from gitleaks.io). Personal accounts need no license.
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+
+# Optimization #3: Conditional job execution
+# Example configurations for different scenarios (see full details in CLAUDE.md):
+#
+# Path filters: Only run CI when relevant files change
+# Skip tests for docs-only changes: Use GitHub Actions conditional if statements
+# Skip integration tests for PRs from forks: Use event filters
+# See GitHub Actions documentation for complete conditionals syntax

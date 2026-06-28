@@ -1,0 +1,12 @@
+# CODEOWNERS — reviewers auto-requested for matching paths (scaffolded by project-init).
+# Order matters: the last matching pattern wins.
+# Owners must be GitHub usernames (@user) or teams (@org/team) with write access.
+
+# Default owner for everything in the repository.
+*       @VytCepas
+
+# Per-area examples — uncomment and adjust:
+# /src/             @your-org/backend
+# /docs/            @your-org/docs
+# /.github/         @your-org/platform
+# /.claude/         @your-org/platform

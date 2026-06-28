@@ -1,0 +1,72 @@
+name: Validate issue metadata
+
+on:
+  issues:
+    types: [opened, edited, reopened, labeled, unlabeled]
+
+permissions:
+  issues: write
+
+jobs:
+  validate-issue:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Validate required planning metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          LABELS_JSON: ${{ toJson(github.event.issue.labels) }}
+        run: |
+          set -euo pipefail
+
+          missing=()
+
+          has_body_value() {
+            local name="$1"
+            local bullet_pattern="^- ${name}: (unset|[[:space:]]*)$"
+            if ! printf '%s\n' "$ISSUE_BODY" | grep -qiE "$name"; then
+              missing+=("$name")
+              return
+            fi
+            if printf '%s\n' "$ISSUE_BODY" | grep -qiE "$bullet_pattern"; then
+              missing+=("$name")
+            fi
+          }
+
+          has_type_label() {
+            if ! printf '%s\n' "$LABELS_JSON" | jq -e 'any(.[].name; . == "feature" or . == "bug" or . == "chore" or . == "documentation" or . == "test")' >/dev/null; then
+              missing+=("type label")
+            fi
+          }
+
+          has_body_value "Priority"
+          has_body_value "Area"
+          has_body_value "Size"
+          has_body_value "References"
+          has_body_value "Dependencies"
+          has_body_value "Acceptance criteria"
+          has_body_value "Definition of Ready"
+          has_body_value "Agent ready"
+          has_body_value "Confidence"
+          has_body_value "Definition of Done"
+          has_type_label
+
+          if [ "${#missing[@]}" -gt 0 ]; then
+            gh label create "status:needs-info" --color "d93f0b" --description "Issue is missing required planning metadata" 2>/dev/null || true
+            gh issue edit "$ISSUE_NUMBER" --add-label "status:needs-info" || true
+            {
+              echo "This issue is missing required planning metadata:"
+              echo
+              for item in "${missing[@]}"; do
+                echo "- $item"
+              done
+              echo
+              echo "Update the issue body, then the status:needs-info label will be removed automatically."
+            } > /tmp/issue-validation-comment.md
+            gh issue comment "$ISSUE_NUMBER" --body-file /tmp/issue-validation-comment.md
+            exit 1
+          fi
+
+          gh issue edit "$ISSUE_NUMBER" --remove-label "status:needs-info" || true
+          echo "Issue metadata is complete."

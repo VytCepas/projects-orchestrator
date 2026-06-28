@@ -1,0 +1,78 @@
+# Open the project-init scaffolding upgrade as a reviewable pull request instead
+# of writing drift straight into your branch (#241). Renovate-style, but for the
+# `.claude/` scaffold: run it on demand (or on a schedule) and review every
+# upgrade like a dependency bump. The job no-ops when there is no drift.
+#
+# Default trigger is manual (workflow_dispatch). Uncomment the schedule to check
+# on a cadence.
+#
+# NOTE: a PR opened with the built-in GITHUB_TOKEN won't automatically run other
+# workflows — CI on the upgrade PR is skipped (or left pending approval), not
+# started. To get CI running on it, either close and reopen the PR, or set an
+# `UPGRADE_PR_TOKEN` secret (a PAT) — this job uses it automatically when present.
+name: project-init upgrade
+
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: "0 6 * * 1"   # Mondays 06:00 UTC
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  upgrade:
+    name: Open scaffolding upgrade PR
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          version: "0.11.7"
+
+      # Install project-init from the recorded source (host/fork-aware) and
+      # re-render the scaffold in place. The fresh checkout is a clean git tree,
+      # so the #242 clean-tree guard passes; --accept-new all adopts new
+      # additions so they appear in the PR for review.
+      - name: Run project-init upgrade
+        run: |
+          uvx --from "git+https://github.com/VytCepas/project-init.git" project-init upgrade . \
+            --apply --accept-new all
+
+      - name: Open a pull request for the drift
+        env:
+          # github.com & *.ghe.com read GH_TOKEN; a self-hosted GHES host reads
+          # GH_ENTERPRISE_TOKEN — set both so `gh` authenticates on any host.
+          GH_TOKEN: ${{ secrets.UPGRADE_PR_TOKEN || github.token }}
+          GH_ENTERPRISE_TOKEN: ${{ secrets.UPGRADE_PR_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "No scaffolding drift — nothing to upgrade."
+            exit 0
+          fi
+          # Don't stack duplicate PRs for the same drift: if a scheduled run
+          # finds an open upgrade PR still waiting, leave it for review.
+          open_prs=$(gh pr list --state open --json headRefName \
+            --jq '[.[] | select(.headRefName | startswith("project-init-upgrade/"))] | length')
+          if [ "$open_prs" -gt 0 ]; then
+            echo "An open project-init-upgrade PR already exists — skipping."
+            exit 0
+          fi
+          branch="project-init-upgrade/$(date -u +%Y%m%d-%H%M%S)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add -A
+          git commit -m "chore: project-init scaffolding upgrade"
+          git push origin "$branch"
+          gh pr create \
+            --base "main" \
+            --head "$branch" \
+            --title "chore: project-init scaffolding upgrade" \
+            --body "Automated \`project-init upgrade --apply\`. Review the drift below — \`.new\` siblings mark genuine conflicts (your edits are kept); everything else is a clean update or a 3-way auto-merge."

@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# pre-commit hook: scan staged changes for secrets with gitleaks (ADR-007).
+# Install: .claude/scripts/install_hooks.sh
+#
+# Fail-open by design: if gitleaks is not installed the hook warns and lets
+# the commit through — the CI secret-scan job is the hard backstop that
+# scans full history and blocks the merge.
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "WARNING: gitleaks not installed — skipping local secret scan." >&2
+  echo "  CI will still scan; install for fast local feedback:" >&2
+  echo "    https://github.com/gitleaks/gitleaks#installing" >&2
+  exit 0
+fi
+
+exec gitleaks git --pre-commit --staged --redact --no-banner --verbose

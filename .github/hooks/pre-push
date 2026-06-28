@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Pre-push hook: lifecycle gate (ADR-007).
+#   1. Prevent direct pushes to main/master.
+#   2. Enforce a branch type prefix — (feat|fix|chore|docs|test)/<slug> —
+#      the same rule as dag_workflow.py's _BRANCH_RE. Full issue-key
+#      validation (<type>/<KEY>-<n>-<slug>) runs in CI via validate-pr.yml,
+#      where the linked issue can actually be checked.
+# Install: .claude/scripts/install_hooks.sh
+
+set -e
+
+ZERO_SHA="0000000000000000000000000000000000000000"
+
+# git feeds "<local_ref> <local_sha> <remote_ref> <remote_sha>" per ref; we only
+# use local_sha + remote_ref, so the other two fields go to `_`. -r per SC2162.
+while read -r _ local_sha remote_ref _; do
+  # Branch deletions are always allowed (cleaning up misnamed branches).
+  if [[ "$local_sha" == "$ZERO_SHA" ]]; then
+    continue
+  fi
+
+  # Only gate branch refs — tags pass through.
+  if [[ "$remote_ref" != refs/heads/* ]]; then
+    continue
+  fi
+  branch_name="${remote_ref#refs/heads/}"
+
+  if [[ "$branch_name" == "main" || "$branch_name" == "master" ]]; then
+    echo "❌ ERROR: Direct push to main/master is not allowed"
+    echo ""
+    echo "To contribute:"
+    echo "  1. Create a new branch with the project key: git checkout -b <issue_type>/<project_abbr>-<issue_number>-<slug>"
+    echo "  2. Make your changes and push: .claude/scripts/push_branch.sh"
+    echo "  3. Open a PR on GitHub"
+    echo ""
+    echo "For more details, see .claude/project-init.md"
+    exit 1
+  fi
+
+  if ! echo "$branch_name" | grep -qE '^(feat|fix|chore|docs|test)/[A-Za-z0-9._/-]+$'; then
+    echo "❌ ERROR: branch '$branch_name' does not follow the lifecycle naming convention"
+    echo ""
+    echo "Enforced here: a type prefix — (feat|fix|chore|docs|test)/<slug>"
+    echo "Full convention (issue key validated in CI): <issue_type>/<project_abbr>-<issue_number>-<slug>"
+    echo "  Issue-linked:  feat/PI-42-add-oauth-login"
+    echo "  No issue:      chore/nojira-bump-dev-dependency"
+    echo ""
+    echo "Use .claude/scripts/start_issue.sh or create_nojira_pr.sh to create branches."
+    exit 1
+  fi
+done
+
+exit 0

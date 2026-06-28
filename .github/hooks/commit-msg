@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# commit-msg hook: validate commit message format before push.
+# Install: .claude/scripts/install-hooks.sh (runs automatically)
+#
+# Canonical format (Conventional Commits, ADR-006):
+#   feat(PI-42): Add OAuth login        (issue-linked — key as scope)
+#   fix: Fix typo in README             (no linked issue)
+#   feat(PI-9)!: Drop python 3.10       (breaking change)
+#
+# Legacy format still accepted during transition:
+#   [PI-42][feat] Add OAuth login
+#   [nojira][fix] Fix typo in README
+#
+# Any uppercase project key works: PI-, APP-, API-, WEB-, etc.
+# Types: feat  fix  chore  docs  test
+
+MSG=$(cat "$1")
+
+# Allow merge commits, fixups, reverts, and WIP
+if echo "$MSG" | grep -qE '^(Merge|Revert|fixup!|squash!|WIP)'; then
+  exit 0
+fi
+
+# Allow GitHub co-author trailers (multi-line commits)
+FIRST_LINE=$(echo "$MSG" | head -1)
+
+# Conventional Commits with optional issue-key scope (canonical)
+if echo "$FIRST_LINE" | grep -qE '^(feat|fix|chore|docs|test)(\([A-Z][A-Z0-9]{1,9}-[0-9]+\))?!?: .+'; then
+  exit 0
+fi
+
+# Legacy bracket format (transition)
+if echo "$FIRST_LINE" | grep -qE '^\[([A-Z][A-Z0-9]{1,9}-[0-9]+|nojira)\]\[(feat|fix|chore|docs|test)\] .+'; then
+  exit 0
+fi
+
+echo "" >&2
+echo "ERROR: commit message format invalid." >&2
+echo "" >&2
+echo "Required: <type>(<PROJECT>-<n>): Short description" >&2
+echo "      or: <type>: Short description        (no linked issue)" >&2
+echo "" >&2
+echo "Types: feat  fix  chore  docs  test" >&2
+echo "" >&2
+echo "Examples:" >&2
+echo "  feat(PI-42): Add OAuth login" >&2
+echo "  fix(APP-99): Handle null pointer in auth" >&2
+echo "  chore: Bump dev dependency" >&2
+echo "" >&2
+echo "Your message: $FIRST_LINE" >&2
+echo "" >&2
+exit 1

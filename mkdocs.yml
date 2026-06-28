@@ -1,0 +1,31 @@
+# mkdocs.yml — local documentation preview config (scaffolded by project-init).
+# Local preview:  uv run --with mkdocs-material --with "mkdocstrings[python]" mkdocs serve
+# Local-only: no publish workflow ships (the GitHub Pages docs.yml was retired — PI-343/ADR-004).
+#
+# NOTE: mkdocs-material entered maintenance mode early 2026. Zensical is the
+# drop-in successor and reads this mkdocs.yml natively — migrate when ready:
+# https://squidfunk.github.io/mkdocs-material/blog/2025/11/05/zensical/
+
+site_name: "projects-orchestrator"
+site_description: "Cross-project orchestration layer for agentic development"
+
+theme:
+  name: material
+
+plugins:
+  - search
+  # API reference from docstrings — add ::: your_package.module directives
+  # in docs/reference/ pages to render them.
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: google
+
+# Diátaxis structure (https://diataxis.fr/) — see docs/index.md.
+nav:
+  - Home: index.md
+  - Tutorials: tutorials/index.md
+  - How-to guides: how-to/index.md
+  - Reference: reference/index.md
+  - Explanation: explanation/index.md

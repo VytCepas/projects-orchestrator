@@ -1,0 +1,90 @@
+name: Test
+description: Missing or insufficient test coverage
+labels: [test]
+body:
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options: [high, medium, low]
+    validations:
+      required: true
+  - type: input
+    id: area
+    attributes:
+      label: Area
+      placeholder: frontend, backend, docs, devops, product
+    validations:
+      required: true
+  - type: dropdown
+    id: size
+    attributes:
+      label: Size
+      options: [XS, S, M, L, XL]
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What behavior needs coverage?
+      description: Describe the behavior, template, script, or workflow that needs tests.
+    validations:
+      required: true
+  - type: textarea
+    id: risk
+    attributes:
+      label: Risk
+      description: What regression or bug could slip through without this test?
+    validations:
+      required: true
+  - type: textarea
+    id: approach
+    attributes:
+      label: Suggested approach
+      placeholder: "Unit test, scaffold-output diff, CLI test, workflow validation..."
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: Related issues, PRs, ADRs, docs, designs, or external links.
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: Blocked-by, parent, or follow-up relationships.
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      placeholder: |
+        - [ ] ...
+    validations:
+      required: true
+  - type: dropdown
+    id: agent_ready
+    attributes:
+      label: Agent ready
+      description: Can an AI agent implement this without human clarification?
+      options: ["Yes", "No"]
+      default: 1
+  - type: dropdown
+    id: confidence
+    attributes:
+      label: Confidence
+      description: How well-understood is the scope and approach?
+      options: [high, medium, low, unknown]
+      default: 3
+  - type: textarea
+    id: ready
+    attributes:
+      label: Definition of Ready
+      placeholder: What must be true before implementation starts?
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: Definition of Done
+      placeholder: What must be true before this can close?
+    validations:
+      required: true

@@ -1,0 +1,105 @@
+name: Validate PR
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  issues: read
+  pull-requests: read
+
+jobs:
+  pr-format-and-issue:
+    name: Check PR title, branch, and linked issue
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Validate PR workflow metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # gh needs the repo to resolve `gh issue view` without a checkout (PI-210).
+          GH_REPO: ${{ github.repository }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+
+          # Canonical: Conventional Commits with issue key as scope (ADR-006).
+          # Legacy bracket format accepted during transition.
+          NEW_FORMAT='^(feat|fix|chore|docs|test)(\([A-Z][A-Z0-9]{1,9}-[0-9]+\))?!?: .+'
+          LEGACY_FORMAT='^\[([A-Z][A-Z0-9]{1,9}-[0-9]+|nojira)\]\[(feat|fix|chore|docs|test)\]'
+          if ! echo "$PR_TITLE" | grep -qE "$NEW_FORMAT|$LEGACY_FORMAT"; then
+            echo "ERROR: PR title must match: type(PROJECT-123): description  (or type: description for no-issue work)"
+            echo "Valid types: feat, fix, chore, docs, test"
+            exit 1
+          fi
+
+          if [ "$PR_BRANCH" = "main" ] || [ "$PR_BRANCH" = "master" ]; then
+            echo "ERROR: PR branch must not be main or master"
+            exit 1
+          fi
+
+          # No-issue PRs: legacy [nojira] prefix, or conventional title without a scope.
+          # An issue-linked branch must not bypass branch/key/label checks via a scopeless title.
+          if echo "$PR_TITLE" | grep -qE '^\[nojira\]|^(feat|fix|chore|docs|test)!?: '; then
+            if echo "$PR_BRANCH" | grep -qE '^(feat|fix|chore|docs|test)/[A-Z][A-Z0-9]{1,9}-[0-9]+-'; then
+              echo "ERROR: branch $PR_BRANCH is issue-linked - title must carry the issue key as scope, e.g. type(KEY-N): description"
+              exit 1
+            fi
+            echo "no-issue PR - skipping Closes keyword check"
+            exit 0
+          fi
+
+          ISSUE_REF_REGEX='(closes|fixes|resolves)\s+#[0-9]+'
+          if ! echo "$PR_BODY" | grep -qiE "$ISSUE_REF_REGEX"; then
+            echo "ERROR: PR body must include 'Closes #<number>', 'Fixes #<number>', or 'Resolves #<number>' to auto-close the linked issue"
+            exit 1
+          fi
+
+          ISSUE_NUM=$(echo "$PR_BODY" | grep -oiE "$ISSUE_REF_REGEX" | head -1 | grep -oE '[0-9]+')
+          if echo "$PR_TITLE" | grep -qE "$LEGACY_FORMAT"; then
+            ISSUE_KEY=$(echo "$PR_TITLE" | grep -oE '^\[[A-Z][A-Z0-9]{1,9}-[0-9]+\]' | tr -d '[]')
+            PR_TYPE=$(echo "$PR_TITLE" | grep -oE '\]\[(feat|fix|chore|docs|test)\]' | tr -d '[]')
+          else
+            ISSUE_KEY=$(echo "$PR_TITLE" | grep -oE '\([A-Z][A-Z0-9]{1,9}-[0-9]+\)' | head -1 | tr -d '()')
+            PR_TYPE=$(echo "$PR_TITLE" | grep -oE '^(feat|fix|chore|docs|test)')
+          fi
+
+          if ! echo "$PR_BRANCH" | grep -qE '^(feat|fix|chore|docs|test)/[A-Z][A-Z0-9]{1,9}-[0-9]+-[a-z0-9][a-z0-9-]*$'; then
+            echo "ERROR: branch must match <type>/<PROJECT>-<issue-number>-<slug>"
+            exit 1
+          fi
+
+          BRANCH_KEY=$(echo "$PR_BRANCH" | grep -oE '[A-Z][A-Z0-9]{1,9}-[0-9]+')
+          if [ "$BRANCH_KEY" != "$ISSUE_KEY" ]; then
+            echo "ERROR: branch issue key ($BRANCH_KEY) must match PR title issue key ($ISSUE_KEY)"
+            exit 1
+          fi
+
+          ISSUE_DATA=$(gh issue view "$ISSUE_NUM" --json state,labels)
+          ISSUE_STATE=$(echo "$ISSUE_DATA" | jq -r '.state')
+          if [ "$ISSUE_STATE" = "CLOSED" ]; then
+            echo "Linked issue is closed: #$ISSUE_NUM"
+            exit 1
+          fi
+
+          if echo "$ISSUE_DATA" | jq -e 'any(.labels[].name; . == "status:needs-info")' >/dev/null; then
+            echo "ERROR: linked issue #$ISSUE_NUM is labeled status:needs-info"
+            exit 1
+          fi
+
+          case "$PR_TYPE" in
+            feat) EXPECTED_LABEL="feature" ;;
+            fix) EXPECTED_LABEL="bug" ;;
+            chore) EXPECTED_LABEL="chore" ;;
+            docs) EXPECTED_LABEL="documentation" ;;
+            test) EXPECTED_LABEL="test" ;;
+          esac
+
+          if ! echo "$ISSUE_DATA" | jq -e --arg label "$EXPECTED_LABEL" 'any(.labels[].name; . == $label)' >/dev/null; then
+            echo "ERROR: PR type '$PR_TYPE' does not match linked issue label '$EXPECTED_LABEL'"
+            exit 1
+          fi
+
+          echo "PR metadata is valid."

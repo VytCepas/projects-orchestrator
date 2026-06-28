@@ -1,0 +1,75 @@
+# Release on tag push (ADR-015 — library delivery). Builds the package, cuts a
+# GitHub Release, and (when enabled) publishes to a registry.
+#
+# Publishing is DISABLED by default: the `publish` job is gated on the repo
+# variable PUBLISH_ENABLED so a fresh scaffold never fails a release trying to
+# push to a registry that isn't wired yet. Enable it once you have:
+#   1. a registry + package metadata (name/version) ready, and
+#   2. trusted publishing (PyPI) configured OR a publish token in secrets, then
+#   3. set repo variable PUBLISH_ENABLED=true (Settings → Secrets and variables
+#      → Actions → Variables), or `gh variable set PUBLISH_ENABLED --body true`.
+#
+# Cutting a release: bump the version, then `git tag vX.Y.Z && git push --tags`.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build + GitHub Release
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          version: "0.11.7"
+
+      - name: Build wheel + sdist
+        run: uv build
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+          generate_release_notes: true
+
+  publish:
+    name: Publish to registry
+    needs: release
+    # DISABLED by default — flip PUBLISH_ENABLED to arm it (see header).
+    if: ${{ vars.PUBLISH_ENABLED == 'true' }}
+    runs-on: ubuntu-24.04
+
+    # PyPI trusted publishing (ADR-011): OIDC, no token to custody. One-time:
+    # register the pending publisher on pypi.org (workflow: release.yml,
+    # environment: pypi) and create the `pypi` GitHub Environment.
+    environment:
+      name: pypi
+    permissions:
+      id-token: write   # trusted publishing (OIDC)
+      contents: read    # job-level perms override the workflow block — keep checkout working
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          version: "0.11.7"
+      - name: Build
+        run: uv build
+      # Pinned to a version tag (not @release/v1) so Renovate's template
+      # custom-manager keeps it fresh; see renovate.json.
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@v1.14.0
+
+

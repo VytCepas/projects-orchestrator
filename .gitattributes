@@ -1,0 +1,4 @@
+# Keep shell scripts and git hooks LF on every platform so their shebangs are
+# not corrupted by a CRLF checkout on Windows (PI-362).
+*.sh text eol=lf
+.github/hooks/* text eol=lf

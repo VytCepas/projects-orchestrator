@@ -1,0 +1,30 @@
+# ruff.toml — quality gates for project code (scaffolded by project-init).
+# Prefer pyproject.toml [tool.ruff]? Merge this in and delete the file —
+# a root ruff.toml takes precedence over pyproject.toml.
+
+line-length = 100
+
+[lint]
+# D       enforced docstrings (Google style)
+# C901    cyclomatic complexity cap
+# PLR091x branch/argument/statement caps
+# Together these stop "noodly" generated code mechanically — prose rules in
+# CLAUDE.md decay; lint gates do not.
+select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "D", "C901", "PLR0912", "PLR0913", "PLR0915"]
+ignore = ["E501"]
+# DOC rules (pydoclint port: docstring/signature consistency) are still in
+# preview — enable here once stable, or run standalone pydoclint until then:
+# https://github.com/astral-sh/ruff/issues/12434
+
+[lint.pydocstyle]
+convention = "google"
+
+[lint.mccabe]
+# >10 usually means the function wants splitting.
+max-complexity = 10
+
+[lint.per-file-ignores]
+# Test names are self-describing; docstring enforcement adds noise not value.
+"tests/**" = ["D"]
+# Agent infrastructure (hooks/scripts) is not project code.
+".claude/**" = ["D", "C901", "PLR0912", "PLR0913", "PLR0915"]

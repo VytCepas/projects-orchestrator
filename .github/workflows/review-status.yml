@@ -1,0 +1,48 @@
+name: Review status
+
+# Creates a commit status named "review/decision" whenever a PR review is
+# submitted, edited, or dismissed. This lets monitor_pr.sh treat review state
+# as just another CI check instead of polling reviewDecision in a separate loop.
+#
+# Maps the PR's *aggregate* reviewDecision (not just the triggering event) so
+# that a later COMMENT review doesn't flip an already-approved PR back to pending.
+#
+# Status mapping:
+#   APPROVED          → success  ("Approved")
+#   CHANGES_REQUESTED → failure  ("Changes requested")
+#   REVIEW_REQUIRED / other → pending  ("Review required — awaiting approval")
+
+on:
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+
+permissions:
+  statuses: write
+  pull-requests: read
+
+jobs:
+  set-review-status:
+    name: Set review/decision status
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Post commit status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          DECISION=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json reviewDecision -q '.reviewDecision // ""')
+          case "$DECISION" in
+            APPROVED)
+              STATE="success"; DESCRIPTION="Approved" ;;
+            CHANGES_REQUESTED)
+              STATE="failure"; DESCRIPTION="Changes requested" ;;
+            *)
+              STATE="pending"; DESCRIPTION="Review required — awaiting approval" ;;
+          esac
+          gh api --method POST "repos/${REPO}/statuses/${SHA}" \
+            --field state="$STATE" \
+            --field description="$DESCRIPTION" \
+            --field context="review/decision" \
+            --field target_url="${{ github.event.review.html_url }}"

@@ -1,0 +1,29 @@
+# project-init runtime artifacts
+.codex
+.claude/scheduled_tasks.lock
+.claude/.session_setup_stamp
+.claude/settings.local.json
+.claude/memory/.cache/
+.claude/logs/
+.claude/.local/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# OS / editor
+.DS_Store
+*.swp
+# .vscode is personal, except a generated MCP config meant to be shared (PI-366).
+.vscode/*
+!.vscode/mcp.json
+.idea/
+
+# Secrets
+.env
+.env.local
+*.key

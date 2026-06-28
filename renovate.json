@@ -1,0 +1,14 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests",
+    "schedule:weekly",
+    "group:allNonMajor"
+  ],
+  "semanticCommits": "disabled",
+  "commitMessagePrefix": "chore:",
+  "lockFileMaintenance": {
+    "enabled": true
+  }
+}
