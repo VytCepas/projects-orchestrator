@@ -1,0 +1,16 @@
+# gitleaks config — extends the built-in default ruleset and adds narrow
+# allowlists for known false positives in this repo's own sources.
+# Used by the CI "Secret scan (gitleaks)" job (gitleaks-action@v3) and the
+# local pre-commit scan (`just scan`).
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Repo-specific false positives (not secrets)."
+paths = [
+  # project-init scaffold record: a generated map of relpath → sha256 content
+  # hash. The high-entropy hash next to the "secrets.md" path key trips the
+  # generic-api-key rule, but these are content hashes, not secrets.
+  '''\.claude/config\.yaml''',
+]
