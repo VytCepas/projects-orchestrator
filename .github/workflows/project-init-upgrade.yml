@@ -20,7 +20,6 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  workflows: write
 
 jobs:
   upgrade:
@@ -30,6 +29,10 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          # Use a PAT when available so git push can include .github/workflows/
+          # files (conflict siblings like board-automation.yml.new). GITHUB_TOKEN
+          # is blocked from pushing workflow-path files by GitHub's API.
+          token: ${{ secrets.UPGRADE_PR_TOKEN || github.token }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@v8.1.0
