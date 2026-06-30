@@ -1,5 +1,6 @@
 # project-init runtime artifacts
-.codex
+.codex/*
+!.codex/hooks.json
 .claude/scheduled_tasks.lock
 .claude/.session_setup_stamp
 .claude/settings.local.json

@@ -24,15 +24,32 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
-      # No actions/checkout in this job (it only needs API access); pin the repo
-      # so every `gh` call (e.g. `gh issue view`) works checkout-free instead of
-      # failing on a missing git remote (PI-234).
+      # Pin the repo so every `gh` call (e.g. `gh issue view`) resolves it
+      # explicitly (PI-234).
       GH_REPO: ${{ github.repository }}
       OWNER: ${{ github.repository_owner }}
       REPO_NAME: ${{ github.event.repository.name }}
-      PROJECT_NUMBER: 7
 
     steps:
+      # Single source of truth for the board number (PI #556): read
+      # `github_project_number` from .claude/config.yaml instead of a hardcoded
+      # literal that drifts from what create_issue.sh / setup_github.sh provision
+      # to. Account-scoped numbering means a real board is almost never #1, so a
+      # hardcoded 1 here would silently split board state across two projects.
+      # Needs a checkout to read the file; falls back to 1 if unset/absent.
+      - uses: actions/checkout@v6
+      - name: Resolve PROJECT_NUMBER from config.yaml
+        run: |
+          set -euo pipefail
+          num=1
+          if [ -f .claude/config.yaml ]; then
+            parsed=$(grep -E '^[[:space:]]*github_project_number:' .claude/config.yaml \
+              | head -n1 | sed 's/#.*$//' | grep -oE '[0-9]+' | head -n1 || true)
+            [ -n "$parsed" ] && num="$parsed"
+          fi
+          echo "PROJECT_NUMBER=$num" >> "$GITHUB_ENV"
+          echo "Using GitHub Project #$num (from .claude/config.yaml)"
+
       - name: Determine issue and status
         id: context
         env:
