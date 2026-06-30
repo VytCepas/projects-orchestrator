@@ -232,6 +232,33 @@ jobs:
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
 
 
+  # All-green gate (PI #555): the SINGLE required status check for branch
+  # protection. Branch protection requires only "CI gate", so the required
+  # context is robust to matrix changes — adding/removing a Python version
+  # never renames the required check, and there is no un-expanded matrix name
+  # (e.g. "Lint and test (3.11)") for GitHub to fail to match against, which is
+  # what left main permanently `blocked` before. `if: always()` so the gate runs
+  # even when an upstream job fails, then fails itself unless every dependency
+  # succeeded.
+  ci-gate:
+    name: CI gate
+    runs-on: ubuntu-24.04
+    needs: [lint-and-test, secret-scan]
+    if: always()
+    steps:
+      - name: Require all upstream jobs to succeed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Upstream job results: $RESULTS"
+          for result in $RESULTS; do
+            if [ "$result" != "success" ]; then
+              echo "::error::A required job did not succeed (got: $result)."
+              exit 1
+            fi
+          done
+          echo "All required jobs passed."
+
 # Optimization #3: Conditional job execution
 # Example configurations for different scenarios (see full details in CLAUDE.md):
 #

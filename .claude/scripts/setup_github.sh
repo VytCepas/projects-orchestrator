@@ -56,18 +56,23 @@ fi
 PROTECTION=$(mktemp)
 trap 'rm -f "$PROTECTION"' EXIT
 
-# Contexts must match the scaffolded workflows ("<workflow> / <job name>").
-# "CI / Integration tests" is omitted on purpose — that job is documented as
-# user-adjustable; add it here once your integration suite is stable.
+# Contexts must match the bare check-run names GitHub reports — NOT
+# "<workflow> / <job name>" (PI #555). Two traps avoided here:
+#   1. CI's lint job is a matrix, so its check-runs are "Lint and test (3.11)"…
+#      not "Lint and test"; requiring the un-expanded/prefixed name never matches
+#      and leaves the branch permanently `blocked`. Instead require the single
+#      "CI gate" job (ci.yml), which `needs:` the whole matrix + secret scan —
+#      robust to matrix changes and language-agnostic.
+#   2. review/decision is a derived status only posted on review events and is
+#      unsatisfiable for a solo owner (you can't approve your own PR), so it is
+#      NOT required here — it stays the advisory signal monitor_pr.sh treats it as.
 cat > "$PROTECTION" <<'JSON'
 {
   "required_status_checks": {
     "strict": true,
     "contexts": [
-      "CI / Lint and test",
-      "CI / Secret scan (gitleaks)",
-      "Validate PR / Check PR title, branch, and linked issue",
-      "review/decision"
+      "CI gate",
+      "Check PR title, branch, and linked issue"
     ]
   },
   "enforce_admins": false,
@@ -120,8 +125,8 @@ elif gh api "repos/$OWNER/$NAME/rulesets" >/dev/null 2>&1; then
     { "type": "required_status_checks", "parameters": {
         "strict_required_status_checks_policy": true,
         "required_status_checks": [
-          { "context": "CI / Lint and test" },
-          { "context": "CI / Secret scan (gitleaks)" } ] } }
+          { "context": "CI gate" },
+          { "context": "Check PR title, branch, and linked issue" } ] } }
   ],
   "bypass_actors": []
 }
@@ -152,7 +157,16 @@ fi
 echo ""
 echo "Provisioning GitHub Project board fields..."
 
-PROJECT_NUMBER="${PROJECT_NUMBER:-7}"
+# Single source of truth for the board number (PI #556): the PROJECT_NUMBER env
+# var overrides; otherwise read github_project_number from .claude/config.yaml
+# (shared with board-automation.yml / create_issue.sh); default 1. Account-scoped
+# numbering means a real board is rarely #1, so all three consumers must agree or
+# board state silently splits across projects.
+if [ -z "${PROJECT_NUMBER:-}" ]; then
+  PROJECT_NUMBER=$(grep -E '^[[:space:]]*github_project_number:' "$SCRIPT_DIR/../config.yaml" 2>/dev/null \
+    | head -n1 | sed 's/#.*$//' | grep -oE '[0-9]+' | head -n1 || true)
+fi
+PROJECT_NUMBER="${PROJECT_NUMBER:-1}"
 
 # Use PROJECT_TOKEN if set, otherwise fall through to default gh auth
 if [ -n "${PROJECT_TOKEN:-}" ]; then
@@ -205,11 +219,18 @@ else
       echo "  '$field_name' already exists — skipping"
       return 0
     fi
-    if gh api graphql -f query="$mutation" -f projectId="$PROJECT_ID" >/dev/null 2>&1; then
+    # Capture stderr instead of discarding it (PI #556 minor): a swallowed
+    # `2>/dev/null` made a transient/first-call failure look permanent and printed
+    # a bare WARNING even when the mutation actually succeeds on retry, misleading
+    # the user into manual creation. Surface the real GraphQL error so the cause
+    # (scope, rate-limit, transient) is visible.
+    local err
+    if err=$(gh api graphql -f query="$mutation" -f projectId="$PROJECT_ID" 2>&1 >/dev/null); then
       echo "  Created '$field_name'"
     else
       # Repo: $REPO  Project: #$PROJECT_NUMBER
       echo "  WARNING: could not create '$field_name' for $REPO — add it manually:" >&2
+      [ -n "$err" ] && echo "    reason: $err" >&2
       echo "    $WEB_BASE/users/$OWNER/projects/$PROJECT_NUMBER/settings/fields" >&2
     fi
   }
