@@ -128,3 +128,33 @@ def test_descriptor_exposes_raw_config(make_project):
 def test_descriptor_summary_line_includes_name(make_project):
     descriptor: ProjectDescriptor = load_descriptor(_config(make_project("alpha")))
     assert "alpha" in descriptor.summary()
+
+
+def test_load_reads_lint_command(make_project):
+    root = make_project("alpha", tooling={"lint_command": "ruff check ."})
+    assert load_descriptor(_config(root)).tooling.lint == "ruff check ."
+
+
+def test_load_reads_test_command(make_project):
+    root = make_project("alpha", tooling={"test_command": "pytest"})
+    assert load_descriptor(_config(root)).tooling.test == "pytest"
+
+
+def test_load_reads_format_command(make_project):
+    root = make_project("alpha", tooling={"format_command": "ruff format ."})
+    assert load_descriptor(_config(root)).tooling.format == "ruff format ."
+
+
+def test_tooling_absent_yields_none_commands(make_project):
+    root = make_project("alpha", tooling=None)
+    assert load_descriptor(_config(root)).tooling.lint is None
+
+
+def test_tooling_commands_maps_named_tasks(make_project):
+    root = make_project("alpha", tooling={"lint_command": "ruff check ."})
+    assert load_descriptor(_config(root)).tooling.commands()["lint"] == "ruff check ."
+
+
+def test_tooling_commands_omits_unset_tasks(make_project):
+    root = make_project("alpha", tooling={"lint_command": "ruff check ."})
+    assert "test" not in load_descriptor(_config(root)).tooling.commands()

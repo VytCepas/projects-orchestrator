@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ import pytest
 import yaml
 
 ProjectFactory = Callable[..., Path]
+GitRunner = Callable[..., subprocess.CompletedProcess[str]]
 
 
 def _config_yaml(
@@ -23,6 +25,7 @@ def _config_yaml(
     contract_version: int | None,
     project_init_version: str,
     mcps: list[str],
+    tooling: dict[str, str] | None,
 ) -> str:
     project: dict[str, Any] = {
         "name": name,
@@ -32,7 +35,7 @@ def _config_yaml(
     }
     if contract_version is not None:
         project["project_init_contract_version"] = contract_version
-    config = {
+    config: dict[str, Any] = {
         "project": project,
         "language": language,
         "delivery": delivery,
@@ -43,7 +46,50 @@ def _config_yaml(
         },
         "mcps": {"installed": list(mcps)},
     }
+    if tooling is not None:
+        config["tooling"] = tooling
     return yaml.safe_dump(config, sort_keys=False)
+
+
+@pytest.fixture
+def git() -> GitRunner:
+    """Return a helper that runs a git command in a given directory.
+
+    Returns:
+        A callable ``git(cwd, *args)`` returning the completed process.
+    """
+
+    def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+    return _git
+
+
+@pytest.fixture
+def git_init(git: GitRunner) -> Callable[[Path], None]:
+    """Return a helper that initializes a committed git repo at a path.
+
+    Args:
+        git: The ``git`` runner fixture.
+
+    Returns:
+        A callable ``git_init(root)`` that makes ``root`` a repo with one commit.
+    """
+
+    def _init(root: Path) -> None:
+        git(root, "init", "-q", "-b", "main")
+        git(root, "config", "user.email", "test@example.com")
+        git(root, "config", "user.name", "Test")
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "-m", "initial")
+
+    return _init
 
 
 @pytest.fixture
@@ -70,6 +116,7 @@ def make_project(tmp_path: Path) -> ProjectFactory:
         project_init_version: str = "0.5.2",
         mcps: list[str] | None = None,
         with_memory_index: bool = True,
+        tooling: dict[str, str] | None = None,
         under: Path | None = None,
     ) -> Path:
         base = under if under is not None else tmp_path
@@ -87,6 +134,7 @@ def make_project(tmp_path: Path) -> ProjectFactory:
                 contract_version=contract_version,
                 project_init_version=project_init_version,
                 mcps=mcps or [],
+                tooling=tooling,
             ),
             encoding="utf-8",
         )
