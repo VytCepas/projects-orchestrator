@@ -7,6 +7,8 @@ from pathlib import Path
 
 from projects_orchestrator import __version__
 from projects_orchestrator.registry import Registry
+from projects_orchestrator.runner import run_across
+from projects_orchestrator.status import collect_status
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -30,6 +32,18 @@ def _build_parser() -> argparse.ArgumentParser:
     show.add_argument("name", help="project name to show")
     show.add_argument("root", type=Path, help="directory to scan recursively")
     show.set_defaults(func=_cmd_show)
+
+    status = sub.add_parser("status", help="show git health/status for each project")
+    status.add_argument("root", type=Path, help="directory to scan recursively")
+    status.set_defaults(func=_cmd_status)
+
+    run = sub.add_parser("run", help="run a command in one project or across all")
+    run.add_argument("command", help="command to run, e.g. 'just lint'")
+    run.add_argument("root", type=Path, help="directory to scan recursively")
+    target = run.add_mutually_exclusive_group()
+    target.add_argument("--project", help="run in only this project")
+    target.add_argument("--all", action="store_true", help="run across every project (default)")
+    run.set_defaults(func=_cmd_run)
 
     return parser
 
@@ -79,6 +93,56 @@ def _cmd_show(args: argparse.Namespace) -> int:
     print(f"  memory index: {'present' if descriptor.memory.has_index else 'absent'}")
     print(f"  mcps:         {', '.join(descriptor.mcps) or 'none'}")
     return 0
+
+
+def _cmd_status(args: argparse.Namespace) -> int:
+    """Print a one-line-per-project git health table.
+
+    Args:
+        args: Parsed arguments carrying ``root``.
+
+    Returns:
+        Process exit code (0 always).
+    """
+    registry = Registry.discover(args.root)
+    if not registry.projects:
+        print(f"No project-init projects found under {args.root}")
+        return 0
+    width = max(len(d.name) for d in registry)
+    for descriptor in registry:
+        status = collect_status(descriptor)
+        branch = status.git.branch or "-"
+        drift = f"+{status.git.ahead}/-{status.git.behind}" if status.git.is_repo else "-"
+        print(f"{descriptor.name:<{width}}  {status.health:<7}  {branch:<16}  {drift}")
+    return 0
+
+
+def _cmd_run(args: argparse.Namespace) -> int:
+    """Run a command in one project or across the whole fleet.
+
+    Args:
+        args: Parsed arguments carrying ``command``, ``root``, and target flags.
+
+    Returns:
+        Process exit code: 0 when every run succeeded, 1 when any failed, 2 when
+        a named project is not found.
+    """
+    registry = Registry.discover(args.root)
+    if args.project:
+        descriptor = registry.get(args.project)
+        if descriptor is None:
+            print(f"No project named {args.project!r} under {args.root}")
+            return 2
+        targets = [descriptor]
+    else:
+        targets = registry.projects
+    results = run_across(targets, args.command)
+    failed = 0
+    for result in results:
+        mark = "OK " if result.ok else "FAIL"
+        print(f"[{mark}] {result.project}: {result.command}")
+        failed += 0 if result.ok else 1
+    return 1 if failed else 0
 
 
 def main(argv: list[str] | None = None) -> int:

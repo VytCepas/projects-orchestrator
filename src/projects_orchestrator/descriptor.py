@@ -22,6 +22,31 @@ class DescriptorError(Exception):
 
 
 @dataclass(frozen=True)
+class Tooling:
+    """Declared task commands for a project (from the ``tooling`` config block).
+
+    Attributes:
+        lint: Lint command, or ``None`` if unset.
+        test: Test command, or ``None`` if unset.
+        format: Format command, or ``None`` if unset.
+    """
+
+    lint: str | None
+    test: str | None
+    format: str | None
+
+    def commands(self) -> dict[str, str]:
+        """Return the set task commands keyed by task name.
+
+        Returns:
+            A mapping of task name (``lint`` | ``test`` | ``format``) to command,
+            omitting any task that is unset.
+        """
+        named = {"lint": self.lint, "test": self.test, "format": self.format}
+        return {task: cmd for task, cmd in named.items() if cmd}
+
+
+@dataclass(frozen=True)
 class MemoryDescriptor:
     """Resolved memory surface for a project.
 
@@ -52,6 +77,7 @@ class ProjectDescriptor:
         contract_version: Descriptor-contract schema version (0 when absent).
         project_init_version: project-init version that scaffolded the project.
         mcps: Installed MCP server names.
+        tooling: Declared lint/test/format task commands.
         raw: The full parsed ``config.yaml`` mapping for extension fields.
     """
 
@@ -64,6 +90,7 @@ class ProjectDescriptor:
     contract_version: int
     project_init_version: str
     mcps: tuple[str, ...]
+    tooling: Tooling
     raw: dict[str, Any] = field(repr=False)
 
     def summary(self) -> str:
@@ -122,7 +149,29 @@ def load_descriptor(config_path: Path) -> ProjectDescriptor:
         contract_version=int(project.get("project_init_contract_version", 0) or 0),
         project_init_version=str(project.get("project_init_version", "")),
         mcps=tuple((data.get("mcps") or {}).get("installed") or ()),
+        tooling=_tooling(data.get("tooling") or {}),
         raw=data,
+    )
+
+
+def _tooling(tooling: dict[str, Any]) -> Tooling:
+    """Build a :class:`Tooling` from the ``tooling`` config block.
+
+    Args:
+        tooling: The ``tooling`` mapping from ``config.yaml`` (possibly empty).
+
+    Returns:
+        A :class:`Tooling` with unset commands left as ``None``.
+    """
+
+    def _cmd(key: str) -> str | None:
+        value = tooling.get(key)
+        return str(value) if value else None
+
+    return Tooling(
+        lint=_cmd("lint_command"),
+        test=_cmd("test_command"),
+        format=_cmd("format_command"),
     )
 
 
