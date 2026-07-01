@@ -7,8 +7,20 @@ with [project-init](https://github.com/VytCepas/project-init).
 
 ## Status
 
-Early scaffold. The package currently ships a CLI stub; orchestration logic
-lands in follow-ups.
+Early. The orchestrator kernel — discovering project-init projects and reading
+their descriptor contract — is in place (see
+[ADR-003](.claude/docs/adr/adr-003-descriptor-registry-core.md)). Cross-project
+memory aggregation and task scheduling land in follow-ups.
+
+## Usage
+
+```sh
+# index every project-init project under a directory
+projects-orchestrator discover ~/code
+
+# inspect one project's descriptor in detail
+projects-orchestrator show my-service ~/code
+```
 
 ## Development
 

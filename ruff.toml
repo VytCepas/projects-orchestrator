@@ -25,6 +25,7 @@ max-complexity = 10
 
 [lint.per-file-ignores]
 # Test names are self-describing; docstring enforcement adds noise not value.
-"tests/**" = ["D"]
+# PLR0913: test-data builder fixtures legitimately expose many optional knobs.
+"tests/**" = ["D", "PLR0913"]
 # Agent infrastructure (hooks/scripts) is not project code.
 ".claude/**" = ["D", "C901", "PLR0912", "PLR0913", "PLR0915"]

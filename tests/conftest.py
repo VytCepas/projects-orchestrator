@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import textwrap
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
+from typing import Any
 
 import pytest
+import yaml
 
 ProjectFactory = Callable[..., Path]
 
@@ -23,35 +24,26 @@ def _config_yaml(
     project_init_version: str,
     mcps: list[str],
 ) -> str:
-    contract_line = (
-        f"  project_init_contract_version: {contract_version}\n"
-        if contract_version is not None
-        else ""
-    )
-    mcp_block = (
-        "\n".join(f"    - {m}" for m in mcps) if mcps else "  installed: []"
-    )
-    installed = f"  installed:\n{mcp_block}" if mcps else mcp_block
-    return textwrap.dedent(
-        f"""\
-        project:
-          name: "{name}"
-          description: "{description}"
-          created: 2026-06-28
-          project_init_version: {project_init_version}
-        {contract_line}language: {language}
-
-        delivery: {delivery}
-
-        memory:
-          tier: {memory_tier}
-          stack: {memory_stack}
-          memory_path: .claude/memory
-
-        mcps:
-        {installed}
-        """
-    )
+    project: dict[str, Any] = {
+        "name": name,
+        "description": description,
+        "created": "2026-06-28",
+        "project_init_version": project_init_version,
+    }
+    if contract_version is not None:
+        project["project_init_contract_version"] = contract_version
+    config = {
+        "project": project,
+        "language": language,
+        "delivery": delivery,
+        "memory": {
+            "tier": memory_tier,
+            "stack": memory_stack,
+            "memory_path": ".claude/memory",
+        },
+        "mcps": {"installed": list(mcps)},
+    }
+    return yaml.safe_dump(config, sort_keys=False)
 
 
 @pytest.fixture

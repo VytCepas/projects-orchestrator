@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from projects_orchestrator.registry import Registry, discover_projects
 
 
