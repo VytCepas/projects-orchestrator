@@ -23,7 +23,9 @@ classifiers = [
     "Topic :: Software Development :: Build Tools",
     "Environment :: Console",
 ]
-dependencies = []
+dependencies = [
+    "pyyaml>=6.0",
+]
 
 [project.scripts]
 projects-orchestrator = "projects_orchestrator.__main__:main"
@@ -39,6 +41,7 @@ dev = [
     "pytest>=8.0",
     "pytest-xdist>=3.0",
     "pytest-cov>=5.0",
+    "types-pyyaml>=6.0.12.20260518",
 ]
 
 [tool.hatch.build.targets.wheel]
