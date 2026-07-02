@@ -11,6 +11,7 @@ from typing import ClassVar
 
 from rich.text import Text
 from textual.app import App, ComposeResult
+from textual.binding import BindingType
 from textual.containers import Vertical
 from textual.widgets import DataTable, Footer, Header, Input, RichLog, TabbedContent, TabPane
 
@@ -32,11 +33,11 @@ _STATUS_STYLE = {
 }
 
 
-class OrchestratorApp(App):
+class OrchestratorApp(App[None]):
     """Fleet overview table + deterministic command controller."""
 
     TITLE = "projects-orchestrator"
-    BINDINGS: ClassVar[list[tuple[str, str, str]]] = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         ("r", "refresh", "Refresh"),
         ("q", "quit", "Quit"),
     ]

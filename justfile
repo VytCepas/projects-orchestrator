@@ -15,7 +15,7 @@ lint:
 # static type check (strict mode per mypy.ini; add mypy with `uv add --dev mypy`)
 # no-op on a fresh scaffold with no src/ yet — mypy errors on a missing path
 typecheck:
-    if [ -d src ]; then uv run --with "mypy>=1.10" mypy src/; else echo "No src/ directory yet — nothing to type-check."; fi
+    if [ -d src ]; then uv run --with "mypy>=1.10" --with types-PyYAML mypy src/; else echo "No src/ directory yet — nothing to type-check."; fi
 
 # auto-format project code
 format:

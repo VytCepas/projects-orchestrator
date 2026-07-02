@@ -38,7 +38,7 @@ jobs:
       # to. Account-scoped numbering means a real board is almost never #1, so a
       # hardcoded 1 here would silently split board state across two projects.
       # Needs a checkout to read the file; falls back to 1 if unset/absent.
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - name: Resolve PROJECT_NUMBER from config.yaml
         run: |
           set -euo pipefail

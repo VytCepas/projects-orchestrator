@@ -121,7 +121,7 @@ class ControllerContext:
 
 def _select_projects(ctx: ControllerContext, target: str | None) -> list[ProjectDescriptor] | str:
     """Resolve a target to descriptors, or an error line."""
-    if target in (None, "all"):
+    if target is None or target == "all":
         return list(ctx.fleet.descriptors)
     descriptor = ctx.fleet.get(target)
     if descriptor is None:
