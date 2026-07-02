@@ -30,6 +30,7 @@ Scaffolded with [project-init](https://github.com/VytCepas/project-init) on 2026
 | Script | `promote_review.sh` | mark PR ready (board card moves automatically) |
 | Script | `monitor_pr.sh <n> [--merge]` | wait for CI; --merge squash-merges when clean |
 | Script | `finish_pr.sh [n] [--review-cycle N]` | push branch, mark ready, monitor checks/review, and merge |
+| Skill | `report_upstream_issue` | report a bug — routes tooling bugs upstream to project-init, keeps project bugs local |
 | Skill | `add_hook` | add a new deterministic hook |
 | Skill | `add_command` | add a new slash command |
 | Skill | `audit` | full project health scan, creates issue with findings |

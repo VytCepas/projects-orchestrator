@@ -42,13 +42,16 @@ gh_web_base() { printf 'https://%s\n' "$(gh_host)"; }
 # resolves the host itself). github.com & *.ghe.com use api.<host>; GHES uses
 # <host>/api/v3. Override explicitly with PROJECT_INIT_API_BASE.
 gh_api_base() {
-  if [ -n "${PROJECT_INIT_API_BASE:-}" ]; then printf '%s\n' "$PROJECT_INIT_API_BASE"; return; fi
+  if [ -n "${PROJECT_INIT_API_BASE:-}" ]; then
+    printf '%s\n' "$PROJECT_INIT_API_BASE"
+    return
+  fi
   local host
   host="$(gh_host)"
   case "$host" in
-    "") printf 'https://api.github.com\n' ;;
-    github.com | *.ghe.com) printf 'https://api.%s\n' "$host" ;;
-    *) printf 'https://%s/api/v3\n' "$host" ;;
+  "") printf 'https://api.github.com\n' ;;
+  github.com | *.ghe.com) printf 'https://api.%s\n' "$host" ;;
+  *) printf 'https://%s/api/v3\n' "$host" ;;
   esac
 }
 

@@ -25,7 +25,7 @@ def test_main_no_command_exits_zero() -> None:
     assert main([]) == 0
 
 
-def test_version_flag_exits_zero(capsys) -> None:
+def test_version_flag_exits_zero() -> None:
     with pytest.raises(SystemExit) as excinfo:
         main(["--version"])
     assert excinfo.value.code == 0

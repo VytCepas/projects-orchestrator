@@ -34,7 +34,7 @@ project. Anchors are invariant across tiers; higher tiers only add surfaces.
 | Stack | auto |
 | memory_path | .claude/memory |
 
-## Skills (13)
+## Skills (14)
 
 | Skill | Description |
 |---|---|
@@ -45,6 +45,7 @@ project. Anchors are invariant across tiers; higher tiers only add surfaces.
 | create_issue | Creates a GitHub Issue with typed labels and structured planning metadata via create_issue.sh. Sub-skill invoked by start_task — do not call directly; use /start_task instead. |
 | github_workflow | Guides the agent through the full GitHub PR lifecycle — branch naming, push, review responses, and merge. Loaded automatically before any push, PR creation, review response, or merge action. |
 | plan | TDD-style planning — understand requirements, write tests first, then implement with numbered steps |
+| report_upstream_issue | Files a bug/issue in the right place — routes bugs in shared project-init machinery (hooks, CI templates, lifecycle scripts, board automation, rules, skills) upstream to the project-init repo so they are fixed once for every project, and keeps project-specific bugs local. Use whenever the user asks to report, register, or file a bug or issue. |
 | request_review | Marks a draft PR ready for review, moving it Draft → In Review and triggering board automation. Use when a draft PR is finished and ready for reviewers. |
 | review | Review staged or recent changes for bugs, style issues, and missed edge cases |
 | save_memory | Save a fact to project memory for future sessions |
@@ -60,6 +61,7 @@ project. Anchors are invariant across tiers; higher tiers only add surfaces.
 | PreToolUse | pre_commit_gate.sh |
 | PreToolUse | github_command_guard.sh |
 | PreToolUse | prod_guard.py |
+| PreToolUse | package_guard.py |
 | PostToolUse | post_edit_lint.sh |
 | UserPromptSubmit | workflow_state_reminder.sh |
 

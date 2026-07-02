@@ -17,7 +17,7 @@ from projects_orchestrator.runner import DEFAULT_TIMEOUT, run_command
 
 DEFAULT_TASKS: tuple[str, ...] = ("lint", "test")
 
-PASS = "pass"
+PASS = "pass"  # noqa: S105 — check-status label, not a credential
 FAIL = "fail"
 SKIP = "skip"
 

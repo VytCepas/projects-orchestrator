@@ -13,12 +13,37 @@
 
 set -euo pipefail
 
-# This script hard-requires the GitHub CLI (PI-362).
-command -v gh >/dev/null 2>&1 || { echo "error: GitHub CLI (gh) not found — install: https://cli.github.com" >&2; exit 1; }
+# This script hard-requires the GitHub CLI for the actual issue creation, but
+# `--help` and argument validation must work without it — otherwise you cannot
+# discover the flags on a machine that has not installed gh yet (PI-362,
+# 2026-07 review). require_gh is therefore called after validation, just before
+# the first real gh invocation.
+require_gh() {
+  command -v gh >/dev/null 2>&1 || {
+    echo "error: GitHub CLI (gh) not found — install: https://cli.github.com" >&2
+    exit 1
+  }
+}
 
 # Resolve the Python interpreter through the canonical helper (PI-361).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 PY="$SCRIPT_DIR/../hooks/_py.sh"
+
+# Single source of truth for the GitHub Project board number (PI #556):
+# the PROJECT_NUMBER env var overrides; otherwise read github_project_number
+# from .claude/config.yaml (shared with board-automation.yml / setup_github.sh);
+# default 1. Account-scoped numbering means a real board is rarely #1, so the
+# three consumers must agree or board state silently splits across projects.
+resolve_project_number() {
+  if [ -n "${PROJECT_NUMBER:-}" ]; then
+    printf '%s\n' "$PROJECT_NUMBER"
+    return
+  fi
+  local configured=""
+  configured=$(grep -E '^[[:space:]]*github_project_number:' "$SCRIPT_DIR/../config.yaml" 2>/dev/null |
+    head -n1 | sed 's/#.*$//' | grep -oE '[0-9]+' | head -n1 || true)
+  printf '%s\n' "${configured:-1}"
+}
 
 VALID_TYPES="feat fix chore docs test"
 VALID_SCALES="epic task"
@@ -117,80 +142,80 @@ require_option_value() {
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --priority)
-      require_option_value "$1" "${2:-}"
-      PRIORITY="$2"
-      shift 2
-      ;;
-    --size)
-      require_option_value "$1" "${2:-}"
-      SIZE="$2"
-      shift 2
-      ;;
-    --agent-ready)
-      require_option_value "$1" "${2:-}"
-      AGENT_READY="$2"
-      shift 2
-      ;;
-    --confidence)
-      require_option_value "$1" "${2:-}"
-      CONFIDENCE="$2"
-      shift 2
-      ;;
-    --area)
-      require_option_value "$1" "${2:-}"
-      AREA="$2"
-      shift 2
-      ;;
-    --scale)
-      require_option_value "$1" "${2:-}"
-      SCALE="$2"
-      shift 2
-      ;;
-    --parent)
-      require_option_value "$1" "${2:-}"
-      PARENT="$2"
-      shift 2
-      ;;
-    --reference)
-      require_option_value "$1" "${2:-}"
-      REFERENCES+=("$2")
-      shift 2
-      ;;
-    --dependency)
-      require_option_value "$1" "${2:-}"
-      DEPENDENCIES+=("$2")
-      shift 2
-      ;;
-    --acceptance)
-      require_option_value "$1" "${2:-}"
-      ACCEPTANCE+=("$2")
-      shift 2
-      ;;
-    --assignee)
-      require_option_value "$1" "${2:-}"
-      ASSIGNEE="$2"
-      shift 2
-      ;;
-    --milestone)
-      require_option_value "$1" "${2:-}"
-      MILESTONE="$2"
-      shift 2
-      ;;
-    --body-file)
-      require_option_value "$1" "${2:-}"
-      BODY_FILE="$2"
-      shift 2
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      echo "ERROR: unknown option '$1'" >&2
-      usage >&2
-      exit 1
-      ;;
+  --priority)
+    require_option_value "$1" "${2:-}"
+    PRIORITY="$2"
+    shift 2
+    ;;
+  --size)
+    require_option_value "$1" "${2:-}"
+    SIZE="$2"
+    shift 2
+    ;;
+  --agent-ready)
+    require_option_value "$1" "${2:-}"
+    AGENT_READY="$2"
+    shift 2
+    ;;
+  --confidence)
+    require_option_value "$1" "${2:-}"
+    CONFIDENCE="$2"
+    shift 2
+    ;;
+  --area)
+    require_option_value "$1" "${2:-}"
+    AREA="$2"
+    shift 2
+    ;;
+  --scale)
+    require_option_value "$1" "${2:-}"
+    SCALE="$2"
+    shift 2
+    ;;
+  --parent)
+    require_option_value "$1" "${2:-}"
+    PARENT="$2"
+    shift 2
+    ;;
+  --reference)
+    require_option_value "$1" "${2:-}"
+    REFERENCES+=("$2")
+    shift 2
+    ;;
+  --dependency)
+    require_option_value "$1" "${2:-}"
+    DEPENDENCIES+=("$2")
+    shift 2
+    ;;
+  --acceptance)
+    require_option_value "$1" "${2:-}"
+    ACCEPTANCE+=("$2")
+    shift 2
+    ;;
+  --assignee)
+    require_option_value "$1" "${2:-}"
+    ASSIGNEE="$2"
+    shift 2
+    ;;
+  --milestone)
+    require_option_value "$1" "${2:-}"
+    MILESTONE="$2"
+    shift 2
+    ;;
+  --body-file)
+    require_option_value "$1" "${2:-}"
+    BODY_FILE="$2"
+    shift 2
+    ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  *)
+    echo "ERROR: unknown option '$1'" >&2
+    usage >&2
+    exit 1
+    ;;
   esac
 done
 
@@ -229,6 +254,9 @@ if [ -n "$BODY_FILE" ] && [ ! -f "$BODY_FILE" ]; then
   exit 1
 fi
 
+# Arguments are valid; everything below talks to GitHub, so gh is required now.
+require_gh
+
 # ---------------------------------------------------------------------------
 # Parse --parent reference into owner / repo / number.
 # Accepts: 42, #42, owner/repo#42, or full GitHub issue URL.
@@ -239,7 +267,7 @@ PARENT_REPO=""
 PARENT_NUMBER=""
 
 parse_parent() {
-  local raw="${1#\#}"   # strip leading #
+  local raw="${1#\#}" # strip leading #
   if [[ "$raw" =~ ^https://github\.com/([^/]+)/([^/]+)/issues/([0-9]+)$ ]]; then
     PARENT_OWNER="${BASH_REMATCH[1]}"
     PARENT_REPO="${BASH_REMATCH[2]}"
@@ -263,11 +291,11 @@ if [ -n "$PARENT" ]; then
 fi
 
 case "$TYPE" in
-  feat)  TYPE_LABEL="feature" ;;
-  fix)   TYPE_LABEL="bug" ;;
-  chore) TYPE_LABEL="chore" ;;
-  docs)  TYPE_LABEL="documentation" ;;
-  test)  TYPE_LABEL="test" ;;
+feat) TYPE_LABEL="feature" ;;
+fix) TYPE_LABEL="bug" ;;
+chore) TYPE_LABEL="chore" ;;
+docs) TYPE_LABEL="documentation" ;;
+test) TYPE_LABEL="test" ;;
 esac
 
 TITLE="$DESCRIPTION"
@@ -310,10 +338,10 @@ write_bullets() {
   # PI-201: planning fields live in the body (so issue-validation.yml and the
   # issue forms agree, and an agent reading the issue needs no board query);
   # they are ALSO mirrored to the project board below for human sorting/filter.
-  [ -n "$PRIORITY" ]    && echo "- Priority: $PRIORITY"
-  [ -n "$SIZE" ]        && echo "- Size: $SIZE"
+  [ -n "$PRIORITY" ] && echo "- Priority: $PRIORITY"
+  [ -n "$SIZE" ] && echo "- Size: $SIZE"
   [ -n "$AGENT_READY" ] && echo "- Agent ready: $AGENT_READY"
-  [ -n "$CONFIDENCE" ]  && echo "- Confidence: $CONFIDENCE"
+  [ -n "$CONFIDENCE" ] && echo "- Confidence: $CONFIDENCE"
   [ -n "$SCALE" ] && echo "- Scale: $SCALE"
   [ -n "$AREA" ] && echo "- Area: $AREA"
   if [ -n "$PARENT" ]; then
@@ -357,7 +385,7 @@ write_bullets() {
   echo
   echo "- [ ] Implementation is complete"
   echo "- [ ] Relevant checks, tests, or manual validation are documented"
-} > "$BODY_PATH"
+} >"$BODY_PATH"
 
 if [ -n "$BODY_FILE" ]; then
   {
@@ -365,7 +393,7 @@ if [ -n "$BODY_FILE" ]; then
     echo "## Additional context"
     echo
     cat "$BODY_FILE"
-  } >> "$BODY_PATH"
+  } >>"$BODY_PATH"
 fi
 
 ensure_label() {
@@ -409,13 +437,13 @@ ISSUE_NUMBER=$(echo "$ISSUE_URL" | grep -oE '[0-9]+$')
 # board. They are also written into the issue body above (PI-201) so the issue
 # is self-contained and passes issue-validation.yml; the board copy makes them
 # sortable/filterable for humans.
-# PROJECT_NUMBER defaults to 7 (this repo's board); override with the env var if needed.
+# Board number resolves via resolve_project_number() (config.yaml SSOT, #556).
 # ---------------------------------------------------------------------------
 sync_project_fields() {
   local issue_num="$1"
   local project_num owner repo_name project_data project_id item_id
 
-  project_num="${PROJECT_NUMBER:-7}"
+  project_num="$(resolve_project_number)"
   owner=$(gh repo view --json owner -q .owner.login)
   repo_name=$(gh repo view --json name -q .name)
 
@@ -457,15 +485,16 @@ sync_project_fields() {
   # Write project data to a temp file to avoid single-quote issues in shell args
   local pdata_file
   pdata_file=$(mktemp)
-  printf '%s' "$project_data" > "$pdata_file"
+  printf '%s' "$project_data" >"$pdata_file"
 
-  project_id=$("$PY" - "$pdata_file" <<'PYEOF' 2>/dev/null || true
+  project_id=$(
+    "$PY" - "$pdata_file" <<'PYEOF' 2>/dev/null || true
 import sys, json
 d = json.load(open(sys.argv[1])).get('data', {})
 p = (d.get('user') or d.get('organization') or {}).get('projectV2') or {}
 print(p.get('id', ''))
 PYEOF
-)
+  )
 
   if [ -z "$project_id" ]; then
     rm -f "$pdata_file"
@@ -473,7 +502,8 @@ PYEOF
     return 0
   fi
 
-  item_id=$("$PY" - "$pdata_file" "$issue_num" <<'PYEOF' 2>/dev/null || true
+  item_id=$(
+    "$PY" - "$pdata_file" "$issue_num" <<'PYEOF' 2>/dev/null || true
 import sys, json
 d = json.load(open(sys.argv[1])).get('data', {})
 p = (d.get('user') or d.get('organization') or {}).get('projectV2') or {}
@@ -482,7 +512,7 @@ for item in (p.get('items') or {}).get('nodes', []):
         print(item['id'])
         break
 PYEOF
-)
+  )
 
   if [ -z "$item_id" ]; then
     local issue_node_id
@@ -508,7 +538,8 @@ PYEOF
     [ -n "$option_name" ] || return 0
 
     local field_id option_id
-    field_id=$("$PY" - "$pdata_file" "$field_name" <<'PYEOF' 2>/dev/null || true
+    field_id=$(
+      "$PY" - "$pdata_file" "$field_name" <<'PYEOF' 2>/dev/null || true
 import sys, json
 d = json.load(open(sys.argv[1])).get('data', {})
 p = (d.get('user') or d.get('organization') or {}).get('projectV2') or {}
@@ -517,14 +548,15 @@ for f in (p.get('fields') or {}).get('nodes', []):
         print(f.get('id', ''))
         break
 PYEOF
-)
+    )
 
     if [ -z "$field_id" ]; then
       echo "Warning: project field '$field_name' not found — skipping" >&2
       return 0
     fi
 
-    option_id=$("$PY" - "$pdata_file" "$field_name" "$option_name" <<'PYEOF' 2>/dev/null || true
+    option_id=$(
+      "$PY" - "$pdata_file" "$field_name" "$option_name" <<'PYEOF' 2>/dev/null || true
 import sys, json
 d = json.load(open(sys.argv[1])).get('data', {})
 p = (d.get('user') or d.get('organization') or {}).get('projectV2') or {}
@@ -536,7 +568,7 @@ for f in (p.get('fields') or {}).get('nodes', []):
                 break
         break
 PYEOF
-)
+    )
 
     if [ -z "$option_id" ]; then
       echo "Warning: option '$option_name' not found in field '$field_name' — skipping" >&2
@@ -553,14 +585,14 @@ PYEOF
         }) { projectV2Item { id } }
       }' \
       -f project="$project_id" -f item="$item_id" \
-      -f field="$field_id" -f option="$option_id" > /dev/null 2>&1 \
-      || echo "Warning: failed to set '$field_name'='$option_name'" >&2
+      -f field="$field_id" -f option="$option_id" >/dev/null 2>&1 ||
+      echo "Warning: failed to set '$field_name'='$option_name'" >&2
   }
 
-  [ -n "$PRIORITY" ]    && set_field "Priority"    "$PRIORITY"
-  [ -n "$SIZE" ]        && set_field "Size"         "$SIZE"
-  [ -n "$AGENT_READY" ] && set_field "Agent ready"  "$AGENT_READY"
-  [ -n "$CONFIDENCE" ]  && set_field "Confidence"   "$CONFIDENCE"
+  [ -n "$PRIORITY" ] && set_field "Priority" "$PRIORITY"
+  [ -n "$SIZE" ] && set_field "Size" "$SIZE"
+  [ -n "$AGENT_READY" ] && set_field "Agent ready" "$AGENT_READY"
+  [ -n "$CONFIDENCE" ] && set_field "Confidence" "$CONFIDENCE"
   rm -f "$pdata_file"
 }
 
@@ -594,7 +626,7 @@ if [ -n "$PARENT" ]; then
       }
     }' \
     -f parent="$PARENT_NODE_ID" \
-    -f child="$CHILD_NODE_ID" > /dev/null
+    -f child="$CHILD_NODE_ID" >/dev/null
 
   echo "Linked #$ISSUE_NUMBER as sub-issue of $PARENT_OWNER/$PARENT_REPO#$PARENT_NUMBER" >&2
 fi

@@ -10,6 +10,14 @@
 #      → Actions → Variables), or `gh variable set PUBLISH_ENABLED --body true`.
 #
 # Cutting a release: bump the version, then `git tag vX.Y.Z && git push --tags`.
+#
+# SLSA build provenance (#575): the release job attests the built wheel/sdist
+# with actions/attest-build-provenance — a first-party action using GitHub's own
+# OIDC + the public-good Sigstore instance (no key management, no cost), which
+# gets the artifact to SLSA Build Level 3. Verify a released artifact with:
+#   gh attestation verify <file.whl> --repo <owner>/<repo>
+# (delivery=service scaffolds attest the container image digest the same way in
+# deploy.yml / registry-publish.yml.)
 name: Release
 
 on:
@@ -23,6 +31,13 @@ jobs:
   release:
     name: Build + GitHub Release
     runs-on: ubuntu-24.04
+    # Job-level perms override the workflow block, so contents: write is
+    # restated for the release step; id-token + attestations back the SLSA
+    # provenance attestation (#575).
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v6
         with:
@@ -36,12 +51,27 @@ jobs:
       - name: Build wheel + sdist
         run: uv build
 
+      # Attest the exact artifacts about to be released (SLSA Build L3, #575).
+      - name: Attest build provenance (wheel + sdist)
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: "dist/*.whl, dist/*.tar.gz"
+
+      # CycloneDX SBOM of the runtime dependency tree, attached to the Release
+      # below (#574). --no-dev so the SBOM reflects what ships, not dev tooling;
+      # uvx runs cyclonedx-py isolated so it doesn't pollute the scanned .venv.
+      - name: Generate CycloneDX SBOM
+        run: |
+          uv sync --no-dev
+          uvx --from cyclonedx-bom cyclonedx-py environment .venv -o sbom.cdx.json
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/*.whl
             dist/*.tar.gz
+            *.cdx.json
           generate_release_notes: true
 
   publish:

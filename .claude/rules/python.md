@@ -13,9 +13,24 @@ uv sync                           # install deps
 uv run <command>                  # run in the project venv
 uv run ruff check .               # lint
 uv run ruff format .              # format
+uv run --with "mypy>=1.10" mypy src/  # type check (strict mode, per mypy.ini)
 uv run pytest -n auto -q          # tests (parallel mode, requires pytest-xdist)
 uv run pytest -q --tb=short       # tests (single-threaded fallback)
+just test-cov                     # tests + coverage gate (>= 70%, per justfile) — CI always runs this
+just audit                        # dependency CVE/advisory scan (pip-audit) — CI always runs this
+just sbom                         # CycloneDX SBOM of runtime deps (#574) — release.yml attaches it to Releases
+just license                      # dependency license scan (#579) — deny GPL/AGPL; tune the recipe's --fail-on list
 ```
+
+ruff lints; it does not type-check. `just typecheck` (mypy, strict) is a separate
+gate — type errors do not surface as ruff findings.
+
+ruff's `select` also covers `RUF`/`PERF`/`PTH`/`RET`/`ARG`/`A`/`S` — Ruff-native
+rules, perf anti-patterns, pathlib-over-os.path, return-statement clarity,
+unused arguments, builtin shadowing, and bandit-derived security checks
+(cheap and instant; complements Semgrep's CI-only SAST rather than
+duplicating it). `S` is exempted under `tests/**` — plain `assert` is the
+point of a test, not a vulnerability.
 
 **Test Optimization**: Use `pytest -n auto` in CI to parallelize tests across CPU cores (30-50% faster). Requires `pytest-xdist` in dev dependencies. See `ci.yml.tmpl` for a full optimized CI config.
 
@@ -23,3 +38,20 @@ uv run pytest -q --tb=short       # tests (single-threaded fallback)
 
 - One assertion per test; name: `test_<unit>_<scenario>`
 - External services (DB, API) use a real instance, not a mock
+
+## Property-based testing (Hypothesis, #580)
+
+Opt-in per file, run with `just fuzz` (which provides Hypothesis). It generates
+edge-case inputs a hand-written test wouldn't think to try:
+
+```python
+from hypothesis import given, strategies as st
+
+@given(st.integers(min_value=-1000, max_value=0), st.integers(min_value=1, max_value=1000), st.integers())
+def test_clamp_stays_within_bounds(lo, hi, x):
+    assert lo <= clamp(x, lo, hi) <= hi   # a true invariant; Hypothesis probes x < lo
+```
+
+Pattern/tooling, **not** a blocking gate — property tests live alongside unit
+tests and complement mutation testing (which checks existing tests) and the
+coverage floor (which checks how much is exercised).

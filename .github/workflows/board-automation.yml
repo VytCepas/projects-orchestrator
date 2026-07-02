@@ -5,7 +5,8 @@ name: Board automation
 # Setup:
 #   1. Create a PAT with Projects access.
 #   2. Store it as PROJECT_TOKEN.
-#   3. Set PROJECT_NUMBER to the target project number.
+#   3. Set `github_project_number` in .claude/config.yaml to the target board
+#      (the single source of truth shared with create_issue.sh / setup_github.sh).
 #   4. Optional project fields: Status, Priority, Area, Size.
 
 on:
@@ -24,15 +25,32 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
-      # No actions/checkout in this job (it only needs API access); pin the repo
-      # so every `gh` call (e.g. `gh issue view`) works checkout-free instead of
-      # failing on a missing git remote (PI-234).
+      # Pin the repo so every `gh` call (e.g. `gh issue view`) resolves it
+      # explicitly (PI-234).
       GH_REPO: ${{ github.repository }}
       OWNER: ${{ github.repository_owner }}
       REPO_NAME: ${{ github.event.repository.name }}
-      PROJECT_NUMBER: 7
 
     steps:
+      # Single source of truth for the board number (PI #556): read
+      # `github_project_number` from .claude/config.yaml instead of a hardcoded
+      # literal that drifts from what create_issue.sh / setup_github.sh provision
+      # to. Account-scoped numbering means a real board is almost never #1, so a
+      # hardcoded 1 here would silently split board state across two projects.
+      # Needs a checkout to read the file; falls back to 1 if unset/absent.
+      - uses: actions/checkout@v6
+      - name: Resolve PROJECT_NUMBER from config.yaml
+        run: |
+          set -euo pipefail
+          num=1
+          if [ -f .claude/config.yaml ]; then
+            parsed=$(grep -E '^[[:space:]]*github_project_number:' .claude/config.yaml \
+              | head -n1 | sed 's/#.*$//' | grep -oE '[0-9]+' | head -n1 || true)
+            [ -n "$parsed" ] && num="$parsed"
+          fi
+          echo "PROJECT_NUMBER=$num" >> "$GITHUB_ENV"
+          echo "Using GitHub Project #$num (from .claude/config.yaml)"
+
       - name: Determine issue and status
         id: context
         env:
@@ -158,14 +176,33 @@ jobs:
           fi
 
           ISSUE_DATA=$(gh issue view "$ISSUE_NUM" -R "$OWNER/$REPO_NAME" --json labels,body)
+          # Dual-format body parser (PI board self-population): issues reach the
+          # board from three sources with two body shapes. Issue *forms* render
+          # "### Heading\n\nvalue" blocks; create_issue.sh (and MCP/API-created
+          # issues that mirror it) write "- Field: value" bullets. Parse BOTH so
+          # Priority/Size/Agent-ready/Confidence/Area populate regardless of how
+          # the issue was created (bullets take precedence, then the heading block).
           parse_body_field() {
             local heading="$1"
             local body="$2"
+            local val
+
+            # Bullet form: "- Field: value" (case-insensitive, tolerant of leading
+            # indentation), trimming trailing whitespace/CR.
+            val=$(printf '%s\n' "$body" \
+              | sed -n "s/^[[:space:]]*-[[:space:]]*${heading}:[[:space:]]*//Ip" \
+              | head -1 | sed 's/[[:space:]]*$//')
+            if [ -n "$val" ]; then
+              printf '%s\n' "$val"
+              return 0
+            fi
+
+            # Heading form: "### Field" followed by the value on the next non-blank line.
             printf '%s\n' "$body" | awk -v h="$heading" '
               BEGIN { in_section = 0 }
               $0 ~ "^[[:space:]]*###[[:space:]]+" h "[[:space:]]*$" { in_section = 1; next }
               in_section && /^[[:space:]]*$/ { next }
-              in_section { print; exit }
+              in_section { sub(/[[:space:]]*$/, ""); print; exit }
             '
           }
           BODY=$(echo "$ISSUE_DATA" | jq -r '.body')
@@ -173,31 +210,8 @@ jobs:
           SIZE=$(parse_body_field "Size" "$BODY")
           AGENT_READY=$(parse_body_field "Agent ready" "$BODY")
           CONFIDENCE=$(parse_body_field "Confidence" "$BODY")
+          AREA=$(parse_body_field "Area" "$BODY")
           TYPE_LABEL=$(echo "$ISSUE_DATA" | jq -r '[.labels[].name | select(. == "feature" or . == "bug" or . == "chore" or . == "documentation" or . == "test")][0] // empty')
-          parse_area() {
-            local body="$1"
-            local area
-
-            area=$(printf '%s\n' "$body" | sed -n 's/^- Area: //Ip' | head -1)
-            if [ -n "$area" ]; then
-              printf '%s\n' "$area"
-              return 0
-            fi
-
-            printf '%s\n' "$body" | awk '
-              BEGIN { in_area = 0 }
-              /^[[:space:]]*###[[:space:]]+Area[[:space:]]*$/ {
-                in_area = 1
-                next
-              }
-              in_area && /^[[:space:]]*$/ { next }
-              in_area {
-                print
-                exit
-              }
-            '
-          }
-          AREA=$(parse_area "$(echo "$ISSUE_DATA" | jq -r '.body')")
 
           update_single_select() {
             local field_name="$1"

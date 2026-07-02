@@ -17,8 +17,8 @@ if command -v python3 >/dev/null 2>&1; then
   exec python3 "$@"
 fi
 # Bare `python` may still be Python 2 on legacy hosts — use it only if it's 3.x.
-if command -v python >/dev/null 2>&1 \
-  && python -c 'import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)' 2>/dev/null; then
+if command -v python >/dev/null 2>&1 &&
+  python -c 'import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)' 2>/dev/null; then
   exec python "$@"
 fi
 # Last resort: uv can run a managed Python — but only if uv is actually present,

@@ -8,9 +8,26 @@ line-length = 100
 # D       enforced docstrings (Google style)
 # C901    cyclomatic complexity cap
 # PLR091x branch/argument/statement caps
+# RUF     ruff-native rules (e.g. mutable class defaults)
+# PERF    performance anti-patterns (e.g. manual accumulation loops)
+# PTH     use pathlib over os.path
+# RET     return-statement clarity (dead assignments, needless else)
+# ARG     unused arguments
+# A       builtin shadowing
+# S       bandit-derived security checks — cheap and instant, complements
+#         Semgrep's CI-only SAST rather than duplicating it (PI-570)
+# BLE     no blind `except Exception`/`except:` without a documented reason
+#         (silence it deliberately with `# noqa: BLE001 — <why>`, not by omission)
 # Together these stop "noodly" generated code mechanically — prose rules in
 # CLAUDE.md decay; lint gates do not.
-select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "D", "C901", "PLR0912", "PLR0913", "PLR0915"]
+#
+# Deliberately NOT selected: TRY (exception-handling style) and PL's broader
+# pylint ports beyond PLR091x — evaluated and found to mostly re-flag patterns
+# the groups above already catch, at a higher false-positive cost (PI-570).
+select = [
+    "E", "F", "W", "I", "N", "UP", "B", "SIM", "D", "C901",
+    "PLR0912", "PLR0913", "PLR0915", "RUF", "PERF", "PTH", "RET", "ARG", "A", "S", "BLE",
+]
 ignore = ["E501"]
 # DOC rules (pydoclint port: docstring/signature consistency) are still in
 # preview — enable here once stable, or run standalone pydoclint until then:
@@ -25,6 +42,8 @@ max-complexity = 10
 
 [lint.per-file-ignores]
 # Test names are self-describing; docstring enforcement adds noise not value.
-"tests/**" = ["D"]
+# S: plain `assert` and fixture-only secrets are the point of a test, not a
+# vulnerability (PI-570).
+"tests/**" = ["D", "S"]
 # Agent infrastructure (hooks/scripts) is not project code.
 ".claude/**" = ["D", "C901", "PLR0912", "PLR0913", "PLR0915"]

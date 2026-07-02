@@ -5,6 +5,14 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    # Weekly OpenSSF Scorecard security-posture run (#576). The scorecard job
+    # below is schedule-gated, so it never runs — or blocks — on a PR.
+    - cron: "0 4 * * 1"
+
+    # Nightly mutation-testing run (PI-138/#563).
+    - cron: "0 3 * * *"
+
   # Optimization: Only run CI when relevant files change
   # Uncomment and adjust paths as needed for your project
 
@@ -112,24 +120,45 @@ jobs:
       - name: Install just
         uses: extractions/setup-just@v4
 
+      # ShellCheck ships preinstalled on ubuntu-24.04 runners; shfmt does not.
+      - name: Install shfmt
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          tmp="$(mktemp -d)"
+          curl -sSfL https://github.com/mvdan/sh/releases/download/v3.8.0/shfmt_v3.8.0_linux_amd64 -o "$tmp/shfmt_v3.8.0_linux_amd64"
+          # Verify the binary against the release's published checksums before
+          # trusting it — no unverified curl|install of an executable.
+          curl -sSfL https://github.com/mvdan/sh/releases/download/v3.8.0/sha256sums.txt -o "$tmp/sha256sums.txt"
+          ( cd "$tmp" && grep 'shfmt_v3.8.0_linux_amd64$' sha256sums.txt | sha256sum -c - )
+          chmod +x "$tmp/shfmt_v3.8.0_linux_amd64"
+          mv "$tmp/shfmt_v3.8.0_linux_amd64" "$HOME/.local/bin/shfmt"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       - name: Sync dev dependencies
         run: just setup
 
       - name: Lint
         run: just lint
 
-      # Coverage gate (PI-138): activates automatically once pytest-cov is in
-      # dev dependencies; runs plain tests until then. Tune --cov-fail-under
-      # in the justfile's test-cov recipe to your project's baseline.
+      - name: Typecheck
+        run: just typecheck
+
+      # Coverage gate (PI-138/PI-569): always on, not conditional — pytest-cov
+      # is pulled in ephemerally via `uv run --with`, the same pattern mypy
+      # (PI-558) and mutmut (PI-563) use, so there's no dev-dependency to
+      # forget to add. Tune --cov-fail-under in the justfile's test-cov
+      # recipe to your project's baseline; it no-ops on a fresh scaffold with
+      # no src/ yet (same guard as typecheck).
       - name: Tests — parallel, coverage-gated
-        run: |
-          if uv run python -c "import pytest_cov" 2>/dev/null; then
-            just test-cov
-          else
-            echo "pytest-cov not installed — running without the coverage gate."
-            echo "Add pytest-cov to dev dependencies to enable it."
-            just test
-          fi
+        run: just test-cov
+
+      # Dependency vulnerability scan (PI-568). Complements package_guard.py,
+      # which only blocks installing a package that doesn't exist or looks
+      # typosquatted — this catches a real, correctly-spelled dependency
+      # already in the lockfile with a known CVE/advisory.
+      - name: Dependency vulnerability scan (pip-audit)
+        run: just audit
+
 
 
 
@@ -192,26 +221,47 @@ jobs:
             echo "Create tests/integration/ when you have integration tests to run"
           fi
 
-  # Test-quality verification via mutation testing (PI-138). Mutmut is slow,
-  # so it runs nightly, not per-PR. Uncomment to enable; requires mutmut in
-  # dev dependencies and a [tool.mutmut] section in pyproject.toml.
-  # mutation-tests:
-  #   name: Mutation tests (mutmut)
-  #   runs-on: ubuntu-24.04
-  #   if: github.event_name == 'schedule'
-  #   steps:
-  #     - uses: actions/checkout@v6
-  #     - uses: astral-sh/setup-uv@v8.1.0
-  #       with:
-  #         version: "0.11.7"
-  #     - run: uv sync --group dev
-  #     - run: uv run mutmut run
-  # (also add to the top-level `on:` block:)
-  #   schedule:
-  #     - cron: "0 3 * * *"
+  # Test-quality verification via mutation testing (PI-138/#563). Mutmut is
+  # slow, so it runs nightly (see the top-level `on: schedule` block), not
+  # per-PR — non-blocking: not in ci-gate's `needs`, so a bad score never
+  # blocks a merge. Promote it there once a real baseline is established.
+  # `mutmut run` always exits 0 regardless of survivors; export-cicd-stats +
+  # the score-gate step below turn the result into an actual pass/fail signal.
+  # Requires a [tool.mutmut] section (source_paths = [...], scoped to
+  # deterministic pure-logic modules — skip I/O-heavy code, hooks, template
+  # renderers) in your own pyproject.toml; mutmut reads config from there,
+  # not a standalone file like ruff.toml/mypy.ini.
+  mutation-tests:
+    name: Mutation tests (mutmut)
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'schedule'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.1.0
+        with:
+          version: "0.11.7"
+      - run: uv sync --group dev
+      - run: uv run --with mutmut mutmut run
+      - run: uv run --with mutmut mutmut export-cicd-stats
+      - name: Enforce mutation score gate (>= 80% killed)
+        run: |
+          python3 - <<'PY'
+          import json
+          import sys
+
+          with open("mutants/mutmut-cicd-stats.json", encoding="utf-8") as f:
+              stats = json.load(f)
+          total = stats["total"]
+          killed = stats["killed"]
+          score = (killed / total * 100) if total else 100.0
+          print(f"Mutation score: {score:.1f}% ({killed}/{total} killed)")
+          if score < 80:
+              sys.exit(f"Mutation score {score:.1f}% is below the 80% gate")
+          PY
 
 
   
+
 
   # ADR-007: agent-agnostic secret-scanning backstop. The pre-commit git hook
   # gives fast local feedback but is fail-open; this job is the hard gate.
@@ -230,6 +280,131 @@ jobs:
           # GITLEAKS_LICENSE is required only for organization-owned repos
           # (free key from gitleaks.io). Personal accounts need no license.
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+  # Semgrep: semantic/AST security backstop. gitleaks (above) is string-
+  # pattern secret scanning; semgrep catches unsafe subprocess calls, SQL
+  # injection, and other OWASP Top 10 shapes gitleaks can't see. Explicit
+  # rulesets (not --config=auto) for reproducibility. Not in ci-gate's
+  # needs — a finding never blocks a merge while the false-positive rate is
+  # calibrated, but --error still fails this job's own step so findings are
+  # visible. Promote to ci-gate's needs once calibrated.
+  semgrep:
+    name: Semgrep (semantic security scan)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Full history: --baseline-commit (PR-only, below) needs the base
+          # commit reachable, not just the latest diff.
+          fetch-depth: 0
+
+      - name: Run Semgrep
+        env:
+          SEMGREP_ENABLE_VERSION_CHECK: "0"
+        run: |
+          pip install --quiet semgrep==1.168.0
+          RULESETS="--config p/secrets --config p/owasp-top-ten --config p/python"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            # Scan only the diff against the PR's base commit.
+            semgrep scan --error --metrics=off $RULESETS \
+              --baseline-commit "${{ github.event.pull_request.base.sha }}"
+          else
+            semgrep scan --error --metrics=off $RULESETS
+          fi
+
+  # Dependency license compliance (#579): flag copyleft (GPL/AGPL) dependencies
+  # pulled in transitively — a permissive-licensed project (MIT/Apache-2.0)
+  # usually must not ship them. Free/OSS tooling per language, no paid service,
+  # runs entirely in CI. Non-blocking initially (NOT in ci-gate's needs) while
+  # the deny-list is calibrated — the same rollout semgrep/scorecard used;
+  # promote it into ci-gate once your license policy is settled. The deny-list
+  # lives in the justfile's `license` recipe (or deny.toml for Rust).
+  license-scan:
+    name: Dependency license scan
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install just
+        uses: extractions/setup-just@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          version: "0.11.7"
+
+      - name: License scan (pip-licenses)
+        run: just license
+
+
+
+  # OpenSSF Scorecard (#576): standardized security-posture scoring (branch
+  # protection, dependency pinning, SAST presence, token permissions, ...).
+  # Schedule-only + non-blocking (NOT in ci-gate's needs) — a score is
+  # informational, mirroring how semgrep/mutmut were introduced. It surfaces the
+  # signal that most of the gates already shipped here would score well against.
+  #
+  # publish_results is FALSE by default: turning a scaffolded project's score
+  # into a PUBLIC entry on the scorecard.dev dashboard is an explicit opt-in the
+  # project owner must choose, never something the scaffolder silently enables.
+  # To opt in, flip publish_results to true below (id-token: write is already
+  # granted so the OIDC upload to the public dashboard works).
+  scorecard:
+    name: OpenSSF Scorecard
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'schedule'
+    permissions:
+      security-events: write   # upload the SARIF result to code scanning
+      id-token: write          # only needed if publish_results is turned on
+      contents: read
+      actions: read            # Scorecard reads workflow/branch-protection state
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Run Scorecard analysis
+        uses: ossf/scorecard-action@v2
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # PUBLIC-dashboard publishing stays OFF by default (#576) — flip to
+          # true only to deliberately publish this repo's score to scorecard.dev.
+          publish_results: false
+
+      # In-repo visibility: the score shows up under the Security → Code scanning
+      # tab without ever leaving the repository.
+      - name: Upload SARIF to code scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+
+  # All-green gate (PI #555): the SINGLE required status check for branch
+  # protection. Branch protection requires only "CI gate", so the required
+  # context is robust to matrix changes — adding/removing a Python version
+  # never renames the required check, and there is no un-expanded matrix name
+  # (e.g. "Lint and test (3.11)") for GitHub to fail to match against, which is
+  # what left main permanently `blocked` before. `if: always()` so the gate runs
+  # even when an upstream job fails, then fails itself unless every dependency
+  # succeeded.
+  ci-gate:
+    name: CI gate
+    runs-on: ubuntu-24.04
+    needs: [lint-and-test, secret-scan]
+    if: always()
+    steps:
+      - name: Require all upstream jobs to succeed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Upstream job results: $RESULTS"
+          for result in $RESULTS; do
+            if [ "$result" != "success" ]; then
+              echo "::error::A required job did not succeed (got: $result)."
+              exit 1
+            fi
+          done
+          echo "All required jobs passed."
 
 
 # Optimization #3: Conditional job execution

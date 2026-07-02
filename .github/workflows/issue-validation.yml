@@ -34,8 +34,57 @@ jobs:
             fi
           }
 
+          # Map a body "Type" value (either the create_issue.sh type keyword —
+          # feat/fix/chore/docs/test — or the label name itself) to the canonical
+          # type label.
+          map_type_label() {
+            case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+            feat | feature) echo "feature" ;;
+            fix | bug) echo "bug" ;;
+            chore) echo "chore" ;;
+            docs | documentation) echo "documentation" ;;
+            test) echo "test" ;;
+            *) echo "" ;;
+            esac
+          }
+
+          # Derive the type from the body, tolerating both the "- Type: value"
+          # bullet (create_issue.sh / MCP-API issues) and the "### Type" heading
+          # block (issue forms).
+          parse_type_from_body() {
+            local body="$1" val
+            val=$(printf '%s\n' "$body" | sed -n 's/^[[:space:]]*-[[:space:]]*Type:[[:space:]]*//Ip' | head -1 | sed 's/[[:space:]]*$//')
+            if [ -z "$val" ]; then
+              val=$(printf '%s\n' "$body" | awk '
+                BEGIN { in_s = 0 }
+                /^[[:space:]]*###[[:space:]]+Type[[:space:]]*$/ { in_s = 1; next }
+                in_s && /^[[:space:]]*$/ { next }
+                in_s { sub(/[[:space:]]*$/, ""); print; exit }
+              ')
+            fi
+            printf '%s\n' "$val"
+          }
+
+          # Issues created via the GitHub MCP/API can't create labels or set them,
+          # so they land with no valid type label. Derive the type from the body's
+          # "- Type:" (or "### Type"), create the mapped label if missing, and apply
+          # it (this job already has issues: write). Only fall back to flagging
+          # "type label" as missing when the body carries no recognizable type.
           has_type_label() {
-            if ! printf '%s\n' "$LABELS_JSON" | jq -e 'any(.[].name; . == "feature" or . == "bug" or . == "chore" or . == "documentation" or . == "test")' >/dev/null; then
+            if printf '%s\n' "$LABELS_JSON" | jq -e 'any(.[].name; . == "feature" or . == "bug" or . == "chore" or . == "documentation" or . == "test")' >/dev/null; then
+              return
+            fi
+            local body_type label
+            body_type=$(parse_type_from_body "$ISSUE_BODY")
+            label=$(map_type_label "$body_type")
+            if [ -z "$label" ]; then
+              missing+=("type label")
+              return
+            fi
+            gh label create "$label" --color "0075ca" --description "Issue type" 2>/dev/null || true
+            if gh issue edit "$ISSUE_NUMBER" --add-label "$label"; then
+              echo "Applied type label '$label' (derived from body Type '$body_type')."
+            else
               missing+=("type label")
             fi
           }

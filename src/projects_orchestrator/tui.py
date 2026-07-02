@@ -7,6 +7,8 @@ CLI shows. Requires the ``tui`` extra (``uv sync --extra tui``).
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Vertical
@@ -34,7 +36,10 @@ class OrchestratorApp(App):
     """Fleet overview table + deterministic command controller."""
 
     TITLE = "projects-orchestrator"
-    BINDINGS = [("r", "refresh", "Refresh"), ("q", "quit", "Quit")]
+    BINDINGS: ClassVar[list[tuple[str, str, str]]] = [
+        ("r", "refresh", "Refresh"),
+        ("q", "quit", "Quit"),
+    ]
 
     def __init__(self, config: FleetConfig) -> None:
         """Create the app around a fleet discovery configuration.

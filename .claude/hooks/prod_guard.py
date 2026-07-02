@@ -58,8 +58,17 @@ DENY_RULES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bdrop\s+(table|database|schema)\b", re.IGNORECASE), "SQL DROP"),
     (re.compile(r"\btruncate\s+table\b", re.IGNORECASE), "SQL TRUNCATE"),
     (
+        # Recursive + force can be bundled (-rf/-fr) OR split across separate
+        # args in any order (rm -r -f /, rm --force --recursive /) — the old
+        # single-token pattern missed the split forms (2026-07 review). Two
+        # lookaheads assert both a recursive and a force flag appear somewhere in
+        # the option run before a dangerous target (an absolute path other than
+        # /tmp, or ~).
         re.compile(
-            r"\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)[a-zA-Z]*\s+(/(?!tmp\b)|~)"
+            r"\brm\b"
+            r"(?=(?:\s+-{1,2}[\w-]+)*\s+(?:-\w*r\w*|--recursive)\b)"
+            r"(?=(?:\s+-{1,2}[\w-]+)*\s+(?:-\w*f\w*|--force)\b)"
+            r"(?:\s+-{1,2}[\w-]+)+\s+(/(?!tmp\b)|~)"
         ),
         "recursive force-remove outside the project",
     ),
