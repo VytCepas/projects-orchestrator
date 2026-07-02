@@ -64,7 +64,7 @@ def run_command(command: str, cwd: Path, timeout: float = DEFAULT_TIMEOUT) -> Ru
     """
     start = time.monotonic()
     try:
-        proc = subprocess.run(  # noqa: S602 — tooling commands are declared shell strings by design (see docstring)
+        proc = subprocess.run(  # noqa: S602  # nosemgrep: python.lang.security.audit.subprocess-shell-true.subprocess-shell-true — tooling commands are trusted shell strings from project descriptors (see docstring)
             command,
             shell=True,
             cwd=cwd,
