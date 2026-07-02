@@ -37,6 +37,12 @@ def test_collect_status_non_git_is_unknown(fleet_dir: Path) -> None:
     assert collect_status(_descriptor(fleet_dir)).health == "unknown"
 
 
+def test_status_health_unknown_when_dirty_unreadable() -> None:
+    from projects_orchestrator.status import ProjectStatus
+
+    assert ProjectStatus(project="x", branch="main", dirty=None).health == "unknown"
+
+
 def test_collect_status_non_git_has_detail(fleet_dir: Path) -> None:
     make_project(fleet_dir, "alpha")
     assert collect_status(_descriptor(fleet_dir)).detail == "not a git repository"

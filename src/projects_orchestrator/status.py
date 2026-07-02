@@ -42,7 +42,7 @@ class ProjectStatus:
     @property
     def health(self) -> str:
         """One-word health summary: clean | dirty | diverged | behind | ahead | unknown."""
-        if self.branch is None:
+        if self.branch is None or self.dirty is None:
             return "unknown"
         if self.dirty:
             return "dirty"

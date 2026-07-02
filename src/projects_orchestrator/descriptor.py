@@ -69,7 +69,8 @@ def _as_int(value: Any, default: int = 0) -> int:
 def _extract_tooling(raw: dict[str, Any]) -> dict[str, str]:
     """Map ``<task>_command`` keys in the ``tooling`` block to task names."""
     tooling: dict[str, str] = {}
-    for key, value in _as_mapping(raw.get("tooling")).items():
+    for raw_key, value in _as_mapping(raw.get("tooling")).items():
+        key = str(raw_key)
         if key.endswith(_TOOLING_SUFFIX) and isinstance(value, str) and value.strip():
             tooling[key.removesuffix(_TOOLING_SUFFIX)] = value.strip()
     return tooling

@@ -109,6 +109,8 @@ def humanize_age(iso_timestamp: str, now: _dt.datetime | None = None) -> str:
         then = _dt.datetime.fromisoformat(iso_timestamp)
     except ValueError:
         return "never"
+    if then.tzinfo is None:
+        then = then.replace(tzinfo=_dt.UTC)
     now = now or _dt.datetime.now(tz=_dt.UTC)
     seconds = max(0, int((now - then).total_seconds()))
     if seconds < 60:

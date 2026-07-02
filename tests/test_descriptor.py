@@ -55,3 +55,9 @@ def test_parse_config_ignores_blank_tooling_commands(tmp_path: Path) -> None:
 def test_has_task_true_for_declared_command(fleet_dir: Path) -> None:
     project = make_project(fleet_dir, "alpha", tooling={"run": "echo hi"})
     assert load_descriptor(project).has_task("run") is True
+
+
+def test_parse_config_tolerates_non_string_tooling_key(tmp_path: Path) -> None:
+    # PyYAML coerces a bare `on:` key to the bool True; must not crash.
+    descriptor = parse_config('tooling:\n  on: echo hi\n  lint_command: "ruff check"\n', tmp_path)
+    assert descriptor.has_task("lint") is True

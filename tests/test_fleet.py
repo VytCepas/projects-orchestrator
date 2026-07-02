@@ -98,3 +98,8 @@ def test_humanize_age_empty_is_never() -> None:
 
 def test_humanize_age_garbage_is_never() -> None:
     assert humanize_age("not-a-date") == "never"
+
+
+def test_humanize_age_naive_timestamp_does_not_crash() -> None:
+    now = dt.datetime(2026, 7, 2, 12, 5, tzinfo=dt.UTC)
+    assert humanize_age("2026-07-02T12:00:00", now=now) == "5m"
