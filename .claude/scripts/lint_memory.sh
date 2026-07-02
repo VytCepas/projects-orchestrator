@@ -12,8 +12,14 @@ INDEX="$MEMORY_DIR/MEMORY.md"
 ERRORS=0
 WARNINGS=0
 
-error() { echo "ERROR: $1" >&2; ERRORS=$((ERRORS + 1)); }
-warn()  { echo "WARN:  $1" >&2; WARNINGS=$((WARNINGS + 1)); }
+error() {
+  echo "ERROR: $1" >&2
+  ERRORS=$((ERRORS + 1))
+}
+warn() {
+  echo "WARN:  $1" >&2
+  WARNINGS=$((WARNINGS + 1))
+}
 
 SKIP_FILES="MEMORY.md SCHEMA.md README.md"
 
@@ -52,8 +58,8 @@ for file in "$MEMORY_DIR"/*.md; do
   type_val="$(echo "$frontmatter" | grep '^type:' | sed 's/^type:[[:space:]]*//' | tr -d '[:space:]')"
   if [ -n "$type_val" ]; then
     case "$type_val" in
-      user|feedback|project|reference) ;;
-      *) error "$name: invalid type '$type_val' (must be user|feedback|project|reference)" ;;
+    user | feedback | project | reference) ;;
+    *) error "$name: invalid type '$type_val' (must be user|feedback|project|reference)" ;;
     esac
   fi
 done
@@ -69,13 +75,19 @@ else
     name="$(basename "$file")"
     is_skipped "$name" && continue
 
-    if ! grep -q "$name" "$INDEX"; then
+    # -F: the filename is a literal, not a regex (2026-07 review).
+    if ! grep -Fq "$name" "$INDEX"; then
       error "$name: not listed in MEMORY.md index"
     fi
   done
 
-  # Check every file referenced in index actually exists
+  # Check every LOCAL file referenced in index actually exists. External links
+  # (https://…, mailto:) and in-page anchors (#section) are not repo files, so
+  # they must be skipped rather than reported as missing (2026-07 review).
   while read -r ref; do
+    case "$ref" in
+    *://* | mailto:* | \#*) continue ;;
+    esac
     if [ ! -f "$MEMORY_DIR/$ref" ]; then
       error "MEMORY.md references '$ref' but file does not exist"
     fi
@@ -98,9 +110,9 @@ for file in "$MEMORY_DIR"/*.md; do
   # word-splitting is safe: the charclass excludes whitespace, so no path has spaces.
   for ref in $(grep -oE '`[A-Za-z0-9_./-]+`' "$file" 2>/dev/null | tr -d '`'); do
     case "$ref" in
-      http*|/*|*'*'*) continue ;;  # URLs, absolute system paths, globs
-      */*.*) ;;                     # looks like a repo-relative path with an extension
-      *) continue ;;
+    http* | /* | *'*'*) continue ;; # URLs, absolute system paths, globs
+    */*.*) ;;                       # looks like a repo-relative path with an extension
+    *) continue ;;
     esac
     [ -e "$ROOT/$ref" ] || warn "$name: references \`$ref\` which does not exist (stale?)"
   done
@@ -113,13 +125,13 @@ done
 
 STALE_DAYS="${LINT_MEMORY_STALE_DAYS:-180}"
 if git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
-  cutoff=$(( $(date +%s) - STALE_DAYS * 86400 ))
+  cutoff=$(($(date +%s) - STALE_DAYS * 86400))
   for file in "$MEMORY_DIR"/*.md; do
     [ -f "$file" ] || continue
     name="$(basename "$file")"
     is_skipped "$name" && continue
     ts="$(git -C "$ROOT" log -1 --format=%ct -- "$file" 2>/dev/null || true)"
-    [ -n "$ts" ] || continue  # uncommitted / no history → not stale
+    [ -n "$ts" ] || continue # uncommitted / no history → not stale
     if [ "$ts" -lt "$cutoff" ]; then
       warn "$name: not updated in over $STALE_DAYS days (review for staleness)"
     fi

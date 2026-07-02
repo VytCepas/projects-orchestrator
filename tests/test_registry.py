@@ -35,7 +35,7 @@ def test_discover_honors_exclude_patterns(fleet_dir: Path) -> None:
     assert fleet.names == ("alpha",)
 
 
-def test_discover_includes_explicit_projects(fleet_dir: Path, tmp_path: Path) -> None:
+def test_discover_includes_explicit_projects(tmp_path: Path) -> None:
     elsewhere = make_project(tmp_path / "elsewhere", "gamma")
     fleet = discover(FleetConfig(projects=(elsewhere,)))
     assert fleet.names == ("gamma",)

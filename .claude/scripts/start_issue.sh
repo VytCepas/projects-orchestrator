@@ -12,7 +12,10 @@
 set -euo pipefail
 
 # This script hard-requires the GitHub CLI (PI-362).
-command -v gh >/dev/null 2>&1 || { echo "error: GitHub CLI (gh) not found — install: https://cli.github.com" >&2; exit 1; }
+command -v gh >/dev/null 2>&1 || {
+  echo "error: GitHub CLI (gh) not found — install: https://cli.github.com" >&2
+  exit 1
+}
 
 # Resolve the base branch (ADR-014) from the promotion chain via gh_host.sh.
 source "$(dirname "$0")/gh_host.sh"
@@ -58,12 +61,12 @@ derive_project_key() {
   fi
 
   local configured=""
-  configured=$(grep '^[[:space:]]*project_key:' .claude/config.yaml 2>/dev/null \
-    | head -n 1 \
-    | cut -d: -f2- \
-    | sed 's/#.*$//' \
-    | tr -d '[:space:]"' \
-    | tr -d "'" || true)
+  configured=$(grep '^[[:space:]]*project_key:' .claude/config.yaml 2>/dev/null |
+    head -n 1 |
+    cut -d: -f2- |
+    sed 's/#.*$//' |
+    tr -d '[:space:]"' |
+    tr -d "'" || true)
   if [ -n "$configured" ]; then
     echo "$configured"
     return
@@ -71,11 +74,11 @@ derive_project_key() {
 
   local repo_name=""
   repo_name=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
-  echo "$repo_name" \
-    | tr '[:lower:]' '[:upper:]' \
-    | tr -cs 'A-Z0-9' '\n' \
-    | awk 'NF { printf substr($0, 1, 1) }' \
-    | cut -c1-10
+  echo "$repo_name" |
+    tr '[:lower:]' '[:upper:]' |
+    tr -cs 'A-Z0-9' '\n' |
+    awk 'NF { printf substr($0, 1, 1) }' |
+    cut -c1-10
 }
 
 PROJECT_KEY=$(derive_project_key)
@@ -85,8 +88,8 @@ PROJECT_KEY=$(echo "$PROJECT_KEY" | tr '[:lower:]' '[:upper:]' | tr -cd 'A-Z0-9'
 # commit — its scope regex requires >=2 chars: [A-Z][A-Z0-9]{1,9}- (#432).
 # Widen a too-short key to the repo name's leading alphanumerics first.
 if [ "${#PROJECT_KEY}" -lt 2 ]; then
-  PROJECT_KEY=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" \
-    | tr '[:lower:]' '[:upper:]' | tr -cd 'A-Z0-9' | cut -c1-4)
+  PROJECT_KEY=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" |
+    tr '[:lower:]' '[:upper:]' | tr -cd 'A-Z0-9' | cut -c1-4)
 fi
 # Final guard: the key must satisfy the shared key regex (>=2 chars, leading
 # letter). Empty, still-too-short, or digit-leading -> stable PROJ fallback.
@@ -107,17 +110,17 @@ ISSUE_REF="${PROJECT_KEY}-${ISSUE_NUMBER}"
 # Matches convention: feat/PI-42-add-oauth-login, fix/API-99-null-pointer
 # Strip leading [type] prefix from issue title if present (e.g. "[feat] Add OAuth" -> "Add OAuth")
 CLEAN_TITLE=$(echo "$ISSUE_TITLE" | sed 's/^\[[^]]*\] *//')
-SLUG=$(echo "$CLEAN_TITLE" \
-  | tr '[:upper:]' '[:lower:]' \
-  | tr -cs 'a-z0-9' '-' \
-  | sed 's/^-//;s/-$//')
+SLUG=$(echo "$CLEAN_TITLE" |
+  tr '[:upper:]' '[:lower:]' |
+  tr -cs 'a-z0-9' '-' |
+  sed 's/^-//;s/-$//')
 PREFIX="${ISSUE_REF}-"
-MAX_SLUG=$(( 80 - ${#TYPE} - 1 - ${#PREFIX} ))  # -1 for the /
+MAX_SLUG=$((80 - ${#TYPE} - 1 - ${#PREFIX})) # -1 for the /
 if [ "$MAX_SLUG" -lt 12 ]; then
   MAX_SLUG=12
 fi
 SLUG="${SLUG:0:$MAX_SLUG}"
-SLUG="${SLUG%-}"   # trim trailing dash if truncated mid-word
+SLUG="${SLUG%-}" # trim trailing dash if truncated mid-word
 # A title with no alphanumerics (e.g. "!!!") collapses to an empty slug, so the
 # branch would be `feat/PI-42-` — pushed and PR'd before validate-pr.yml rejects
 # it for a slug that doesn't start with [a-z0-9]. Fall back to a stable slug so
@@ -170,4 +173,3 @@ PR_URL=$(gh pr create \
   --body "$PR_BODY")
 
 echo "Draft PR: $PR_URL"
-

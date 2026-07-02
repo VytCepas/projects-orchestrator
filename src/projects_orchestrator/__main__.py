@@ -243,7 +243,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command is None:
         parser.print_help()
         return 0
-    return args.handler(args)
+    exit_code: int = args.handler(args)
+    return exit_code
 
 
 if __name__ == "__main__":

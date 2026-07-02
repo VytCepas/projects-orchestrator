@@ -26,7 +26,7 @@ jobs:
     name: Open scaffolding upgrade PR
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 0
           # Use a PAT when available so git push can include .github/workflows/
@@ -35,7 +35,7 @@ jobs:
           token: ${{ secrets.UPGRADE_PR_TOKEN || github.token }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v8.1.0
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           version: "0.11.7"
 

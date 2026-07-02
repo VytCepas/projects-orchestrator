@@ -1,5 +1,6 @@
 # project-init runtime artifacts
-.codex
+# NB: do NOT ignore .codex/ wholesale — the codex overlay commits
+# .codex/hooks.json and .codex/config.toml as project config (2026-07 review).
 .claude/scheduled_tasks.lock
 .claude/.session_setup_stamp
 .claude/settings.local.json

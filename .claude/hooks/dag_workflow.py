@@ -42,8 +42,6 @@ import sys
 import time
 from pathlib import Path
 
-CACHE_PATH = Path(".claude/.workflow-state.json")
-
 GRAPH: dict[str, list[str]] = {
     "issue.created": [],
     "branch.created": [],
@@ -65,7 +63,7 @@ else:
 
 def _run(cmd: list[str]) -> tuple[int, str]:
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)  # noqa: S603 — internal lifecycle command, fixed argv
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return 1, ""
     return proc.returncode, proc.stdout
@@ -254,6 +252,17 @@ COMMAND_RULES: list[tuple[re.Pattern[str], str | None, str]] = [
         "Use .claude/scripts/monitor_pr.sh <pr> --merge instead of `gh api .../merge` so CI and review gates are honored.",
     ),
     (
+        # GraphQL merges bypass the REST-path rule above (2026-07 review): a
+        # `gh api graphql` mutation can merge or enable auto-merge without ever
+        # naming `/pulls/N/merge`. Block the mutation fields themselves.
+        re.compile(
+            r"\bgh\s+api\b[^&;]*\bgraphql\b[^&;]*"
+            r"(?:mergePullRequest|enablePullRequestAutoMerge)"
+        ),
+        "pr.merged",
+        "Use .claude/scripts/monitor_pr.sh <pr> --merge instead of a `gh api graphql` merge mutation so CI and review gates are honored.",
+    ),
+    (
         re.compile(r"\bgh\s+pr\s+merge\b"),
         "pr.merged",
         "Use .claude/scripts/monitor_pr.sh <pr> --merge instead of `gh pr merge` so CI, review waits, and review cycles are handled.",
@@ -291,10 +300,62 @@ _HEREDOC_RE = re.compile(
     re.DOTALL,
 )
 
+# Git global options that sit BETWEEN `git` and the subcommand (`git -C dir
+# push`, `git -c k=v push`). Left unnormalized they defeat every `git push`
+# rule, including the direct-push-to-main block (2026-07 review). Options that
+# consume a value are listed with their value; boolean options stand alone.
+_GIT_GLOBAL_OPT = (
+    r"(?:"
+    r"-C[ \t]+\S+"  # -C <path>
+    r"|-c[ \t]+\S+"  # -c <name=value>
+    r"|--git-dir(?:=\S+|[ \t]+\S+)"
+    r"|--work-tree(?:=\S+|[ \t]+\S+)"
+    r"|--namespace(?:=\S+|[ \t]+\S+)"
+    r"|--config-env(?:=\S+|[ \t]+\S+)"
+    r"|--exec-path(?:=\S+)?"
+    r"|--no-pager|--paginate|-p|-P|--bare"
+    r"|--no-replace-objects|--literal-pathspecs|--no-optional-locks|--icase-pathspecs"
+    r")"
+)
+_GIT_NORMALIZE_RE = re.compile(r"\bgit((?:[ \t]+" + _GIT_GLOBAL_OPT + r")+)[ \t]+")
+
+# An interpreter receiving a heredoc executes its body, so a guarded command
+# hidden in `bash <<'EOF' … EOF` must still be scanned (2026-07 review). The
+# negative lookbehind lets `/bin/bash` match while sparing `rebash`.
+_INTERP = r"(?:bash|sh|zsh|dash|ksh|python3?|python2|eval|source)"
+_INTERP_INTRO_RE = re.compile(r"(?<![\w.-])" + _INTERP + r"\b")
+_PIPE_INTERP_RE = re.compile(r"^\s*\|\s*(?:sudo[ \t]+)?(?<![\w.-])" + _INTERP + r"\b")
+
+
+def _normalize_git_globals(cmd: str) -> str:
+    """Rewrite ``git <global-opts> <subcommand>`` to ``git <subcommand>`` for
+    matching, so interposed ``-C``/``-c``/``--git-dir`` flags can't smuggle a
+    push past the rules (2026-07 review)."""
+    return _GIT_NORMALIZE_RE.sub("git ", cmd)
+
 
 def _strip_heredocs(cmd: str) -> str:
     """Remove heredoc body text so pattern rules don't fire on body content."""
     return _HEREDOC_RE.sub("", cmd)
+
+
+def _executing_heredoc_bodies(cmd: str) -> str:
+    """Concatenate heredoc bodies that WILL run — those fed to an interpreter
+    directly (``bash <<EOF``) or via a pipe (``cat <<EOF … | bash``).
+
+    ``_strip_heredocs`` removes every body to spare prose (a commit message or
+    ``gh pr comment --body-file - <<EOF`` mentioning "git push main"), but that
+    also hid genuinely-executing bodies. Re-surfacing only the interpreter-fed
+    ones keeps prose exempt while closing the execution bypass (2026-07 review).
+    """
+    bodies = []
+    for m in _HEREDOC_RE.finditer(cmd):
+        line_start = cmd.rfind("\n", 0, m.start()) + 1
+        intro = cmd[line_start : m.start()]
+        after = cmd[m.end() : m.end() + 60]
+        if _INTERP_INTRO_RE.search(intro) or _PIPE_INTERP_RE.match(after):
+            bodies.append(m.group(0))
+    return "\n".join(bodies)
 
 
 # Free-text flag values carry arbitrary prose (commit messages, issue/PR comment
@@ -358,8 +419,15 @@ def guard(payload: dict) -> dict | None:
 
     # Strip heredoc bodies and free-text flag values so pattern rules don't fire
     # on prose content (e.g. `gh issue create --body "$(cat <<'EOF'\n...git
-    # push...\nEOF\n)"`, or `gh pr comment --body "...git push main..."`).
-    cmd_scan = _strip_text_flag_values(_strip_heredocs(cmd))
+    # push...\nEOF\n)"`, or `gh pr comment --body "...git push main..."`), then
+    # normalize interposed git global options so `git -C dir push` is matched
+    # like `git push` (2026-07 review).
+    cmd_scan = _normalize_git_globals(_strip_text_flag_values(_strip_heredocs(cmd)))
+    # A heredoc fed to an interpreter DOES execute its body — scan those too, so
+    # `bash <<'EOF' … git push … EOF` is not a bypass (2026-07 review).
+    exec_bodies = _executing_heredoc_bodies(cmd)
+    if exec_bodies:
+        cmd_scan += "\n" + _normalize_git_globals(_strip_text_flag_values(exec_bodies))
 
     for pattern, target, message in COMMAND_RULES:
         if not pattern.search(cmd_scan):
@@ -463,7 +531,7 @@ def cmd_push(branch: str | None, max_retries: int, *, force: bool = False) -> in
         push_cmd = ["git", "push", "-u", "origin", branch]
         if force:
             push_cmd.append("--force-with-lease")
-        proc = subprocess.run(push_cmd)
+        proc = subprocess.run(push_cmd)  # noqa: S603 — internal git push, fixed argv
         if proc.returncode == 0:
             sys.stdout.write(f"push: pushed {branch} ({expected_sha})\n")
             return 0
@@ -559,7 +627,7 @@ def cmd_finish(pr_number: int | None, review_cycle: int | None) -> int:
     monitor_args = ["bash", str(script), str(pr_number), "--merge"]
     if review_cycle is not None:
         monitor_args += ["--review-cycle", str(review_cycle)]
-    return subprocess.run(monitor_args).returncode
+    return subprocess.run(monitor_args).returncode  # noqa: S603 — internal monitor script, fixed argv
 
 
 _VALID_TYPES = {"feat", "fix", "chore", "docs", "test"}

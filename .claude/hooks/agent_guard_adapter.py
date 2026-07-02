@@ -4,10 +4,11 @@
 Codex (PreToolUse via .codex/hooks.json) and the GUI surfaces (cursor,
 antigravity) reuse the same COMMAND_RULES enforcement Claude Code gets from
 github_command_guard.sh. Payloads differ slightly per surface, so this shim
-extracts the shell command, runs it through BOTH Claude-side guards —
-dag_workflow.py guard (lifecycle COMMAND_RULES) and prod_guard.py
-(destructive-command deny-list, autonomous mode; PI-394) — and translates a deny
-to the caller's dialect:
+extracts the shell command, runs it through the Claude-side guards —
+dag_workflow.py guard (lifecycle COMMAND_RULES), prod_guard.py
+(destructive-command deny-list, autonomous mode; PI-394), and package_guard.py
+(supply-chain package-existence check, autonomous mode; PI-564) — and
+translates a deny to the caller's dialect:
 
   codex  -> {"hookSpecificOutput": {permissionDecision: "deny", ...}}
             (the documented PreToolUse schema; Codex accepts it)
@@ -68,7 +69,7 @@ def _run_guard(name: str, payload: dict, *args: str) -> object:
     if not script.exists():
         return None
     try:
-        proc = subprocess.run(
+        proc = subprocess.run(  # noqa: S603 — fixed argv: this interpreter running a bundled hook script
             [sys.executable, str(script), *args],
             input=json.dumps(payload),
             capture_output=True,
@@ -76,7 +77,7 @@ def _run_guard(name: str, payload: dict, *args: str) -> object:
             check=False,
         )
         return json.loads(proc.stdout.strip() or "null")
-    except Exception:
+    except Exception:  # noqa: BLE001 — adapter must never break the session
         return None
 
 
@@ -104,11 +105,12 @@ def main() -> int:
         return 0
     cwd = payload.get("cwd") if isinstance(payload, dict) else None
 
-    # Lifecycle COMMAND_RULES guard first; only run the destructive-command guard
-    # if it didn't already deny — avoids a second subprocess on a blocked command
-    # (PI-394). Agent surfaces are non-interactive, so prod_guard runs in autonomous
-    # mode → a destructive command blocks outright rather than "ask"ing. Both emit
-    # the documented PreToolUse shape.
+    # Lifecycle COMMAND_RULES guard first; only run the next guard if the
+    # previous one didn't already deny — avoids extra subprocesses on a
+    # blocked command (PI-394/PI-564). Agent surfaces are non-interactive, so
+    # both prod_guard and package_guard run in autonomous mode → a flagged
+    # command blocks outright rather than "ask"ing. All three emit the
+    # documented PreToolUse shape.
     reason = _deny_reason(
         _run_guard("dag_workflow.py", {"tool_input": {"command": command}}, "guard")
     )
@@ -120,6 +122,16 @@ def main() -> int:
                     "tool_input": {"command": command},
                     "permission_mode": "bypassPermissions",
                     "cwd": cwd or ".",
+                },
+            )
+        )
+    if reason is None:
+        reason = _deny_reason(
+            _run_guard(
+                "package_guard.py",
+                {
+                    "tool_input": {"command": command},
+                    "permission_mode": "bypassPermissions",
                 },
             )
         )

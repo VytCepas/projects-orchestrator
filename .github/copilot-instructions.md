@@ -23,4 +23,4 @@ Canonical agent rules: [AGENTS.md](../AGENTS.md) | Workflow: [.claude/project-in
 - No secrets in code — use `os.environ` or `.env` (gitignored)
 - `just lint` must pass before closing a task (`just --list` shows all recipes)
 - Prefer deterministic bash/python over LLM calls for hooks and scripts
-- Permanent decisions → `.claude/docs/adr/`; exploratory notes → `.claude/vault/`; reusable facts → `.claude/memory/`
+- Permanent decisions → `.claude/docs/adr/`; reusable facts → `.claude/memory/`
