@@ -27,3 +27,7 @@ __pycache__/
 .env
 .env.local
 *.key
+
+# machine-specific fleet definition (see fleet.yaml.example)
+fleet.yaml
+.coverage

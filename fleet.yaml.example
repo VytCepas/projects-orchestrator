@@ -1,0 +1,19 @@
+# fleet.yaml — which projects this orchestrator governs.
+#
+# Copy to `fleet.yaml` (gitignored — the fleet is machine-specific) and
+# adjust. Without this file the orchestrator scans the parent directory of
+# the current checkout (the ~/projects/<name> sibling convention).
+#
+# Paths may be absolute, ~-relative, or relative to this file.
+
+# Directories scanned one level deep; anything with .claude/config.yaml counts.
+roots:
+  - ..
+
+# Explicit project paths outside the roots.
+projects: []
+#  - ~/work/some-other-project
+
+# Directory-name patterns (fnmatch) to skip while scanning roots.
+exclude: []
+#  - archive-*
