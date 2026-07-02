@@ -45,6 +45,10 @@ def _build_parser() -> argparse.ArgumentParser:
     target.add_argument("--all", action="store_true", help="run across every project (default)")
     run.set_defaults(func=_cmd_run)
 
+    tui = sub.add_parser("tui", help="launch the interactive fleet overview")
+    tui.add_argument("root", type=Path, help="directory to scan recursively")
+    tui.set_defaults(func=_cmd_tui)
+
     return parser
 
 
@@ -143,6 +147,21 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print(f"[{mark}] {result.project}: {result.command}")
         failed += 0 if result.ok else 1
     return 1 if failed else 0
+
+
+def _cmd_tui(args: argparse.Namespace) -> int:
+    """Launch the interactive fleet overview.
+
+    Args:
+        args: Parsed arguments carrying ``root``.
+
+    Returns:
+        Process exit code (0).
+    """
+    from projects_orchestrator.tui import run_tui
+
+    run_tui(args.root)
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:

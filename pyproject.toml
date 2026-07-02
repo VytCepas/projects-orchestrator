@@ -25,6 +25,7 @@ classifiers = [
 ]
 dependencies = [
     "pyyaml>=6.0",
+    "textual>=8.2.8",
 ]
 
 [project.scripts]
