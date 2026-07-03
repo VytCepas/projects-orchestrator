@@ -15,6 +15,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from projects_orchestrator import __version__, cache
+from projects_orchestrator.audit import audit_project, render_markdown
 from projects_orchestrator.checks import DEFAULT_TASKS, run_check
 from projects_orchestrator.controller import ControllerContext, dispatch, parse_command
 from projects_orchestrator.doctor import diagnose
@@ -166,6 +167,30 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     return 1 if any(r.status == "fail" for r in reports) else 0
 
 
+def _cmd_audit(args: argparse.Namespace) -> int:
+    """Run the composed governance audit; exit 1 when anything needs attention."""
+    fleet = _discover(args)
+    selected = list(fleet.descriptors)
+    if args.project:
+        descriptor = fleet.get(args.project)
+        if descriptor is None:
+            print(f"unknown project: {args.project}", file=sys.stderr)
+            return 2
+        selected = [descriptor]
+    cached = cache.load_results()
+    reports = [audit_project(d, cached.get(d.name)) for d in selected]
+    if args.json:
+        return _emit_json([asdict(r) for r in reports])
+    if args.markdown:
+        print(render_markdown(reports))
+    else:
+        for report in reports:
+            print(f"{report.project}: {report.status}")
+            for finding in report.findings:
+                print(f"  [{finding.severity}] {finding.category}: {finding.message}")
+    return 1 if any(r.needs_attention for r in reports) else 0
+
+
 def _cmd_snapshot(args: argparse.Namespace) -> int:
     """Dump the full joined fleet view."""
     fleet = _discover(args)
@@ -232,6 +257,12 @@ def _build_parser() -> argparse.ArgumentParser:
         ("memory", "search all project memories", _cmd_memory, True),
         ("drift", "scaffold drift vs the recorded manifest", _cmd_drift, True),
         ("doctor", "diagnose contract-v1 conformance", _cmd_doctor, True),
+        (
+            "audit",
+            "composed governance report (conformance + drift + memory + freshness)",
+            _cmd_audit,
+            True,
+        ),
         ("snapshot", "full joined fleet view", _cmd_snapshot, True),
         ("controller", "interactive deterministic command REPL", _cmd_controller, False),
         ("tui", "terminal UI (requires the tui extra)", _cmd_tui, False),
@@ -245,6 +276,10 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.choices["checks"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["drift"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["doctor"].add_argument("project", nargs="?", help="limit to one project")
+    sub.choices["audit"].add_argument("project", nargs="?", help="limit to one project")
+    sub.choices["audit"].add_argument(
+        "--markdown", action="store_true", help="render the report as Markdown"
+    )
     sub.choices["checks"].add_argument(
         "--task", action="append", help="gate to run (repeatable; default: lint, test)"
     )

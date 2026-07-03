@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from projects_orchestrator import cache
+from projects_orchestrator.audit import audit_project
 from projects_orchestrator.checks import run_check
 from projects_orchestrator.descriptor import ProjectDescriptor
 from projects_orchestrator.doctor import diagnose
@@ -34,6 +35,7 @@ commands:
   memory <query>          search every project's memory files
   drift [project|all]     scaffold drift vs the recorded manifest
   doctor [project|all]    diagnose contract-v1 conformance
+  audit [project|all]     governance report (conformance+drift+memory+freshness)
   projects                list discovered projects
   refresh                 re-discover the fleet
   help                    this text
@@ -42,6 +44,9 @@ commands:
 
 _TASK_VERBS = {"lint": ("lint",), "test": ("test",), "checks": ("lint", "test")}
 
+# Verbs that take an optional project target (default "all").
+_TARGET_VERBS = {"drift", "doctor", "audit"}
+
 
 @dataclass(frozen=True)
 class Intent:
@@ -49,7 +54,7 @@ class Intent:
 
     Attributes:
         verb: Canonical action (status, check, run, memory, drift, doctor,
-            projects, refresh, help, quit, ask, unknown).
+            audit, projects, refresh, help, quit, ask, unknown).
         target: Project name, ``all``, or ``None`` (verb-dependent).
         args: Extra arguments (task names for ``run``, query words for
             ``memory``).
@@ -91,10 +96,8 @@ def parse_command(text: str) -> Intent:
         return Intent(verb="run", target=rest[1] if len(rest) > 1 else "all", args=(rest[0],))
     if verb == "memory" and rest:
         return Intent(verb="memory", args=(" ".join(rest),))
-    if verb == "drift":
-        return Intent(verb="drift", target=rest[0] if rest else "all")
-    if verb == "doctor":
-        return Intent(verb="doctor", target=rest[0] if rest else "all")
+    if verb in _TARGET_VERBS:
+        return Intent(verb=verb, target=rest[0] if rest else "all")
     if verb in {"projects", "refresh", "help", "quit", "exit"}:
         return Intent(verb="quit" if verb == "exit" else verb)
     return Intent(verb="unknown", args=(stripped,))
@@ -205,6 +208,20 @@ def _dispatch_doctor(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
             yield f"  [{finding.status}] {finding.check}: {finding.detail}"
 
 
+def _dispatch_audit(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
+    """Report the composed governance audit per project."""
+    selected = _select_projects(ctx, intent.target)
+    if isinstance(selected, str):
+        yield selected
+        return
+    cached = cache.load_results(ctx.cache_file)
+    for descriptor in selected:
+        report = audit_project(descriptor, cached.get(descriptor.name))
+        yield f"{report.project}: {report.status}"
+        for finding in report.findings:
+            yield f"  [{finding.severity}] {finding.category}: {finding.message}"
+
+
 # Engine verbs: each handler reads the fleet and streams result lines.
 _ENGINE = {
     "check": _dispatch_check,
@@ -213,6 +230,7 @@ _ENGINE = {
     "memory": _dispatch_memory,
     "drift": _dispatch_drift,
     "doctor": _dispatch_doctor,
+    "audit": _dispatch_audit,
 }
 
 # Constant replies that need neither fleet state nor arguments.

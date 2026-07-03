@@ -1,0 +1,184 @@
+"""Compose every passive governance probe into one fleet audit.
+
+``audit`` answers "does anything in this project need attention?" in one
+report and one exit code. It adds no new probe beyond a memory-schema lint:
+it composes :func:`doctor.diagnose` (contract conformance), scaffold-drift
+*divergence* (``doctor`` only checks that a manifest exists), and check
+freshness — plus a memory pass that ports ``lint_memory.sh``'s intent into the
+never-raise engine.
+
+``doctor`` stays the focused contract-conformance command; ``audit`` is the
+broad governance report that reuses it. Every finding is ``ok | warn | fail``;
+a report's status is its worst finding and the CLI exits non-zero when
+anything is ``warn`` or worse.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from pathlib import Path
+
+from projects_orchestrator.checks import CheckResult
+from projects_orchestrator.descriptor import ProjectDescriptor
+from projects_orchestrator.doctor import FAIL, OK, WARN, diagnose
+from projects_orchestrator.drift import compute_drift
+from projects_orchestrator.memory import load_project_memory
+
+_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+
+
+@dataclass(frozen=True)
+class AuditFinding:
+    """One governance finding for one project.
+
+    Attributes:
+        project: Project name.
+        category: Probe name (``config``/``contract``/…/``drift``/``memory``/
+            ``freshness``).
+        severity: ``ok`` | ``warn`` | ``fail``.
+        message: Short human-readable detail.
+    """
+
+    project: str
+    category: str
+    severity: str
+    message: str
+
+
+@dataclass(frozen=True)
+class AuditReport:
+    """All governance findings for one project.
+
+    Attributes:
+        project: Project name.
+        findings: Findings in probe order.
+    """
+
+    project: str
+    findings: tuple[AuditFinding, ...] = ()
+
+    @property
+    def status(self) -> str:
+        """Worst finding severity across the report (``fail`` > ``warn`` > ``ok``)."""
+        severities = {finding.severity for finding in self.findings}
+        if FAIL in severities:
+            return FAIL
+        if WARN in severities:
+            return WARN
+        return OK
+
+    @property
+    def needs_attention(self) -> bool:
+        """Whether any finding is ``warn`` or worse."""
+        return self.status in (WARN, FAIL)
+
+
+def _is_empty_template(body: str) -> bool:
+    """Return whether a memory body is only comments/whitespace (an unfilled stub)."""
+    return not _COMMENT_RE.sub("", body).strip()
+
+
+def _conformance_findings(descriptor: ProjectDescriptor) -> list[AuditFinding]:
+    """Map ``doctor``'s contract-conformance checks into audit findings."""
+    return [
+        AuditFinding(descriptor.name, finding.check, finding.status, finding.detail)
+        for finding in diagnose(descriptor).findings
+    ]
+
+
+def _drift_finding(descriptor: ProjectDescriptor) -> AuditFinding | None:
+    """Report actual scaffold divergence; ``None`` when clean or manifest-less."""
+    report = compute_drift(descriptor)
+    if report.status != "drift":
+        return None
+    changed = len(report.modified) + len(report.missing)
+    return AuditFinding(descriptor.name, "drift", WARN, f"{changed} file(s) diverged from scaffold")
+
+
+def _read_index(memory_path: Path) -> str | None:
+    """Read ``MEMORY.md`` text for index checks; ``None`` when unreadable."""
+    try:
+        return (memory_path / "MEMORY.md").read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def _memory_findings(descriptor: ProjectDescriptor) -> list[AuditFinding]:
+    """Lint the project's memory: directory, index, frontmatter, empty templates."""
+    memory = load_project_memory(descriptor)
+    name = descriptor.name
+    if memory.memory_path is None or not memory.memory_path.is_dir():
+        return [AuditFinding(name, "memory", WARN, "no memory directory")]
+
+    findings = [AuditFinding(name, "memory", WARN, warning) for warning in memory.warnings]
+    if not memory.index_present:
+        findings.append(AuditFinding(name, "memory", WARN, "no MEMORY.md index"))
+    index_text = _read_index(memory.memory_path)
+    for mem in memory.files:
+        if mem.type == "unknown":
+            findings.append(
+                AuditFinding(name, "memory", WARN, f"{mem.path.name}: no frontmatter type")
+            )
+        if _is_empty_template(mem.body):
+            findings.append(AuditFinding(name, "memory", WARN, f"{mem.path.name}: empty template"))
+        if index_text is not None and mem.path.name not in index_text:
+            findings.append(AuditFinding(name, "memory", WARN, f"{mem.path.name}: not indexed"))
+    if not findings:
+        findings.append(
+            AuditFinding(name, "memory", OK, f"{len(memory.files)} fact file(s), indexed")
+        )
+    return findings
+
+
+def _freshness_finding(name: str, cached: dict[str, CheckResult] | None) -> AuditFinding:
+    """Report whether the project has any cached check results."""
+    if cached:
+        return AuditFinding(name, "freshness", OK, f"{len(cached)} cached result(s)")
+    return AuditFinding(name, "freshness", WARN, "never checked")
+
+
+def audit_project(
+    descriptor: ProjectDescriptor, cached: dict[str, CheckResult] | None = None
+) -> AuditReport:
+    """Run every governance probe for one project (never raises).
+
+    Args:
+        descriptor: The project to audit.
+        cached: Last-known check results for the project, if any.
+
+    Returns:
+        The composed audit report.
+    """
+    findings = _conformance_findings(descriptor)
+    drift = _drift_finding(descriptor)
+    if drift is not None:
+        findings.append(drift)
+    findings.extend(_memory_findings(descriptor))
+    findings.append(_freshness_finding(descriptor.name, cached))
+    return AuditReport(project=descriptor.name, findings=tuple(findings))
+
+
+def render_markdown(reports: list[AuditReport]) -> str:
+    """Render audit reports as a Markdown document for a scheduled run.
+
+    Args:
+        reports: One report per project.
+
+    Returns:
+        A Markdown string; a friendly line when the fleet is empty.
+    """
+    if not reports:
+        return "# Fleet audit\n\nNo projects discovered.\n"
+    lines = ["# Fleet audit", ""]
+    for report in reports:
+        lines.append(f"## {report.project} — {report.status}")
+        lines.append("")
+        lines.append("| category | severity | detail |")
+        lines.append("| --- | --- | --- |")
+        lines.extend(
+            f"| {finding.category} | {finding.severity} | {finding.message} |"
+            for finding in report.findings
+        )
+        lines.append("")
+    return "\n".join(lines)
