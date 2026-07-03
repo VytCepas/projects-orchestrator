@@ -10,11 +10,13 @@ deterministic.
 
 from __future__ import annotations
 
+import datetime as _dt
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from projects_orchestrator import cache
+from projects_orchestrator.adapters.github import as_check_results, collect_github
 from projects_orchestrator.audit import audit_project
 from projects_orchestrator.checks import run_check
 from projects_orchestrator.descriptor import ProjectDescriptor
@@ -36,6 +38,7 @@ commands:
   drift [project|all]     scaffold drift vs the recorded manifest
   doctor [project|all]    diagnose contract-v1 conformance
   audit [project|all]     governance report (conformance+drift+memory+freshness)
+  ci [project|all]        latest CI conclusion + open-PR count (via gh)
   projects                list discovered projects
   refresh                 re-discover the fleet
   help                    this text
@@ -45,7 +48,7 @@ commands:
 _TASK_VERBS = {"lint": ("lint",), "test": ("test",), "checks": ("lint", "test")}
 
 # Verbs that take an optional project target (default "all").
-_TARGET_VERBS = {"drift", "doctor", "audit"}
+_TARGET_VERBS = {"drift", "doctor", "audit", "ci"}
 
 
 @dataclass(frozen=True)
@@ -54,7 +57,7 @@ class Intent:
 
     Attributes:
         verb: Canonical action (status, check, run, memory, drift, doctor,
-            audit, projects, refresh, help, quit, ask, unknown).
+            audit, ci, projects, refresh, help, quit, ask, unknown).
         target: Project name, ``all``, or ``None`` (verb-dependent).
         args: Extra arguments (task names for ``run``, query words for
             ``memory``).
@@ -222,6 +225,22 @@ def _dispatch_audit(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
             yield f"  [{finding.severity}] {finding.category}: {finding.message}"
 
 
+def _dispatch_ci(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
+    """Probe CI conclusion + open-PR count per project (via gh); cache them."""
+    selected = _select_projects(ctx, intent.target)
+    if isinstance(selected, str):
+        yield selected
+        return
+    checked_at = _dt.datetime.now(tz=_dt.UTC).isoformat(timespec="seconds")
+    results = []
+    for descriptor in selected:
+        status = collect_github(descriptor)
+        results.extend(as_check_results(status, checked_at))
+        prs = "?" if status.open_prs is None else str(status.open_prs)
+        yield f"{status.project}: CI {status.ci}, {prs} open PR(s)"
+    cache.save_results(results, ctx.cache_file)
+
+
 # Engine verbs: each handler reads the fleet and streams result lines.
 _ENGINE = {
     "check": _dispatch_check,
@@ -231,6 +250,7 @@ _ENGINE = {
     "drift": _dispatch_drift,
     "doctor": _dispatch_doctor,
     "audit": _dispatch_audit,
+    "ci": _dispatch_ci,
 }
 
 # Constant replies that need neither fleet state nor arguments.

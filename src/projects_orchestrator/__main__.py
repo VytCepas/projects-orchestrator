@@ -9,12 +9,14 @@ interactively (``controller`` REPL / ``tui``). Every data command takes
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import json
 import sys
 from dataclasses import asdict
 from pathlib import Path
 
 from projects_orchestrator import __version__, cache
+from projects_orchestrator.adapters.github import as_check_results, collect_github
 from projects_orchestrator.audit import audit_project, render_markdown
 from projects_orchestrator.checks import DEFAULT_TASKS, run_check
 from projects_orchestrator.controller import ControllerContext, dispatch, parse_command
@@ -191,6 +193,31 @@ def _cmd_audit(args: argparse.Namespace) -> int:
     return 1 if any(r.needs_attention for r in reports) else 0
 
 
+def _cmd_ci(args: argparse.Namespace) -> int:
+    """Probe each project's CI conclusion + open-PR count via gh; cache them.
+
+    Exits 1 when any project's CI has failed. Results are written to the
+    checks cache so the ``status`` table shows last-known CI state offline.
+    """
+    fleet = _discover(args)
+    selected = list(fleet.descriptors)
+    if args.project:
+        descriptor = fleet.get(args.project)
+        if descriptor is None:
+            print(f"unknown project: {args.project}", file=sys.stderr)
+            return 2
+        selected = [descriptor]
+    checked_at = _dt.datetime.now(tz=_dt.UTC).isoformat(timespec="seconds")
+    statuses = [collect_github(d) for d in selected]
+    cache.save_results([r for s in statuses for r in as_check_results(s, checked_at)])
+    if args.json:
+        return _emit_json([asdict(s) for s in statuses])
+    for status in statuses:
+        prs = "?" if status.open_prs is None else str(status.open_prs)
+        print(f"{status.project}: CI {status.ci}, {prs} open PR(s)")
+    return 1 if any(s.ci == "fail" for s in statuses) else 0
+
+
 def _cmd_snapshot(args: argparse.Namespace) -> int:
     """Dump the full joined fleet view."""
     fleet = _discover(args)
@@ -263,6 +290,7 @@ def _build_parser() -> argparse.ArgumentParser:
             _cmd_audit,
             True,
         ),
+        ("ci", "latest CI conclusion + open-PR count per project (via gh)", _cmd_ci, True),
         ("snapshot", "full joined fleet view", _cmd_snapshot, True),
         ("controller", "interactive deterministic command REPL", _cmd_controller, False),
         ("tui", "terminal UI (requires the tui extra)", _cmd_tui, False),
@@ -280,6 +308,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.choices["audit"].add_argument(
         "--markdown", action="store_true", help="render the report as Markdown"
     )
+    sub.choices["ci"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["checks"].add_argument(
         "--task", action="append", help="gate to run (repeatable; default: lint, test)"
     )
