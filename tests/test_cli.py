@@ -107,6 +107,22 @@ def test_drift_json_reports_status(fleet_dir: Path, capsys) -> None:
     assert json.loads(capsys.readouterr().out)[0]["status"] == "no-manifest"
 
 
+def test_doctor_conformant_project_exits_zero(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")
+    assert main(["doctor", "--root", str(fleet_dir)]) == 0
+
+
+def test_doctor_nonconformant_project_exits_one(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha", config_text="project:\n  name: alpha\n")
+    assert main(["doctor", "--root", str(fleet_dir)]) == 1
+
+
+def test_doctor_json_reports_findings(fleet_dir: Path, capsys) -> None:
+    make_project(fleet_dir, "alpha")
+    main(["doctor", "--root", str(fleet_dir), "--json"])
+    assert json.loads(capsys.readouterr().out)[0]["findings"][0]["check"] == "config"
+
+
 def test_snapshot_json_has_descriptor(fleet_dir: Path, capsys) -> None:
     make_project(fleet_dir, "alpha")
     main(["snapshot", "--root", str(fleet_dir), "--json"])

@@ -17,6 +17,7 @@ from pathlib import Path
 from projects_orchestrator import cache
 from projects_orchestrator.checks import run_check
 from projects_orchestrator.descriptor import ProjectDescriptor
+from projects_orchestrator.doctor import diagnose
 from projects_orchestrator.drift import compute_drift
 from projects_orchestrator.fleet import fleet_rows, fleet_snapshots, render_table
 from projects_orchestrator.memory import load_project_memory, search_memory
@@ -32,6 +33,7 @@ commands:
   run <task> [project|all]  run any declared tooling task
   memory <query>          search every project's memory files
   drift [project|all]     scaffold drift vs the recorded manifest
+  doctor [project|all]    diagnose contract-v1 conformance
   projects                list discovered projects
   refresh                 re-discover the fleet
   help                    this text
@@ -46,8 +48,8 @@ class Intent:
     """A parsed controller command.
 
     Attributes:
-        verb: Canonical action (status, check, run, memory, projects,
-            refresh, help, quit, ask, unknown).
+        verb: Canonical action (status, check, run, memory, drift, doctor,
+            projects, refresh, help, quit, ask, unknown).
         target: Project name, ``all``, or ``None`` (verb-dependent).
         args: Extra arguments (task names for ``run``, query words for
             ``memory``).
@@ -91,6 +93,8 @@ def parse_command(text: str) -> Intent:
         return Intent(verb="memory", args=(" ".join(rest),))
     if verb == "drift":
         return Intent(verb="drift", target=rest[0] if rest else "all")
+    if verb == "doctor":
+        return Intent(verb="doctor", target=rest[0] if rest else "all")
     if verb in {"projects", "refresh", "help", "quit", "exit"}:
         return Intent(verb="quit" if verb == "exit" else verb)
     return Intent(verb="unknown", args=(stripped,))
@@ -188,6 +192,60 @@ def _dispatch_drift(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
             yield f"  missing:  {relpath}"
 
 
+def _dispatch_doctor(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
+    """Report contract-v1 conformance per project."""
+    selected = _select_projects(ctx, intent.target)
+    if isinstance(selected, str):
+        yield selected
+        return
+    for descriptor in selected:
+        report = diagnose(descriptor)
+        yield f"{report.project}: {report.status}"
+        for finding in report.findings:
+            yield f"  [{finding.status}] {finding.check}: {finding.detail}"
+
+
+def _dispatch_projects(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
+    """List discovered project names."""
+    yield from (ctx.fleet.names or ("no projects discovered",))
+
+
+def _dispatch_refresh(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
+    """Re-discover the fleet from the same configuration."""
+    ctx.refresh()
+    yield f"fleet refreshed: {len(ctx.fleet.descriptors)} project(s)"
+
+
+def _dispatch_ask(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
+    """Report that the natural-language seam is intentionally disabled."""
+    yield "natural-language mode is not enabled — this controller is deterministic"
+
+
+def _dispatch_help(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
+    """Print the command reference."""
+    yield from HELP_TEXT.splitlines()
+
+
+def _dispatch_unknown(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
+    """Report an unrecognized command."""
+    yield f"unknown command: {intent.args[0]} (try: help)"
+
+
+_DISPATCH = {
+    "check": _dispatch_check,
+    "run": _dispatch_check,
+    "status": _dispatch_status,
+    "memory": _dispatch_memory,
+    "drift": _dispatch_drift,
+    "doctor": _dispatch_doctor,
+    "projects": _dispatch_projects,
+    "refresh": _dispatch_refresh,
+    "ask": _dispatch_ask,
+    "help": _dispatch_help,
+    "unknown": _dispatch_unknown,
+}
+
+
 def dispatch(intent: Intent, ctx: ControllerContext) -> Iterator[str]:
     """Execute one intent against the engine, yielding output lines.
 
@@ -197,23 +255,8 @@ def dispatch(intent: Intent, ctx: ControllerContext) -> Iterator[str]:
 
     Yields:
         Human-readable output lines (colorless; surfaces add styling).
+        Terminal verbs (e.g. ``quit``) map to no handler and yield nothing.
     """
-    if intent.verb == "check" or intent.verb == "run":
-        yield from _dispatch_check(ctx, intent)
-    elif intent.verb == "status":
-        yield from _dispatch_status(ctx, intent)
-    elif intent.verb == "memory":
-        yield from _dispatch_memory(ctx, intent)
-    elif intent.verb == "drift":
-        yield from _dispatch_drift(ctx, intent)
-    elif intent.verb == "projects":
-        yield from (ctx.fleet.names or ("no projects discovered",))
-    elif intent.verb == "refresh":
-        ctx.refresh()
-        yield f"fleet refreshed: {len(ctx.fleet.descriptors)} project(s)"
-    elif intent.verb == "ask":
-        yield "natural-language mode is not enabled — this controller is deterministic"
-    elif intent.verb == "help":
-        yield from HELP_TEXT.splitlines()
-    elif intent.verb == "unknown":
-        yield f"unknown command: {intent.args[0]} (try: help)"
+    handler = _DISPATCH.get(intent.verb)
+    if handler is not None:
+        yield from handler(ctx, intent)

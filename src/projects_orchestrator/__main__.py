@@ -17,6 +17,7 @@ from pathlib import Path
 from projects_orchestrator import __version__, cache
 from projects_orchestrator.checks import DEFAULT_TASKS, run_check
 from projects_orchestrator.controller import ControllerContext, dispatch, parse_command
+from projects_orchestrator.doctor import diagnose
 from projects_orchestrator.drift import compute_drift
 from projects_orchestrator.fleet import fleet_rows, fleet_snapshots, render_table
 from projects_orchestrator.memory import load_project_memory, search_memory
@@ -145,6 +146,26 @@ def _cmd_drift(args: argparse.Namespace) -> int:
     return 1 if any(r.status == "drift" for r in reports) else 0
 
 
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    """Diagnose contract-v1 conformance; exit 1 when any project fails."""
+    fleet = _discover(args)
+    selected = list(fleet.descriptors)
+    if args.project:
+        descriptor = fleet.get(args.project)
+        if descriptor is None:
+            print(f"unknown project: {args.project}", file=sys.stderr)
+            return 2
+        selected = [descriptor]
+    reports = [diagnose(d) for d in selected]
+    if args.json:
+        return _emit_json([asdict(r) for r in reports])
+    for report in reports:
+        print(f"{report.project}: {report.status}")
+        for finding in report.findings:
+            print(f"  [{finding.status}] {finding.check}: {finding.detail}")
+    return 1 if any(r.status == "fail" for r in reports) else 0
+
+
 def _cmd_snapshot(args: argparse.Namespace) -> int:
     """Dump the full joined fleet view."""
     fleet = _discover(args)
@@ -210,6 +231,7 @@ def _build_parser() -> argparse.ArgumentParser:
         ("checks", "run each project's declared gates", _cmd_checks, True),
         ("memory", "search all project memories", _cmd_memory, True),
         ("drift", "scaffold drift vs the recorded manifest", _cmd_drift, True),
+        ("doctor", "diagnose contract-v1 conformance", _cmd_doctor, True),
         ("snapshot", "full joined fleet view", _cmd_snapshot, True),
         ("controller", "interactive deterministic command REPL", _cmd_controller, False),
         ("tui", "terminal UI (requires the tui extra)", _cmd_tui, False),
@@ -222,6 +244,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.choices["status"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["checks"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["drift"].add_argument("project", nargs="?", help="limit to one project")
+    sub.choices["doctor"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["checks"].add_argument(
         "--task", action="append", help="gate to run (repeatable; default: lint, test)"
     )
