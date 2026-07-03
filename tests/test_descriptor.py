@@ -25,6 +25,14 @@ def test_parse_scaffold_version_non_numeric_is_none() -> None:
     assert parse_scaffold_version("1.2.beta") is None
 
 
+def test_parse_scaffold_version_two_components_is_none() -> None:
+    assert parse_scaffold_version("0.6") is None
+
+
+def test_parse_scaffold_version_bare_integer_is_none() -> None:
+    assert parse_scaffold_version("999") is None
+
+
 def test_parse_scaffold_version_orders_by_component() -> None:
     assert parse_scaffold_version("0.6.0") > parse_scaffold_version("0.5.9")
 

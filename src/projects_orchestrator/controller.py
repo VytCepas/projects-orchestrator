@@ -205,44 +205,20 @@ def _dispatch_doctor(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
             yield f"  [{finding.status}] {finding.check}: {finding.detail}"
 
 
-def _dispatch_projects(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
-    """List discovered project names."""
-    yield from (ctx.fleet.names or ("no projects discovered",))
-
-
-def _dispatch_refresh(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
-    """Re-discover the fleet from the same configuration."""
-    ctx.refresh()
-    yield f"fleet refreshed: {len(ctx.fleet.descriptors)} project(s)"
-
-
-def _dispatch_ask(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
-    """Report that the natural-language seam is intentionally disabled."""
-    yield "natural-language mode is not enabled — this controller is deterministic"
-
-
-def _dispatch_help(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
-    """Print the command reference."""
-    yield from HELP_TEXT.splitlines()
-
-
-def _dispatch_unknown(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
-    """Report an unrecognized command."""
-    yield f"unknown command: {intent.args[0]} (try: help)"
-
-
-_DISPATCH = {
+# Engine verbs: each handler reads the fleet and streams result lines.
+_ENGINE = {
     "check": _dispatch_check,
     "run": _dispatch_check,
     "status": _dispatch_status,
     "memory": _dispatch_memory,
     "drift": _dispatch_drift,
     "doctor": _dispatch_doctor,
-    "projects": _dispatch_projects,
-    "refresh": _dispatch_refresh,
-    "ask": _dispatch_ask,
-    "help": _dispatch_help,
-    "unknown": _dispatch_unknown,
+}
+
+# Constant replies that need neither fleet state nor arguments.
+_STATIC_REPLIES = {
+    "ask": ("natural-language mode is not enabled — this controller is deterministic",),
+    "help": tuple(HELP_TEXT.splitlines()),
 }
 
 
@@ -255,8 +231,17 @@ def dispatch(intent: Intent, ctx: ControllerContext) -> Iterator[str]:
 
     Yields:
         Human-readable output lines (colorless; surfaces add styling).
-        Terminal verbs (e.g. ``quit``) map to no handler and yield nothing.
+        Terminal verbs (e.g. ``quit``) match nothing and yield nothing.
     """
-    handler = _DISPATCH.get(intent.verb)
+    handler = _ENGINE.get(intent.verb)
     if handler is not None:
         yield from handler(ctx, intent)
+    elif intent.verb in _STATIC_REPLIES:
+        yield from _STATIC_REPLIES[intent.verb]
+    elif intent.verb == "projects":
+        yield from (ctx.fleet.names or ("no projects discovered",))
+    elif intent.verb == "refresh":
+        ctx.refresh()
+        yield f"fleet refreshed: {len(ctx.fleet.descriptors)} project(s)"
+    elif intent.verb == "unknown":
+        yield f"unknown command: {intent.args[0]} (try: help)"

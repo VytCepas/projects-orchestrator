@@ -115,23 +115,28 @@ def parse_config(text: str, project_dir: Path) -> ProjectDescriptor:
     )
 
 
-def parse_scaffold_version(value: str) -> tuple[int, ...] | None:
-    """Parse a dotted scaffold version like ``0.5.2`` into a comparable tuple.
+def parse_scaffold_version(value: str) -> tuple[int, int, int] | None:
+    """Parse a ``MAJOR.MINOR.PATCH`` scaffold version into a comparable tuple.
 
     Args:
         value: A ``project_init_version`` string.
 
     Returns:
-        The numeric components as a tuple, or ``None`` when the value is
-        missing, ``unknown``, or not dotted integers — so callers treat it as
-        "not comparable" instead of guessing an ordering.
+        The three numeric components, or ``None`` when the value is missing,
+        ``unknown``, or not exactly three integer components. Malformed shapes
+        (``0.6``, ``999``, ``1.2.beta``) degrade to "not comparable" rather
+        than a misleading order that could mark valid projects as behind.
     """
     if not value or value == "unknown":
         return None
+    parts = value.split(".")
+    if len(parts) != 3:
+        return None
     try:
-        return tuple(int(part) for part in value.split("."))
+        major, minor, patch = (int(part) for part in parts)
     except ValueError:
         return None
+    return (major, minor, patch)
 
 
 def load_descriptor(project_dir: Path) -> ProjectDescriptor | None:
