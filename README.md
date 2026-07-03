@@ -23,8 +23,12 @@ projects-orchestrator tui                 # terminal UI (needs the tui extra)
 Every data command accepts `--json` for external monitors, and exit codes
 are meaningful (`checks` exits 1 when any gate fails, `drift` when any
 project diverged from its scaffold). The status table tracks per project:
-health · branch · sync · scaffold version · drift · git-hook install
-state · lint · tests · memory facts · check freshness.
+health · branch · sync · scaffold version · scaffold freshness (vs the
+newest in the fleet) · descriptor-contract version · drift · git-hook
+install state · lint · tests · memory facts · check freshness.
+
+The contract surfaces the orchestrator reads from each project-init child are
+pinned in [`docs/reference/descriptor-contract-v1.md`](docs/reference/descriptor-contract-v1.md).
 
 ### Which projects?
 
