@@ -18,6 +18,7 @@ projects-orchestrator drift [project]     # scaffold drift vs the recorded manif
 projects-orchestrator doctor [project]    # diagnose contract-v1 conformance
 projects-orchestrator audit [project]     # one governance report (--markdown for a digest)
 projects-orchestrator ci [project]        # latest CI conclusion + open-PR count via gh
+projects-orchestrator upgrade-plan        # scaffold version vs upstream (--apply to trigger upgrades)
 projects-orchestrator snapshot --json     # full machine-readable fleet state
 projects-orchestrator controller          # deterministic command REPL
 projects-orchestrator tui                 # terminal UI (needs the tui extra)
@@ -26,7 +27,8 @@ projects-orchestrator tui                 # terminal UI (needs the tui extra)
 Every data command accepts `--json` for external monitors, and exit codes
 are meaningful (`checks` exits 1 when any gate fails, `drift` when any
 project diverged from its scaffold, `doctor` when any project fails
-contract-v1 conformance, `audit` when anything needs attention). `audit` is
+contract-v1 conformance, `audit` when anything needs attention, `upgrade-plan`
+when any project is behind upstream project-init). `audit` is
 the one-shot governance report: it composes `doctor`'s conformance findings
 with scaffold-drift divergence, a memory-schema lint, and check freshness
 (`--markdown` renders a digest for a scheduled run). The status table tracks per project:

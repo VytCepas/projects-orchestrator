@@ -29,6 +29,8 @@ from projects_orchestrator.registry import FleetConfig
         ("audit alpha", "audit"),
         ("ci", "ci"),
         ("ci alpha", "ci"),
+        ("upgrade", "upgrade"),
+        ("upgrade alpha", "upgrade"),
         ("projects", "projects"),
         ("refresh", "refresh"),
         ("quit", "quit"),
@@ -155,6 +157,12 @@ def test_dispatch_ci_reports_per_project(fleet_dir: Path) -> None:
     make_project(fleet_dir, "alpha")
     lines = list(dispatch(parse_command("ci"), _ctx(fleet_dir)))
     assert lines[0].startswith("alpha: CI ")
+
+
+def test_dispatch_upgrade_reports_per_project(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")
+    lines = list(dispatch(parse_command("upgrade"), _ctx(fleet_dir)))
+    assert lines[0].startswith("alpha: ")
 
 
 def test_dispatch_ask_is_disabled(fleet_dir: Path) -> None:

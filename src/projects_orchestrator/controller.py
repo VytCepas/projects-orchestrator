@@ -17,6 +17,7 @@ from pathlib import Path
 
 from projects_orchestrator import cache
 from projects_orchestrator.adapters.github import as_check_results, collect_github
+from projects_orchestrator.adapters.project_init import latest_upstream_version
 from projects_orchestrator.audit import audit_project
 from projects_orchestrator.checks import run_check
 from projects_orchestrator.descriptor import ProjectDescriptor
@@ -26,6 +27,7 @@ from projects_orchestrator.fleet import fleet_rows, fleet_snapshots, render_tabl
 from projects_orchestrator.memory import load_project_memory, search_memory
 from projects_orchestrator.registry import Fleet, FleetConfig, discover
 from projects_orchestrator.status import collect_status
+from projects_orchestrator.upgrade import upgrade_plan
 
 HELP_TEXT = """\
 commands:
@@ -39,6 +41,7 @@ commands:
   doctor [project|all]    diagnose contract-v1 conformance
   audit [project|all]     governance report (conformance+drift+memory+freshness)
   ci [project|all]        latest CI conclusion + open-PR count (via gh)
+  upgrade [project|all]   scaffold version vs upstream project-init
   projects                list discovered projects
   refresh                 re-discover the fleet
   help                    this text
@@ -48,7 +51,7 @@ commands:
 _TASK_VERBS = {"lint": ("lint",), "test": ("test",), "checks": ("lint", "test")}
 
 # Verbs that take an optional project target (default "all").
-_TARGET_VERBS = {"drift", "doctor", "audit", "ci"}
+_TARGET_VERBS = {"drift", "doctor", "audit", "ci", "upgrade"}
 
 
 @dataclass(frozen=True)
@@ -57,7 +60,7 @@ class Intent:
 
     Attributes:
         verb: Canonical action (status, check, run, memory, drift, doctor,
-            audit, ci, projects, refresh, help, quit, ask, unknown).
+            audit, ci, upgrade, projects, refresh, help, quit, ask, unknown).
         target: Project name, ``all``, or ``None`` (verb-dependent).
         args: Extra arguments (task names for ``run``, query words for
             ``memory``).
@@ -241,6 +244,18 @@ def _dispatch_ci(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
     cache.save_results(results, ctx.cache_file)
 
 
+def _dispatch_upgrade(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
+    """Report each project's scaffold version vs upstream project-init."""
+    selected = _select_projects(ctx, intent.target)
+    if isinstance(selected, str):
+        yield selected
+        return
+    latest = latest_upstream_version(Path.cwd())
+    rows = upgrade_plan(selected, latest, cache.load_results(ctx.cache_file))
+    for row in rows:
+        yield f"{row.project}: {row.status} (scaffold {row.scaffold_version}, drift {row.drift})"
+
+
 # Engine verbs: each handler reads the fleet and streams result lines.
 _ENGINE = {
     "check": _dispatch_check,
@@ -251,6 +266,7 @@ _ENGINE = {
     "doctor": _dispatch_doctor,
     "audit": _dispatch_audit,
     "ci": _dispatch_ci,
+    "upgrade": _dispatch_upgrade,
 }
 
 # Constant replies that need neither fleet state nor arguments.
