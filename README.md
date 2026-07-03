@@ -15,6 +15,7 @@ projects-orchestrator status              # fleet table: health/branch/lint/test
 projects-orchestrator checks [project]    # run each project's own lint/test gates
 projects-orchestrator memory <query>      # search every project's memory files
 projects-orchestrator drift [project]     # scaffold drift vs the recorded manifest
+projects-orchestrator doctor [project]    # diagnose contract-v1 conformance
 projects-orchestrator snapshot --json     # full machine-readable fleet state
 projects-orchestrator controller          # deterministic command REPL
 projects-orchestrator tui                 # terminal UI (needs the tui extra)
@@ -22,9 +23,14 @@ projects-orchestrator tui                 # terminal UI (needs the tui extra)
 
 Every data command accepts `--json` for external monitors, and exit codes
 are meaningful (`checks` exits 1 when any gate fails, `drift` when any
-project diverged from its scaffold). The status table tracks per project:
-health · branch · sync · scaffold version · drift · git-hook install
-state · lint · tests · memory facts · check freshness.
+project diverged from its scaffold, `doctor` when any project fails
+contract-v1 conformance). The status table tracks per project:
+health · branch · sync · scaffold version · scaffold freshness (vs the
+newest in the fleet) · descriptor-contract version · drift · git-hook
+install state · lint · tests · memory facts · check freshness.
+
+The contract surfaces the orchestrator reads from each project-init child are
+pinned in [`docs/reference/descriptor-contract-v1.md`](docs/reference/descriptor-contract-v1.md).
 
 ### Which projects?
 

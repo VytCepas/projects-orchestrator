@@ -115,6 +115,30 @@ def parse_config(text: str, project_dir: Path) -> ProjectDescriptor:
     )
 
 
+def parse_scaffold_version(value: str) -> tuple[int, int, int] | None:
+    """Parse a ``MAJOR.MINOR.PATCH`` scaffold version into a comparable tuple.
+
+    Args:
+        value: A ``project_init_version`` string.
+
+    Returns:
+        The three numeric components, or ``None`` when the value is missing,
+        ``unknown``, or not exactly three integer components. Malformed shapes
+        (``0.6``, ``999``, ``1.2.beta``) degrade to "not comparable" rather
+        than a misleading order that could mark valid projects as behind.
+    """
+    if not value or value == "unknown":
+        return None
+    parts = value.split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        major, minor, patch = (int(part) for part in parts)
+    except ValueError:
+        return None
+    return (major, minor, patch)
+
+
 def load_descriptor(project_dir: Path) -> ProjectDescriptor | None:
     """Load the descriptor for one project directory.
 

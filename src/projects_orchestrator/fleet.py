@@ -14,7 +14,7 @@ from pathlib import Path
 
 from projects_orchestrator.cache import load_results
 from projects_orchestrator.checks import CheckResult
-from projects_orchestrator.descriptor import ProjectDescriptor
+from projects_orchestrator.descriptor import ProjectDescriptor, parse_scaffold_version
 from projects_orchestrator.drift import DriftReport, compute_drift, hook_health
 from projects_orchestrator.memory import ProjectMemory, load_project_memory
 from projects_orchestrator.registry import Fleet
@@ -26,6 +26,8 @@ COLUMNS = (
     "Branch",
     "Sync",
     "Scaffold",
+    "Latest",
+    "Contract",
     "Drift",
     "Hooks",
     "Lint",
@@ -134,6 +136,40 @@ def _sync_cell(status: ProjectStatus) -> str:
     return "".join(parts) or "="
 
 
+def newest_scaffold_version(snapshots: list[ProjectSnapshot]) -> tuple[int, ...] | None:
+    """Return the newest comparable scaffold version across the fleet.
+
+    Args:
+        snapshots: The fleet's snapshots.
+
+    Returns:
+        The maximum parseable ``project_init_version``, or ``None`` when no
+        project declares a comparable version.
+    """
+    versions = [
+        version
+        for version in (
+            parse_scaffold_version(s.descriptor.project_init_version) for s in snapshots
+        )
+        if version is not None
+    ]
+    return max(versions) if versions else None
+
+
+def _latest_cell(snapshot: ProjectSnapshot, newest: tuple[int, ...] | None) -> str:
+    """Render scaffold freshness vs the fleet's newest (``-`` when unknown)."""
+    version = parse_scaffold_version(snapshot.descriptor.project_init_version)
+    if version is None or newest is None:
+        return "-"
+    return "=" if version >= newest else "behind"
+
+
+def _contract_cell(snapshot: ProjectSnapshot) -> str:
+    """Render the descriptor-contract version (``none`` when unversioned)."""
+    version = snapshot.descriptor.contract_version
+    return f"v{version}" if version > 0 else "none"
+
+
 def _check_cell(snapshot: ProjectSnapshot, task: str) -> str:
     """Render one task's last-known result (``?`` when never checked)."""
     result = snapshot.checks.get(task)
@@ -150,11 +186,15 @@ def _checked_cell(snapshot: ProjectSnapshot) -> str:
     return humanize_age(min(stamps))
 
 
-def snapshot_row(snapshot: ProjectSnapshot) -> dict[str, str]:
+def snapshot_row(
+    snapshot: ProjectSnapshot, newest: tuple[int, ...] | None = None
+) -> dict[str, str]:
     """Build one table row from a snapshot (pure).
 
     Args:
         snapshot: The project snapshot to render.
+        newest: The fleet's newest scaffold version, for the ``Latest`` cell;
+            ``None`` renders it as unknown (``-``).
 
     Returns:
         Column → cell text, keyed by :data:`COLUMNS`.
@@ -167,6 +207,8 @@ def snapshot_row(snapshot: ProjectSnapshot) -> dict[str, str]:
         "Branch": snapshot.status.branch or "-",
         "Sync": _sync_cell(snapshot.status),
         "Scaffold": version if version != "unknown" else "-",
+        "Latest": _latest_cell(snapshot, newest),
+        "Contract": _contract_cell(snapshot),
         "Drift": snapshot.drift.summary,
         "Hooks": snapshot.hooks,
         "Lint": _check_cell(snapshot, "lint"),
@@ -178,8 +220,9 @@ def snapshot_row(snapshot: ProjectSnapshot) -> dict[str, str]:
 
 
 def fleet_rows(snapshots: list[ProjectSnapshot]) -> list[dict[str, str]]:
-    """Build all table rows (pure)."""
-    return [snapshot_row(s) for s in snapshots]
+    """Build all table rows (pure); resolves scaffold freshness fleet-wide."""
+    newest = newest_scaffold_version(snapshots)
+    return [snapshot_row(s, newest) for s in snapshots]
 
 
 def render_table(rows: list[dict[str, str]]) -> str:

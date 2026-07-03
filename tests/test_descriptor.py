@@ -6,7 +6,35 @@ from pathlib import Path
 
 from conftest import make_project
 
-from projects_orchestrator.descriptor import load_descriptor, parse_config
+from projects_orchestrator.descriptor import (
+    load_descriptor,
+    parse_config,
+    parse_scaffold_version,
+)
+
+
+def test_parse_scaffold_version_reads_dotted_integers() -> None:
+    assert parse_scaffold_version("0.5.2") == (0, 5, 2)
+
+
+def test_parse_scaffold_version_unknown_is_none() -> None:
+    assert parse_scaffold_version("unknown") is None
+
+
+def test_parse_scaffold_version_non_numeric_is_none() -> None:
+    assert parse_scaffold_version("1.2.beta") is None
+
+
+def test_parse_scaffold_version_two_components_is_none() -> None:
+    assert parse_scaffold_version("0.6") is None
+
+
+def test_parse_scaffold_version_bare_integer_is_none() -> None:
+    assert parse_scaffold_version("999") is None
+
+
+def test_parse_scaffold_version_orders_by_component() -> None:
+    assert parse_scaffold_version("0.6.0") > parse_scaffold_version("0.5.9")
 
 
 def test_load_descriptor_reads_name(fleet_dir: Path) -> None:
