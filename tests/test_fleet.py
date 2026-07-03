@@ -38,6 +38,8 @@ def test_snapshot_row_has_all_columns(fleet_dir: Path) -> None:
         "Hooks",
         "Lint",
         "Tests",
+        "CI",
+        "PRs",
         "Runnable",
         "Memory",
         "Checked",
@@ -100,6 +102,23 @@ def test_snapshot_row_hooks_without_hooks_dir_is_dash(fleet_dir: Path) -> None:
 def test_snapshot_row_unchecked_lint_is_question_mark(fleet_dir: Path) -> None:
     make_project(fleet_dir, "alpha")
     assert snapshot_row(_snapshot(fleet_dir))["Lint"] == "?"
+
+
+def test_snapshot_row_ci_unprobed_is_question_mark(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")
+    assert snapshot_row(_snapshot(fleet_dir))["CI"] == "?"
+
+
+def test_snapshot_row_ci_uses_cached_conclusion(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")
+    cached = {"ci": CheckResult(project="alpha", task="ci", status="pass")}
+    assert snapshot_row(_snapshot(fleet_dir, cached))["CI"] == "pass"
+
+
+def test_snapshot_row_prs_uses_cached_count(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")
+    cached = {"prs": CheckResult(project="alpha", task="prs", status="ok", detail="4")}
+    assert snapshot_row(_snapshot(fleet_dir, cached))["PRs"] == "4"
 
 
 def test_snapshot_row_uses_cached_check_status(fleet_dir: Path) -> None:

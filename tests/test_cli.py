@@ -141,6 +141,17 @@ def test_audit_markdown_renders_heading(fleet_dir: Path, capsys) -> None:
     assert "## alpha" in capsys.readouterr().out
 
 
+def test_ci_offline_exits_zero(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")
+    assert main(["ci", "--root", str(fleet_dir)]) == 0
+
+
+def test_ci_json_reports_status(fleet_dir: Path, capsys) -> None:
+    make_project(fleet_dir, "alpha")
+    main(["ci", "--root", str(fleet_dir), "--json"])
+    assert json.loads(capsys.readouterr().out)[0]["ci"] == "unknown"
+
+
 def test_snapshot_json_has_descriptor(fleet_dir: Path, capsys) -> None:
     make_project(fleet_dir, "alpha")
     main(["snapshot", "--root", str(fleet_dir), "--json"])

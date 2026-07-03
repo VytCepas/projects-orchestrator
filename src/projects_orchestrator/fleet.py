@@ -32,6 +32,8 @@ COLUMNS = (
     "Hooks",
     "Lint",
     "Tests",
+    "CI",
+    "PRs",
     "Runnable",
     "Memory",
     "Checked",
@@ -170,6 +172,20 @@ def _contract_cell(snapshot: ProjectSnapshot) -> str:
     return f"v{version}" if version > 0 else "none"
 
 
+def _ci_cell(snapshot: ProjectSnapshot) -> str:
+    """Render the last-known CI conclusion (``?`` when never probed)."""
+    result = snapshot.checks.get("ci")
+    return result.status if result is not None else "?"
+
+
+def _prs_cell(snapshot: ProjectSnapshot) -> str:
+    """Render the last-known open-PR count (``?`` when unknown/never probed)."""
+    result = snapshot.checks.get("prs")
+    if result is None or result.status == "unknown":
+        return "?"
+    return result.detail or "0"
+
+
 def _check_cell(snapshot: ProjectSnapshot, task: str) -> str:
     """Render one task's last-known result (``?`` when never checked)."""
     result = snapshot.checks.get(task)
@@ -213,6 +229,8 @@ def snapshot_row(
         "Hooks": snapshot.hooks,
         "Lint": _check_cell(snapshot, "lint"),
         "Tests": _check_cell(snapshot, "test"),
+        "CI": _ci_cell(snapshot),
+        "PRs": _prs_cell(snapshot),
         "Runnable": "yes" if snapshot.descriptor.has_task("run") else "-",
         "Memory": f"{memory_files} fact{'s' if memory_files != 1 else ''}",
         "Checked": _checked_cell(snapshot),

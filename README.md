@@ -17,6 +17,7 @@ projects-orchestrator memory <query>      # search every project's memory files
 projects-orchestrator drift [project]     # scaffold drift vs the recorded manifest
 projects-orchestrator doctor [project]    # diagnose contract-v1 conformance
 projects-orchestrator audit [project]     # one governance report (--markdown for a digest)
+projects-orchestrator ci [project]        # latest CI conclusion + open-PR count via gh
 projects-orchestrator snapshot --json     # full machine-readable fleet state
 projects-orchestrator controller          # deterministic command REPL
 projects-orchestrator tui                 # terminal UI (needs the tui extra)
@@ -31,7 +32,9 @@ with scaffold-drift divergence, a memory-schema lint, and check freshness
 (`--markdown` renders a digest for a scheduled run). The status table tracks per project:
 health · branch · sync · scaffold version · scaffold freshness (vs the
 newest in the fleet) · descriptor-contract version · drift · git-hook
-install state · lint · tests · memory facts · check freshness.
+install state · lint · tests · CI conclusion · open PRs · memory facts ·
+check freshness. The CI/PRs columns show the last-known result cached by
+`ci` (they read the cache offline — only `ci` itself calls `gh`).
 
 The contract surfaces the orchestrator reads from each project-init child are
 pinned in [`docs/reference/descriptor-contract-v1.md`](docs/reference/descriptor-contract-v1.md).
