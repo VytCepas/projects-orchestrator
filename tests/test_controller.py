@@ -25,6 +25,8 @@ from projects_orchestrator.registry import FleetConfig
         ("drift", "drift"),
         ("doctor", "doctor"),
         ("doctor alpha", "doctor"),
+        ("audit", "audit"),
+        ("audit alpha", "audit"),
         ("projects", "projects"),
         ("refresh", "refresh"),
         ("quit", "quit"),
@@ -138,6 +140,12 @@ def test_dispatch_drift_reports_per_project(fleet_dir: Path) -> None:
 def test_dispatch_doctor_reports_project_status(fleet_dir: Path) -> None:
     make_project(fleet_dir, "alpha")
     lines = list(dispatch(parse_command("doctor"), _ctx(fleet_dir)))
+    assert lines[0] == "alpha: warn"
+
+
+def test_dispatch_audit_reports_project_status(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")
+    lines = list(dispatch(parse_command("audit"), _ctx(fleet_dir)))
     assert lines[0] == "alpha: warn"
 
 

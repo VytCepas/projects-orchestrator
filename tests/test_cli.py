@@ -123,6 +123,24 @@ def test_doctor_json_reports_findings(fleet_dir: Path, capsys) -> None:
     assert json.loads(capsys.readouterr().out)[0]["findings"][0]["check"] == "config"
 
 
+def test_audit_warn_exits_one(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")
+    assert main(["audit", "--root", str(fleet_dir)]) == 1
+
+
+def test_audit_json_reports_findings(fleet_dir: Path, capsys) -> None:
+    make_project(fleet_dir, "alpha")
+    main(["audit", "--root", str(fleet_dir), "--json"])
+    categories = {f["category"] for f in json.loads(capsys.readouterr().out)[0]["findings"]}
+    assert "freshness" in categories
+
+
+def test_audit_markdown_renders_heading(fleet_dir: Path, capsys) -> None:
+    make_project(fleet_dir, "alpha")
+    main(["audit", "--root", str(fleet_dir), "--markdown"])
+    assert "## alpha" in capsys.readouterr().out
+
+
 def test_snapshot_json_has_descriptor(fleet_dir: Path, capsys) -> None:
     make_project(fleet_dir, "alpha")
     main(["snapshot", "--root", str(fleet_dir), "--json"])
