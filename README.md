@@ -18,6 +18,8 @@ projects-orchestrator drift [project]     # scaffold drift vs the recorded manif
 projects-orchestrator doctor [project]    # diagnose contract-v1 conformance
 projects-orchestrator audit [project]     # one governance report (--markdown for a digest)
 projects-orchestrator ci [project]        # latest CI conclusion + open-PR count via gh
+projects-orchestrator cloud-status [project]  # deploy/runtime status (contract-v2 deploy block)
+projects-orchestrator events [project]    # guard/usage events from observability logs (--since ISO)
 projects-orchestrator upgrade-plan        # scaffold version vs upstream (--apply to trigger upgrades)
 projects-orchestrator snapshot --json     # full machine-readable fleet state
 projects-orchestrator controller          # deterministic command REPL
@@ -34,12 +36,22 @@ with scaffold-drift divergence, a memory-schema lint, and check freshness
 (`--markdown` renders a digest for a scheduled run). The status table tracks per project:
 health · branch · sync · scaffold version · scaffold freshness (vs the
 newest in the fleet) · descriptor-contract version · drift · git-hook
-install state · lint · tests · CI conclusion · open PRs · memory facts ·
-check freshness. The CI/PRs columns show the last-known result cached by
-`ci` (they read the cache offline — only `ci` itself calls `gh`).
+install state · lint · tests · CI conclusion · open PRs · cloud state ·
+memory facts · check freshness. The CI/PRs/Cloud columns show the last-known
+result cached by `ci`/`cloud-status` (they read the cache offline — only
+those commands make network calls).
 
 The contract surfaces the orchestrator reads from each project-init child are
-pinned in [`docs/reference/descriptor-contract-v1.md`](docs/reference/descriptor-contract-v1.md).
+pinned in [`docs/reference/descriptor-contract-v1.md`](docs/reference/descriptor-contract-v1.md);
+the additive v2 surfaces (deploy block, observability path, expected hooks) are
+specified in [`docs/reference/descriptor-contract-v2-proposal.md`](docs/reference/descriptor-contract-v2-proposal.md).
+
+In the TUI, selecting a row opens the per-project Detail tab (descriptor,
+last-known checks, recent commits, memory) with `l`/`t` running that
+project's lint/test gates. The controller's `/ask <question>` mode is
+optional and off by default: set `ORCHESTRATOR_ASK_MODEL` (a Claude model
+id) and `ANTHROPIC_API_KEY` to let a model *select among the existing
+commands* — the deterministic dispatcher still executes them.
 
 ### Which projects?
 

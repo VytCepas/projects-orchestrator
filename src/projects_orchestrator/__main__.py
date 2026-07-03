@@ -16,6 +16,8 @@ from dataclasses import asdict
 from pathlib import Path
 
 from projects_orchestrator import __version__, cache
+from projects_orchestrator.adapters.cloud import as_check_results as cloud_check_results
+from projects_orchestrator.adapters.cloud import collect_cloud
 from projects_orchestrator.adapters.github import as_check_results, collect_github
 from projects_orchestrator.adapters.project_init import latest_upstream_version, trigger_upgrade
 from projects_orchestrator.audit import audit_project, render_markdown
@@ -25,6 +27,7 @@ from projects_orchestrator.doctor import diagnose
 from projects_orchestrator.drift import compute_drift
 from projects_orchestrator.fleet import fleet_rows, fleet_snapshots, render_table
 from projects_orchestrator.memory import load_project_memory, search_memory
+from projects_orchestrator.observability import filter_since, load_events
 from projects_orchestrator.registry import (
     Fleet,
     FleetConfig,
@@ -220,6 +223,70 @@ def _cmd_ci(args: argparse.Namespace) -> int:
     return 1 if any(s.ci == "fail" for s in statuses) else 0
 
 
+def _cmd_cloud_status(args: argparse.Namespace) -> int:
+    """Probe deploy/runtime status per project (descriptor-driven); cache it.
+
+    Exits 1 when any probed service is stopped or unhealthy. ``deploy: none``
+    projects cost nothing (no subprocess, no network).
+    """
+    fleet = _discover(args)
+    selected = list(fleet.descriptors)
+    if args.project:
+        descriptor = fleet.get(args.project)
+        if descriptor is None:
+            print(f"unknown project: {args.project}", file=sys.stderr)
+            return 2
+        selected = [descriptor]
+    checked_at = _dt.datetime.now(tz=_dt.UTC).isoformat(timespec="seconds")
+    statuses = [collect_cloud(d) for d in selected]
+    cache.save_results([r for s in statuses for r in cloud_check_results(s, checked_at)])
+    if args.json:
+        return _emit_json([asdict(s) for s in statuses])
+    for status in statuses:
+        parts = [status.state]
+        if status.revision:
+            parts.append(status.revision)
+        if status.health:
+            parts.append(status.health)
+        print(f"{status.project}: {status.target} — {' '.join(parts)}")
+    return 1 if any(s.health == "unhealthy" or s.state == "stopped" for s in statuses) else 0
+
+
+def _cmd_events(args: argparse.Namespace) -> int:
+    """Show guard/usage events across the fleet's observability logs."""
+    fleet = _discover(args)
+    selected = list(fleet.descriptors)
+    if args.project:
+        descriptor = fleet.get(args.project)
+        if descriptor is None:
+            print(f"unknown project: {args.project}", file=sys.stderr)
+            return 2
+        selected = [descriptor]
+    reports = [load_events(d) for d in selected]
+    since = args.since or ""
+    if args.json:
+        payload = [
+            {
+                "project": r.project,
+                "events": [asdict(e) for e in filter_since(r.events, since)],
+                "warnings": list(r.warnings),
+            }
+            for r in reports
+        ]
+        return _emit_json(payload)
+    empty = True
+    for report in reports:
+        for warning in report.warnings:
+            print(f"warning: {report.project}: {warning}", file=sys.stderr)
+        for event in filter_since(report.events, since):
+            empty = False
+            command = f" — {event.command}" if event.command else ""
+            print(f"{event.project} {event.timestamp} [{event.hook}] {event.action}{command}")
+    if empty:
+        print("no events recorded")
+    return 0
+
+
 def _cmd_upgrade_plan(args: argparse.Namespace) -> int:
     """Compare each project's scaffold version against upstream project-init.
 
@@ -331,6 +398,13 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
         ("ci", "latest CI conclusion + open-PR count per project (via gh)", _cmd_ci, True),
         (
+            "cloud-status",
+            "deploy/runtime status per project (descriptor deploy block)",
+            _cmd_cloud_status,
+            True,
+        ),
+        ("events", "guard/usage events from the fleet's observability logs", _cmd_events, True),
+        (
             "upgrade-plan",
             "scaffold version vs upstream project-init (--apply triggers upgrades)",
             _cmd_upgrade_plan,
@@ -354,6 +428,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--markdown", action="store_true", help="render the report as Markdown"
     )
     sub.choices["ci"].add_argument("project", nargs="?", help="limit to one project")
+    sub.choices["cloud-status"].add_argument("project", nargs="?", help="limit to one project")
+    sub.choices["events"].add_argument("project", nargs="?", help="limit to one project")
+    sub.choices["events"].add_argument(
+        "--since", help="only events at/after this ISO-8601 instant"
+    )
     sub.choices["upgrade-plan"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["upgrade-plan"].add_argument(
         "--apply", action="store_true", help="dispatch the upgrade workflow for outdated projects"

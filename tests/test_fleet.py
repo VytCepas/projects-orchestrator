@@ -12,11 +12,13 @@ from projects_orchestrator.descriptor import load_descriptor
 from projects_orchestrator.fleet import (
     collect_snapshot,
     fleet_rows,
+    fleet_snapshots,
     humanize_age,
     newest_scaffold_version,
     render_table,
     snapshot_row,
 )
+from projects_orchestrator.registry import FleetConfig, discover
 
 
 def _snapshot(fleet_dir: Path, cached: dict | None = None, name: str = "alpha"):
@@ -40,6 +42,7 @@ def test_snapshot_row_has_all_columns(fleet_dir: Path) -> None:
         "Tests",
         "CI",
         "PRs",
+        "Cloud",
         "Runnable",
         "Memory",
         "Checked",
@@ -173,3 +176,10 @@ def test_humanize_age_garbage_is_never() -> None:
 def test_humanize_age_naive_timestamp_does_not_crash() -> None:
     now = dt.datetime(2026, 7, 2, 12, 5, tzinfo=dt.UTC)
     assert humanize_age("2026-07-02T12:00:00", now=now) == "5m"
+
+
+def test_cloud_column_defaults_to_question_mark(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")
+    fleet = discover(FleetConfig(roots=(fleet_dir,)))
+    rows = fleet_rows(fleet_snapshots(fleet, fleet_dir / "no-cache.json"))
+    assert rows[0]["Cloud"] == "?"

@@ -36,6 +36,9 @@ from projects_orchestrator.registry import FleetConfig
         ("quit", "quit"),
         ("exit", "quit"),
         ("/ask what is broken", "ask"),
+        ("cloud", "cloud"),
+        ("events alpha", "events"),
+        ("detail alpha", "detail"),
         ("frobnicate", "unknown"),
     ],
 )
@@ -175,3 +178,27 @@ def test_dispatch_unknown_points_to_help(fleet_dir: Path) -> None:
     make_project(fleet_dir, "alpha")
     lines = list(dispatch(parse_command("frobnicate"), _ctx(fleet_dir)))
     assert "try: help" in lines[0]
+
+
+def test_dispatch_cloud_reports_per_project(fleet_dir: Path, tmp_path: Path) -> None:
+    make_project(fleet_dir, "alpha")
+    lines = list(dispatch(parse_command("cloud"), _ctx(fleet_dir, tmp_path / "checks.json")))
+    assert lines[0] == "alpha: none — none"
+
+
+def test_dispatch_events_empty_fleet_says_none(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")
+    lines = list(dispatch(parse_command("events"), _ctx(fleet_dir)))
+    assert lines == ["no events recorded"]
+
+
+def test_dispatch_detail_requires_project(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")
+    lines = list(dispatch(parse_command("detail"), _ctx(fleet_dir)))
+    assert lines == ["usage: detail <project>"]
+
+
+def test_dispatch_detail_renders_project_heading(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")
+    lines = list(dispatch(parse_command("detail alpha"), _ctx(fleet_dir)))
+    assert lines[0] == "# alpha"

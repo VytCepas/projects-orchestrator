@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from conftest import make_project
+from conftest import make_project, make_project_v2
 
 from projects_orchestrator.descriptor import (
     load_descriptor,
@@ -89,3 +89,52 @@ def test_parse_config_tolerates_non_string_tooling_key(tmp_path: Path) -> None:
     # PyYAML coerces a bare `on:` key to the bool True; must not crash.
     descriptor = parse_config('tooling:\n  on: echo hi\n  lint_command: "ruff check"\n', tmp_path)
     assert descriptor.has_task("lint") is True
+
+
+def test_v2_config_parses_deploy_block(fleet_dir: Path) -> None:
+    descriptor = load_descriptor(make_project_v2(fleet_dir, "alpha", deploy_target="fly"))
+    assert descriptor.deploy.target == "fly"
+
+
+def test_v2_config_parses_health_url(fleet_dir: Path) -> None:
+    project = make_project_v2(fleet_dir, "alpha", health_url="https://x.example/health")
+    assert load_descriptor(project).deploy.health_url == "https://x.example/health"
+
+
+def test_v2_config_resolves_observability_path(fleet_dir: Path) -> None:
+    project = make_project_v2(fleet_dir, "alpha", observability_path="logs/agent")
+    assert load_descriptor(project).observability_path == project.resolve() / "logs/agent"
+
+
+def test_v2_config_parses_hooks_expected(fleet_dir: Path) -> None:
+    descriptor = load_descriptor(make_project_v2(fleet_dir, "alpha"))
+    assert descriptor.hooks_expected == ("pre-commit", "commit-msg")
+
+
+def test_v1_config_ignores_v2_fields(tmp_path: Path) -> None:
+    text = (
+        "project:\n  name: alpha\n  project_init_contract_version: 1\n"
+        "deploy:\n  target: fly\n"
+    )
+    assert parse_config(text, tmp_path).deploy is None
+
+
+def test_v1_config_has_no_hooks_expected(tmp_path: Path) -> None:
+    text = (
+        "project:\n  name: alpha\n  project_init_contract_version: 1\n"
+        "hooks:\n  expected: [pre-commit]\n"
+    )
+    assert parse_config(text, tmp_path).hooks_expected == ()
+
+
+def test_v2_config_without_deploy_block_is_none(tmp_path: Path) -> None:
+    text = "project:\n  name: alpha\n  project_init_contract_version: 2\n"
+    assert parse_config(text, tmp_path).deploy is None
+
+
+def test_v2_deploy_defaults_to_none_target(tmp_path: Path) -> None:
+    text = (
+        "project:\n  name: alpha\n  project_init_contract_version: 2\n"
+        "deploy:\n  app: svc\n"
+    )
+    assert parse_config(text, tmp_path).deploy.target == "none"

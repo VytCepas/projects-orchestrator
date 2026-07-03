@@ -176,3 +176,59 @@ def test_fleet_file_drives_discovery(fleet_dir: Path, tmp_path: Path, capsys) ->
     fleet_file.write_text(f'roots: ["{fleet_dir}"]\n', encoding="utf-8")
     main(["projects", "--fleet", str(fleet_file)])
     assert "alpha" in capsys.readouterr().out
+
+
+def test_events_no_logs_reports_none(fleet_dir: Path, capsys) -> None:
+    make_project(fleet_dir, "alpha")
+    assert main(["events", "--root", str(fleet_dir)]) == 0
+    assert "no events recorded" in capsys.readouterr().out
+
+
+def test_events_reads_usage_log(fleet_dir: Path, capsys) -> None:
+    project = make_project(fleet_dir, "alpha")
+    log_dir = project / ".claude" / "observability"
+    log_dir.mkdir(parents=True)
+    (log_dir / "usage.jsonl").write_text(
+        '{"ts": "2026-07-01T10:00:00+00:00", "hook": "prod_guard", "action": "block"}\n',
+        encoding="utf-8",
+    )
+    main(["events", "--root", str(fleet_dir)])
+    assert "[prod_guard] block" in capsys.readouterr().out
+
+
+def test_events_since_filters(fleet_dir: Path, capsys) -> None:
+    project = make_project(fleet_dir, "alpha")
+    log_dir = project / ".claude" / "observability"
+    log_dir.mkdir(parents=True)
+    (log_dir / "usage.jsonl").write_text(
+        '{"ts": "2026-07-01T10:00:00+00:00", "hook": "prod_guard", "action": "block"}\n',
+        encoding="utf-8",
+    )
+    main(["events", "--root", str(fleet_dir), "--since", "2026-07-02T00:00:00+00:00"])
+    assert "no events recorded" in capsys.readouterr().out
+
+
+def test_events_json_is_parseable(fleet_dir: Path, capsys) -> None:
+    make_project(fleet_dir, "alpha")
+    main(["events", "--root", str(fleet_dir), "--json"])
+    assert json.loads(capsys.readouterr().out)[0]["project"] == "alpha"
+
+
+def test_cloud_status_no_deploy_exits_zero(fleet_dir: Path, capsys) -> None:
+    make_project(fleet_dir, "alpha")
+    assert main(["cloud-status", "--root", str(fleet_dir)]) == 0
+    assert "alpha: none — none" in capsys.readouterr().out
+
+
+def test_cloud_status_json_is_parseable(fleet_dir: Path, capsys) -> None:
+    make_project(fleet_dir, "alpha")
+    main(["cloud-status", "--root", str(fleet_dir), "--json"])
+    assert json.loads(capsys.readouterr().out)[0]["state"] == "none"
+
+
+def test_cloud_status_caches_for_status_table(fleet_dir: Path, capsys) -> None:
+    make_project(fleet_dir, "alpha")
+    main(["cloud-status", "--root", str(fleet_dir)])
+    capsys.readouterr()
+    main(["status", "--root", str(fleet_dir)])
+    assert "none" in capsys.readouterr().out
