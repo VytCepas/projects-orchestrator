@@ -25,6 +25,37 @@ tooling:
 {tooling}
 """
 
+CONFIG_TEMPLATE_V2 = """\
+project:
+  name: "{name}"
+  description: "test project"
+  project_init_version: 0.7.0
+  project_init_contract_version: 2
+
+language: python
+delivery: service
+
+memory:
+  tier: 0
+  memory_path: .claude/memory
+
+tooling:
+  lint_command: "true"
+  run_command: "true"
+
+deploy:
+  target: {deploy_target}
+  app: {name}-svc
+  region: fra
+  health_url: "{health_url}"
+
+observability:
+  path: {observability_path}
+
+hooks:
+  expected: [pre-commit, commit-msg]
+"""
+
 MEMORY_TEMPLATE = """\
 ---
 name: {name}
@@ -62,6 +93,37 @@ def make_project(
         config_text = CONFIG_TEMPLATE.format(name=name, tooling=lines or "  {}\n")
     (claude_dir / "config.yaml").write_text(config_text, encoding="utf-8")
     return project
+
+
+def make_project_v2(
+    base: Path,
+    name: str,
+    deploy_target: str = "none",
+    health_url: str = "",
+    observability_path: str = ".claude/observability",
+) -> Path:
+    """Create a contract-v2 project directory (deploy/observability/hooks).
+
+    Args:
+        base: Parent directory to create the project under.
+        name: Project (directory) name.
+        deploy_target: Value for the ``deploy.target`` field.
+        health_url: Value for the ``deploy.health_url`` field.
+        observability_path: Value for the ``observability.path`` field.
+
+    Returns:
+        The project root path.
+    """
+    return make_project(
+        base,
+        name,
+        config_text=CONFIG_TEMPLATE_V2.format(
+            name=name,
+            deploy_target=deploy_target,
+            health_url=health_url,
+            observability_path=observability_path,
+        ),
+    )
 
 
 def add_memory(project: Path, filename: str, **fields: str) -> Path:

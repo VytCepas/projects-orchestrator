@@ -11,20 +11,24 @@ deterministic.
 from __future__ import annotations
 
 import datetime as _dt
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from projects_orchestrator import cache
+from projects_orchestrator.adapters.cloud import as_check_results as cloud_check_results
+from projects_orchestrator.adapters.cloud import collect_cloud
 from projects_orchestrator.adapters.github import as_check_results, collect_github
 from projects_orchestrator.adapters.project_init import latest_upstream_version
 from projects_orchestrator.audit import audit_project
 from projects_orchestrator.checks import run_check
 from projects_orchestrator.descriptor import ProjectDescriptor
+from projects_orchestrator.detail import build_detail, render_detail
 from projects_orchestrator.doctor import diagnose
 from projects_orchestrator.drift import compute_drift
 from projects_orchestrator.fleet import fleet_rows, fleet_snapshots, render_table
 from projects_orchestrator.memory import load_project_memory, search_memory
+from projects_orchestrator.observability import filter_since, load_events
 from projects_orchestrator.registry import Fleet, FleetConfig, discover
 from projects_orchestrator.status import collect_status
 from projects_orchestrator.upgrade import upgrade_plan
@@ -41,17 +45,20 @@ commands:
   doctor [project|all]    diagnose contract-v1 conformance
   audit [project|all]     governance report (conformance+drift+memory+freshness)
   ci [project|all]        latest CI conclusion + open-PR count (via gh)
+  cloud [project|all]     deploy/runtime status (descriptor deploy block)
+  events [project|all]    recent guard/usage events from observability logs
+  detail <project>        per-project drill-in (descriptor+checks+commits+memory)
   upgrade [project|all]   scaffold version vs upstream project-init
   projects                list discovered projects
   refresh                 re-discover the fleet
   help                    this text
   quit                    leave the controller
-  /ask <question>         natural-language mode (not enabled)"""
+  /ask <question>         natural-language mode (opt-in via ORCHESTRATOR_ASK_MODEL)"""
 
 _TASK_VERBS = {"lint": ("lint",), "test": ("test",), "checks": ("lint", "test")}
 
 # Verbs that take an optional project target (default "all").
-_TARGET_VERBS = {"drift", "doctor", "audit", "ci", "upgrade"}
+_TARGET_VERBS = {"drift", "doctor", "audit", "ci", "upgrade", "cloud", "events", "detail"}
 
 
 @dataclass(frozen=True)
@@ -117,11 +124,14 @@ class ControllerContext:
         config: Fleet discovery configuration.
         fleet: The currently discovered fleet.
         cache_file: Checks-cache override (None = default location).
+        ask_complete: Completer override for /ask (None = the real API);
+            tests inject a fake so no live call is ever made.
     """
 
     config: FleetConfig
     fleet: Fleet = field(init=False)
     cache_file: Path | None = None
+    ask_complete: Callable[[str, str], str] | None = None
 
     def __post_init__(self) -> None:
         """Discover the fleet immediately so every command has one."""
@@ -244,6 +254,76 @@ def _dispatch_ci(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
     cache.save_results(results, ctx.cache_file)
 
 
+def _dispatch_cloud(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
+    """Probe deploy/runtime status per project (descriptor-driven); cache it."""
+    selected = _select_projects(ctx, intent.target)
+    if isinstance(selected, str):
+        yield selected
+        return
+    checked_at = _dt.datetime.now(tz=_dt.UTC).isoformat(timespec="seconds")
+    results = []
+    for descriptor in selected:
+        status = collect_cloud(descriptor)
+        results.extend(cloud_check_results(status, checked_at))
+        parts = [status.state]
+        if status.revision:
+            parts.append(status.revision)
+        if status.health:
+            parts.append(status.health)
+        yield f"{status.project}: {status.target} — {' '.join(parts)}"
+    cache.save_results(results, ctx.cache_file)
+
+
+def _dispatch_events(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
+    """Show recent guard/usage events per project."""
+    selected = _select_projects(ctx, intent.target)
+    if isinstance(selected, str):
+        yield selected
+        return
+    since = intent.args[0] if intent.args else ""
+    empty = True
+    for descriptor in selected:
+        project_events = load_events(descriptor)
+        for event in filter_since(project_events.events, since):
+            empty = False
+            command = f" — {event.command}" if event.command else ""
+            yield f"{event.project} {event.timestamp} [{event.hook}] {event.action}{command}"
+    if empty:
+        yield "no events recorded"
+
+
+def _dispatch_detail(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
+    """Render the per-project drill-in."""
+    if intent.target is None or intent.target == "all":
+        yield "usage: detail <project>"
+        return
+    selected = _select_projects(ctx, intent.target)
+    if isinstance(selected, str):
+        yield selected
+        return
+    cached = cache.load_results(ctx.cache_file)
+    yield from render_detail(build_detail(selected[0], cached.get(selected[0].name)))
+
+
+def _dispatch_ask(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
+    """Resolve /ask to an existing intent (opt-in), then dispatch it."""
+    import os
+
+    from projects_orchestrator.ask import resolve_ask
+
+    resolved = resolve_ask(
+        intent.args[0] if intent.args else "",
+        ctx.fleet.names,
+        os.environ,
+        complete=ctx.ask_complete,
+    )
+    if isinstance(resolved, str):
+        yield resolved
+        return
+    yield f"→ {resolved.verb}" + (f" {resolved.target}" if resolved.target else "")
+    yield from dispatch(resolved, ctx)
+
+
 def _dispatch_upgrade(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
     """Report each project's scaffold version vs upstream project-init."""
     selected = _select_projects(ctx, intent.target)
@@ -266,12 +346,15 @@ _ENGINE = {
     "doctor": _dispatch_doctor,
     "audit": _dispatch_audit,
     "ci": _dispatch_ci,
+    "cloud": _dispatch_cloud,
+    "events": _dispatch_events,
+    "detail": _dispatch_detail,
+    "ask": _dispatch_ask,
     "upgrade": _dispatch_upgrade,
 }
 
 # Constant replies that need neither fleet state nor arguments.
 _STATIC_REPLIES = {
-    "ask": ("natural-language mode is not enabled — this controller is deterministic",),
     "help": tuple(HELP_TEXT.splitlines()),
 }
 

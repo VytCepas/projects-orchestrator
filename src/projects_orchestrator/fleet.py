@@ -34,6 +34,7 @@ COLUMNS = (
     "Tests",
     "CI",
     "PRs",
+    "Cloud",
     "Runnable",
     "Memory",
     "Checked",
@@ -186,6 +187,12 @@ def _prs_cell(snapshot: ProjectSnapshot) -> str:
     return result.detail or "0"
 
 
+def _cloud_cell(snapshot: ProjectSnapshot) -> str:
+    """Render the last-known cloud state (``?`` when never probed)."""
+    result = snapshot.checks.get("cloud")
+    return result.status if result is not None else "?"
+
+
 def _check_cell(snapshot: ProjectSnapshot, task: str) -> str:
     """Render one task's last-known result (``?`` when never checked)."""
     result = snapshot.checks.get(task)
@@ -231,6 +238,7 @@ def snapshot_row(
         "Tests": _check_cell(snapshot, "test"),
         "CI": _ci_cell(snapshot),
         "PRs": _prs_cell(snapshot),
+        "Cloud": _cloud_cell(snapshot),
         "Runnable": "yes" if snapshot.descriptor.has_task("run") else "-",
         "Memory": f"{memory_files} fact{'s' if memory_files != 1 else ''}",
         "Checked": _checked_cell(snapshot),

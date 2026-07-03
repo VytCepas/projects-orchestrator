@@ -118,14 +118,18 @@ def hook_health(descriptor: ProjectDescriptor) -> str:
         descriptor: The project to inspect.
 
     Returns:
-        ``ok`` (all hooks from ``.github/hooks/`` present in ``.git/hooks/``),
-        ``partial``, ``missing``, or ``-`` when the project ships no hooks.
+        ``ok`` (all shipped hooks present in ``.git/hooks/``), ``partial``,
+        ``missing``, or ``-`` when the project ships no hooks. The shipped
+        set comes from the contract-v2 ``hooks.expected`` list when declared,
+        else from globbing ``.github/hooks/``.
     """
-    source_dir = descriptor.path / HOOKS_SOURCE_DIR
-    try:
-        declared = sorted(p.name for p in source_dir.iterdir() if p.is_file())
-    except OSError:
-        declared = []
+    declared = list(descriptor.hooks_expected)
+    if not declared:
+        source_dir = descriptor.path / HOOKS_SOURCE_DIR
+        try:
+            declared = sorted(p.name for p in source_dir.iterdir() if p.is_file())
+        except OSError:
+            declared = []
     if not declared:
         return "-"
     installed_dir = descriptor.path / ".git" / "hooks"

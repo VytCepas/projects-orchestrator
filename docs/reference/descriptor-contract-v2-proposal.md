@@ -1,0 +1,87 @@
+# Descriptor contract v2 — proposal
+
+Status: **proposed** — the field list below is what this orchestrator needs
+from [project-init](https://github.com/VytCepas/project-init) beyond
+[contract v1](descriptor-contract-v1.md). The contract itself is owned
+upstream; this page tracks the proposal and documents exactly what the
+orchestrator already parses when a child declares
+`project.project_init_contract_version: 2`. File the upstream issue against
+project-init and record its link here once opened.
+
+## Invariants (unchanged from v1)
+
+- **Additive only.** Every v1 surface keeps its meaning; a v1 reader that
+  ignores the new blocks keeps working. The orchestrator likewise ignores the
+  v2 blocks on configs declaring contract version `< 2` — exactly as a v1
+  reader would.
+- **Machine-generated.** The scaffold renders these fields; humans edit them
+  through project-init, not by hand.
+- **Hash-covered.** `.claude/config.yaml` stays covered by
+  `scaffold.manifest`, so drift detection sees contract edits.
+- **Read-only.** The orchestrator never writes any of this (ADR-003).
+
+## New surfaces
+
+### `tooling.run_command`
+
+Already representable in v1 (any `<task>_command` is read); v2 makes it a
+*named, expected* field so the `Runnable` column and the controller `run`
+verb rest on contract rather than convention.
+
+### `deploy:` — runtime identity for `delivery: service` projects
+
+```yaml
+deploy:
+  target: fly          # none | cloud-run | fly | k8s | …
+  app: my-service      # app/service name at the target
+  region: fra          # when the platform needs one
+  health_url: https://my-service.example/healthz
+```
+
+Consumed by `adapters/cloud.py` (`cloud-status` command, `Cloud` column):
+
+| Key | Type | Consumed as | Missing → |
+|---|---|---|---|
+| `deploy.target` | string | which platform CLI probes run (`flyctl`, `gcloud`) | `none` (no probe, zero cost) |
+| `deploy.app` | string | app name interpolated into the probe command | empty |
+| `deploy.region` | string | region interpolated into the probe command | empty |
+| `deploy.health_url` | string (http/https) | bounded stdlib GET → `healthy`/`unhealthy`/`unknown` | no health probe |
+
+`deploy: none` — or omitting the block — stays valid and free: the adapter
+short-circuits with no subprocess and no network call. All probes are
+read-only; mutations stay in review-gated CI (ADR-012).
+
+### `observability.path` — where guard/usage logs live
+
+```yaml
+observability:
+  path: .claude/observability
+```
+
+Consumed by `observability.py` (`events` command). Today the location is an
+undocumented convention; v2 names it so fleet ingestion doesn't guess. When
+undeclared (or at v1) the orchestrator falls back to
+`.claude/observability/`. The log itself stays `usage.jsonl`, one JSON object
+per line; the reader tolerates `ts`/`timestamp` and `action`/`decision`
+aliases and skips (and counts) malformed lines.
+
+### `hooks.expected` — the git hooks the scaffold ships
+
+```yaml
+hooks:
+  expected: [pre-commit, commit-msg, pre-push]
+```
+
+Consumed by `drift.hook_health` (the `Hooks` column and `doctor`). With the
+list declared, hook health checks the *contract* — are these exact hooks
+installed in `.git/hooks/`? — instead of globbing `.github/hooks/`, which
+conflates "what the scaffold ships" with "what happens to be in the tree".
+Undeclared (or v1) keeps the globbing fallback.
+
+## Orchestrator implementation state
+
+`descriptor.py` parses all of the above behind `contract_version >= 2`
+(`DeployConfig`, `observability_path`, `hooks_expected`), with synthetic-v2
+config tests in `tests/test_descriptor.py`. v0/v1 children are unaffected —
+the fields stay at their empty defaults and every consumer falls back to the
+v1 behavior.

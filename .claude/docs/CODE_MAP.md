@@ -15,6 +15,58 @@ CLI entry point for `projects-orchestrator`.
 
 - `def main` — Run the projects-orchestrator CLI.
 
+### `projects_orchestrator/adapters/__init__.py`
+
+Adapters that read cross-repo state (GitHub, cloud) for the fleet.
+
+
+### `projects_orchestrator/adapters/cloud.py`
+
+Per-project deploy/runtime status, driven by the contract-v2 deploy block.
+
+- `class CloudStatus` — One project's deploy/runtime state.
+- `def parse_fly_status` — Map ``flyctl status --json`` output to (state, revision) (pure).
+- `def parse_cloud_run_status` — Map ``gcloud run services describe`` output to (state, revision) (pure).
+- `def probe_health` — HTTP GET a health URL; never raises.
+- `def collect_cloud` — Probe one project's deploy state and health; never raises.
+- `def as_check_results` — Adapt a :class:`CloudStatus` into one cacheable ``cloud`` check result.
+
+### `projects_orchestrator/adapters/github.py`
+
+Per-project GitHub state via ``gh`` — latest CI conclusion and open-PR count.
+
+- `class GithubStatus` — One project's GitHub state.
+- `def parse_ci_conclusion` — Map ``gh run list --json status,conclusion`` output to a CI state (pure).
+- `def parse_pr_count` — Count open PRs from ``gh pr list --json number`` output (pure).
+- `def collect_github` — Probe one project's CI conclusion and open-PR count; never raises.
+- `def as_check_results` — Adapt a :class:`GithubStatus` into cacheable check results.
+
+### `projects_orchestrator/adapters/project_init.py`
+
+Upstream project-init state via ``gh`` — latest release, upgrade dispatch.
+
+- `def parse_release_tag` — Parse ``gh release view --json tagName`` output to a version tuple (pure).
+- `def latest_upstream_version` — Fetch the newest upstream project-init release; never raises.
+- `def trigger_upgrade` — Dispatch a child's ``project-init-upgrade.yml`` workflow; never raises.
+
+### `projects_orchestrator/ask.py`
+
+Optional LLM ``/ask`` mode — English in, an existing intent out.
+
+- `def ask_enabled` — Return whether the operator has opted into /ask.
+- `def build_prompt` — Render the intent-selection prompt (pure).
+- `def parse_intent_reply` — Extract a valid intent from the model's reply (pure).
+- `def resolve_ask` — Resolve a natural-language question to an intent, or an error line.
+
+### `projects_orchestrator/audit.py`
+
+Compose every passive governance probe into one fleet audit.
+
+- `class AuditFinding` — One governance finding for one project.
+- `class AuditReport` — All governance findings for one project.
+- `def audit_project` — Run every governance probe for one project (never raises).
+- `def render_markdown` — Render audit reports as a Markdown document for a scheduled run.
+
 ### `projects_orchestrator/cache.py`
 
 Persistent memory of the last known check results.
@@ -44,9 +96,28 @@ Deterministic command controller — the single control point.
 
 Read a child project's machine-readable self-description.
 
+- `class DeployConfig` — Contract-v2 ``deploy:`` block for ``delivery: service`` projects.
 - `class ProjectDescriptor` — Everything the orchestrator knows about a project without running it.
 - `def parse_config` — Build a descriptor from raw config text (pure; never raises).
+- `def parse_scaffold_version` — Parse a ``MAJOR.MINOR.PATCH`` scaffold version into a comparable tuple.
 - `def load_descriptor` — Load the descriptor for one project directory.
+
+### `projects_orchestrator/detail.py`
+
+Per-project drill-in: one project's depth without leaving the app.
+
+- `class ProjectDetail` — Everything worth showing about one project, ready to render.
+- `def recent_commits` — List a repo's most recent commit subjects; never raises.
+- `def build_detail` — Join one project's descriptor, checks, commits, and memory.
+- `def render_detail` — Flatten a detail payload into display lines (pure).
+
+### `projects_orchestrator/doctor.py`
+
+Diagnose each child's conformance to descriptor contract v1.
+
+- `class Finding` — One conformance check outcome for one project.
+- `class DoctorReport` — Every conformance finding for one project.
+- `def diagnose` — Run every contract-conformance check for one project (never raises).
 
 ### `projects_orchestrator/drift.py`
 
@@ -64,8 +135,9 @@ Aggregate everything the engine knows into one fleet view.
 - `def collect_snapshot` — Join all knowledge for one project; never raises.
 - `def fleet_snapshots` — Snapshot every project in the fleet, joining the checks cache.
 - `def humanize_age` — Render an ISO timestamp as a short age like ``5m`` or ``2d``.
+- `def newest_scaffold_version` — Return the newest comparable scaffold version across the fleet.
 - `def snapshot_row` — Build one table row from a snapshot (pure).
-- `def fleet_rows` — Build all table rows (pure).
+- `def fleet_rows` — Build all table rows (pure); resolves scaffold freshness fleet-wide.
 - `def render_table` — Render rows as a plain aligned text table (no dependencies).
 
 ### `projects_orchestrator/memory.py`
@@ -77,6 +149,17 @@ Read and search the fleet's memory — the "all-knowing" layer.
 - `class MemoryHit` — One search match.
 - `def load_project_memory` — Read one project's memory directory; never raises.
 - `def search_memory` — Search all loaded memories for a case-insensitive substring.
+
+### `projects_orchestrator/observability.py`
+
+Read guard/usage events across the fleet — the observability layer.
+
+- `class GuardEvent` — One normalized guard/usage event from one project.
+- `class ProjectEvents` — Everything one project's observability log recorded.
+- `def observability_dir` — Resolve a project's observability directory.
+- `def parse_event` — Normalize one JSONL line into a :class:`GuardEvent` (pure).
+- `def load_events` — Read one project's usage log; never raises.
+- `def filter_since` — Keep events at or after an ISO-8601 instant (pure).
 
 ### `projects_orchestrator/registry.py`
 
@@ -104,6 +187,15 @@ Per-project git health, degraded gracefully to ``unknown``.
 
 ### `projects_orchestrator/tui.py`
 
-Textual TUI: the fleet table and the command controller in one screen.
+Textual TUI: fleet table, per-project detail, and the command controller.
 
-- `class OrchestratorApp` — Fleet overview table + deterministic command controller.
+- `class OrchestratorApp` — Fleet overview table + per-project detail + deterministic controller.
+
+### `projects_orchestrator/upgrade.py`
+
+Fleet upgrade planning — who is behind upstream project-init, and act on it.
+
+- `class UpgradeRow` — One project's standing versus upstream project-init.
+- `def plan_status` — Classify a scaffold version against the latest upstream (pure).
+- `def build_row` — Build one upgrade-plan row for a project (never raises).
+- `def upgrade_plan` — Build the whole fleet's upgrade plan (pure over its inputs).
