@@ -152,6 +152,18 @@ def test_ci_json_reports_status(fleet_dir: Path, capsys) -> None:
     assert json.loads(capsys.readouterr().out)[0]["ci"] == "unknown"
 
 
+def test_upgrade_plan_offline_renders(fleet_dir: Path, capsys) -> None:
+    make_project(fleet_dir, "alpha")
+    main(["upgrade-plan", "--root", str(fleet_dir)])
+    assert "alpha: unknown" in capsys.readouterr().out
+
+
+def test_upgrade_plan_json_has_status(fleet_dir: Path, capsys) -> None:
+    make_project(fleet_dir, "alpha")
+    main(["upgrade-plan", "--root", str(fleet_dir), "--json"])
+    assert json.loads(capsys.readouterr().out)[0]["status"] == "unknown"
+
+
 def test_snapshot_json_has_descriptor(fleet_dir: Path, capsys) -> None:
     make_project(fleet_dir, "alpha")
     main(["snapshot", "--root", str(fleet_dir), "--json"])

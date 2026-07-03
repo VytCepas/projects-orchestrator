@@ -17,6 +17,7 @@ from pathlib import Path
 
 from projects_orchestrator import __version__, cache
 from projects_orchestrator.adapters.github import as_check_results, collect_github
+from projects_orchestrator.adapters.project_init import latest_upstream_version, trigger_upgrade
 from projects_orchestrator.audit import audit_project, render_markdown
 from projects_orchestrator.checks import DEFAULT_TASKS, run_check
 from projects_orchestrator.controller import ControllerContext, dispatch, parse_command
@@ -32,6 +33,7 @@ from projects_orchestrator.registry import (
     load_fleet_config,
 )
 from projects_orchestrator.status import collect_status
+from projects_orchestrator.upgrade import upgrade_plan
 
 
 def _fleet_config(args: argparse.Namespace) -> FleetConfig:
@@ -218,6 +220,43 @@ def _cmd_ci(args: argparse.Namespace) -> int:
     return 1 if any(s.ci == "fail" for s in statuses) else 0
 
 
+def _cmd_upgrade_plan(args: argparse.Namespace) -> int:
+    """Compare each project's scaffold version against upstream project-init.
+
+    Exits 1 when any project is outdated. ``--apply`` dispatches each outdated
+    child's own ``project-init-upgrade.yml`` workflow (never edits its tree).
+    """
+    fleet = _discover(args)
+    selected = list(fleet.descriptors)
+    if args.project:
+        descriptor = fleet.get(args.project)
+        if descriptor is None:
+            print(f"unknown project: {args.project}", file=sys.stderr)
+            return 2
+        selected = [descriptor]
+    latest = latest_upstream_version(Path.cwd())
+    rows = upgrade_plan(selected, latest, cache.load_results())
+    applied: dict[str, str] = {}
+    if args.apply:
+        by_name = {d.name: d for d in selected}
+        applied = {
+            row.project: trigger_upgrade(by_name[row.project])
+            for row in rows
+            if row.status == "outdated"
+        }
+    if args.json:
+        return _emit_json([{**asdict(r), "applied": applied.get(r.project)} for r in rows])
+    for row in rows:
+        line = (
+            f"{row.project}: {row.status} "
+            f"(scaffold {row.scaffold_version}, drift {row.drift}, PRs {row.open_prs})"
+        )
+        if row.project in applied:
+            line += f" — upgrade {applied[row.project]}"
+        print(line)
+    return 1 if any(r.status == "outdated" for r in rows) else 0
+
+
 def _cmd_snapshot(args: argparse.Namespace) -> int:
     """Dump the full joined fleet view."""
     fleet = _discover(args)
@@ -291,6 +330,12 @@ def _build_parser() -> argparse.ArgumentParser:
             True,
         ),
         ("ci", "latest CI conclusion + open-PR count per project (via gh)", _cmd_ci, True),
+        (
+            "upgrade-plan",
+            "scaffold version vs upstream project-init (--apply triggers upgrades)",
+            _cmd_upgrade_plan,
+            True,
+        ),
         ("snapshot", "full joined fleet view", _cmd_snapshot, True),
         ("controller", "interactive deterministic command REPL", _cmd_controller, False),
         ("tui", "terminal UI (requires the tui extra)", _cmd_tui, False),
@@ -309,6 +354,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--markdown", action="store_true", help="render the report as Markdown"
     )
     sub.choices["ci"].add_argument("project", nargs="?", help="limit to one project")
+    sub.choices["upgrade-plan"].add_argument("project", nargs="?", help="limit to one project")
+    sub.choices["upgrade-plan"].add_argument(
+        "--apply", action="store_true", help="dispatch the upgrade workflow for outdated projects"
+    )
     sub.choices["checks"].add_argument(
         "--task", action="append", help="gate to run (repeatable; default: lint, test)"
     )
