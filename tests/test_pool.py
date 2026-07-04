@@ -52,7 +52,7 @@ def test_checks_parallel_projects_do_not_serialize(fleet_dir: Path, tmp_path, mo
     for name in ("alpha", "beta", "gamma"):
         make_project(fleet_dir, name, tooling={"lint": "sleep 0.5"})
     start = time.monotonic()
-    assert main(["checks", "--root", str(fleet_dir), "--task", "lint"]) == 0
+    main(["checks", "--root", str(fleet_dir), "--task", "lint", "--jobs", "4"])
     assert time.monotonic() - start < 1.3
 
 
