@@ -139,9 +139,14 @@ def load_events(descriptor: ProjectDescriptor) -> ProjectEvents:
         else:
             events.append(event)
 
-    warnings = (f"{malformed} malformed line(s) skipped",) if malformed else ()
+    warnings: list[str] = []
+    if malformed:
+        warnings.append(f"{malformed} malformed line(s) skipped")
+    unparseable = count_unparseable_timestamps(tuple(events))
+    if unparseable:
+        warnings.append(f"{unparseable} event(s) with an unparseable timestamp")
     return ProjectEvents(
-        project=descriptor.name, path=path, events=tuple(events), warnings=warnings
+        project=descriptor.name, path=path, events=tuple(events), warnings=tuple(warnings)
     )
 
 
@@ -157,24 +162,39 @@ def filter_since(events: tuple[GuardEvent, ...], since: str) -> tuple[GuardEvent
         silently hides data), events without a timestamp are dropped when
         a bound is given.
     """
-    bound = since.strip()
-    if not bound:
+    cutoff = _parse_instant(since)
+    if cutoff is None:
         return events
-    try:
-        cutoff = _dt.datetime.fromisoformat(bound)
-    except ValueError:
-        return events
-    if cutoff.tzinfo is None:
-        cutoff = cutoff.replace(tzinfo=_dt.UTC)
-
     kept: list[GuardEvent] = []
     for event in events:
-        try:
-            stamp = _dt.datetime.fromisoformat(event.timestamp)
-        except ValueError:
-            continue
-        if stamp.tzinfo is None:
-            stamp = stamp.replace(tzinfo=_dt.UTC)
-        if stamp >= cutoff:
+        stamp = _parse_instant(event.timestamp)
+        if stamp is not None and stamp >= cutoff:
             kept.append(event)
     return tuple(kept)
+
+
+def _parse_instant(value: str) -> _dt.datetime | None:
+    """Parse an ISO-8601 or epoch-seconds instant to aware UTC; ``None`` if not.
+
+    Guards may log ISO-8601 (``2026-07-04T10:00:00Z``) or a raw epoch-seconds
+    number; accept both. A naive ISO stamp is assumed UTC (documented in the
+    contract). Anything else is unparseable.
+    """
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        stamp = _dt.datetime.fromisoformat(text)
+    except ValueError:
+        try:
+            return _dt.datetime.fromtimestamp(float(text), tz=_dt.UTC)
+        except (ValueError, OverflowError, OSError):
+            return None
+    return stamp if stamp.tzinfo is not None else stamp.replace(tzinfo=_dt.UTC)
+
+
+def count_unparseable_timestamps(events: tuple[GuardEvent, ...]) -> int:
+    """Count events carrying a non-empty timestamp that does not parse (pure)."""
+    return sum(
+        1 for event in events if event.timestamp.strip() and _parse_instant(event.timestamp) is None
+    )

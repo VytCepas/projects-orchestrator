@@ -38,6 +38,26 @@ def test_diagnose_contract_fail_without_version(fleet_dir: Path) -> None:
     assert _finding(_report(fleet_dir), "contract").status == "fail"
 
 
+def test_diagnose_contract_ok_for_v2_project(fleet_dir: Path) -> None:
+    make_project(
+        fleet_dir,
+        "alpha",
+        config_text="project:\n  name: alpha\n  project_init_contract_version: 2\n",
+    )
+    assert _finding(_report(fleet_dir), "contract").status == "ok"
+
+
+def test_diagnose_contract_warns_on_newer_than_understood(fleet_dir: Path) -> None:
+    make_project(
+        fleet_dir,
+        "alpha",
+        config_text="project:\n  name: alpha\n  project_init_contract_version: 9\n",
+    )
+    finding = _finding(_report(fleet_dir), "contract")
+    assert finding.status == "warn"
+    assert "newer than understood" in finding.detail
+
+
 def test_diagnose_scaffold_ok_for_clean_project(fleet_dir: Path) -> None:
     make_project(fleet_dir, "alpha")
     assert _finding(_report(fleet_dir), "scaffold").status == "ok"
