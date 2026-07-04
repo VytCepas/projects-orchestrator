@@ -33,6 +33,9 @@ class CheckResult:
         detail: Short human-readable explanation (error tail on failure).
         duration: Wall-clock seconds the command took.
         checked_at: UTC ISO timestamp of when the check finished.
+        head: HEAD commit SHA the project was at when the check ran, when
+            the worktree was clean; empty otherwise. Lets ``--changed-only``
+            trust a cached ``pass`` for an unchanged project.
     """
 
     project: str
@@ -41,6 +44,7 @@ class CheckResult:
     detail: str = ""
     duration: float = 0.0
     checked_at: str = ""
+    head: str = ""
 
 
 def _now() -> str:
@@ -58,7 +62,7 @@ def _failure_detail(stderr: str, stdout: str) -> str:
 
 
 def run_check(
-    descriptor: ProjectDescriptor, task: str, timeout: float = DEFAULT_TIMEOUT
+    descriptor: ProjectDescriptor, task: str, timeout: float = DEFAULT_TIMEOUT, head: str = ""
 ) -> CheckResult:
     """Run one declared gate for one project; never raises.
 
@@ -66,6 +70,8 @@ def run_check(
         descriptor: The project to check.
         task: Gate name, resolved via ``descriptor.tooling``.
         timeout: Kill the gate after this many seconds (counts as ``fail``).
+        head: Clean-worktree HEAD SHA to stamp the result with (empty when
+            unknown or dirty).
 
     Returns:
         The check result; an undeclared gate yields ``skip``.
@@ -78,6 +84,7 @@ def run_check(
             status=SKIP,
             detail="no command declared",
             checked_at=_now(),
+            head=head,
         )
 
     result = run_command(command, cwd=descriptor.path, timeout=timeout)
@@ -97,6 +104,7 @@ def run_check(
         detail=detail,
         duration=result.duration,
         checked_at=_now(),
+        head=head,
     )
 
 
@@ -104,6 +112,7 @@ def collect_checks(
     descriptor: ProjectDescriptor,
     tasks: tuple[str, ...] = DEFAULT_TASKS,
     timeout: float = DEFAULT_TIMEOUT,
+    head: str = "",
 ) -> list[CheckResult]:
     """Run several gates for one project.
 
@@ -111,8 +120,9 @@ def collect_checks(
         descriptor: The project to check.
         tasks: Gate names to run, in order.
         timeout: Per-gate timeout in seconds.
+        head: Clean-worktree HEAD SHA to stamp results with.
 
     Returns:
         One :class:`CheckResult` per task, in the given order.
     """
-    return [run_check(descriptor, task, timeout=timeout) for task in tasks]
+    return [run_check(descriptor, task, timeout=timeout, head=head) for task in tasks]

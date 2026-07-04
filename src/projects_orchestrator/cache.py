@@ -59,7 +59,7 @@ def load_results(path: Path | None = None) -> dict[str, dict[str, CheckResult]]:
     return results
 
 
-_RESULT_FIELDS = ("project", "task", "status", "detail", "duration", "checked_at")
+_RESULT_FIELDS = ("project", "task", "status", "detail", "duration", "checked_at", "head")
 
 
 def save_results(

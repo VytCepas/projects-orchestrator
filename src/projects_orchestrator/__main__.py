@@ -21,8 +21,9 @@ from projects_orchestrator.adapters.cloud import collect_cloud
 from projects_orchestrator.adapters.github import as_check_results, collect_github
 from projects_orchestrator.adapters.project_init import latest_upstream_version, trigger_upgrade
 from projects_orchestrator.audit import audit_project, render_markdown
-from projects_orchestrator.checks import DEFAULT_TASKS, collect_checks
+from projects_orchestrator.checks import DEFAULT_TASKS, CheckResult, collect_checks
 from projects_orchestrator.controller import ControllerContext, dispatch, parse_command
+from projects_orchestrator.descriptor import ProjectDescriptor
 from projects_orchestrator.doctor import diagnose
 from projects_orchestrator.drift import compute_drift
 from projects_orchestrator.fleet import fleet_rows, fleet_snapshots, render_table
@@ -36,7 +37,7 @@ from projects_orchestrator.registry import (
     discover,
     load_fleet_config,
 )
-from projects_orchestrator.status import collect_status
+from projects_orchestrator.status import clean_worktree_head, collect_status
 from projects_orchestrator.upgrade import upgrade_plan
 
 
@@ -95,6 +96,50 @@ def _cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _reusable_pass(
+    cached: dict[str, CheckResult] | None, task: str, head: str
+) -> CheckResult | None:
+    """Return the cached result that can stand in for a fresh run, if any.
+
+    A cached result is trusted only when it is a ``pass`` recorded at the
+    same clean-worktree HEAD the project is at now. Fails, skips, dirty
+    trees, and unknown identities never match — they always re-run.
+    """
+    if not head or cached is None:
+        return None
+    result = cached.get(task)
+    if result is not None and result.status == "pass" and result.head == head:
+        return result
+    return None
+
+
+def _project_checks(
+    descriptor: ProjectDescriptor,
+    tasks: tuple[str, ...],
+    cached: dict[str, CheckResult] | None,
+    changed_only: bool,
+) -> list[tuple[CheckResult, bool]]:
+    """Run one project's gates, reusing cached passes when allowed.
+
+    Returns:
+        ``(result, reused)`` pairs in task order; ``reused`` marks results
+        served from the cache instead of a fresh run.
+    """
+    head = clean_worktree_head(descriptor)
+    reusable: dict[str, CheckResult] = {}
+    if changed_only:
+        reusable = {
+            task: result
+            for task in tasks
+            if (result := _reusable_pass(cached, task, head)) is not None
+        }
+    to_run = tuple(task for task in tasks if task not in reusable)
+    fresh = dict(zip(to_run, collect_checks(descriptor, to_run, head=head), strict=True))
+    return [
+        (reusable[task], True) if task in reusable else (fresh[task], False) for task in tasks
+    ]
+
+
 def _cmd_checks(args: argparse.Namespace) -> int:
     """Run declared gates; exit 1 when any project fails one."""
     fleet = _discover(args)
@@ -108,15 +153,21 @@ def _cmd_checks(args: argparse.Namespace) -> int:
         selected = list(fleet.descriptors)
 
     tasks = tuple(args.task) if args.task else DEFAULT_TASKS
-    per_project = map_ordered(lambda d: collect_checks(d, tasks), selected, jobs=args.jobs)
-    results = [result for project_results in per_project for result in project_results]
-    cache.save_results(results)
+    cached = cache.load_results() if args.changed_only else {}
+    per_project = map_ordered(
+        lambda d: _project_checks(d, tasks, cached.get(d.name), args.changed_only),
+        selected,
+        jobs=args.jobs,
+    )
+    pairs = [pair for project_pairs in per_project for pair in project_pairs]
+    cache.save_results([result for result, reused in pairs if not reused])
     if args.json:
-        return _emit_json([asdict(r) for r in results])
-    for result in results:
+        return _emit_json([{**asdict(r), "cached": reused} for r, reused in pairs])
+    for result, reused in pairs:
         suffix = f" — {result.detail}" if result.detail else ""
-        print(f"{result.project} {result.task}: {result.status}{suffix}")
-    return 1 if any(r.status == "fail" for r in results) else 0
+        cached_mark = " (cached)" if reused else ""
+        print(f"{result.project} {result.task}: {result.status}{cached_mark}{suffix}")
+    return 1 if any(result.status == "fail" for result, _ in pairs) else 0
 
 
 def _cmd_memory(args: argparse.Namespace) -> int:
@@ -444,6 +495,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub.choices["checks"].add_argument(
         "--jobs", type=int, help="parallel projects (default: min(8, cpu count))"
+    )
+    sub.choices["checks"].add_argument(
+        "--changed-only",
+        action="store_true",
+        help="skip gates whose last cached pass is at the current clean HEAD",
     )
     sub.choices["memory"].add_argument("query", nargs="+", help="text to search for")
     return parser
