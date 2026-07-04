@@ -21,13 +21,14 @@ from projects_orchestrator.adapters.cloud import collect_cloud
 from projects_orchestrator.adapters.github import as_check_results, collect_github
 from projects_orchestrator.adapters.project_init import latest_upstream_version, trigger_upgrade
 from projects_orchestrator.audit import audit_project, render_markdown
-from projects_orchestrator.checks import DEFAULT_TASKS, run_check
+from projects_orchestrator.checks import DEFAULT_TASKS, collect_checks
 from projects_orchestrator.controller import ControllerContext, dispatch, parse_command
 from projects_orchestrator.doctor import diagnose
 from projects_orchestrator.drift import compute_drift
 from projects_orchestrator.fleet import fleet_rows, fleet_snapshots, render_table
 from projects_orchestrator.memory import load_project_memory, search_memory
 from projects_orchestrator.observability import filter_since, load_events
+from projects_orchestrator.pool import map_ordered
 from projects_orchestrator.registry import (
     Fleet,
     FleetConfig,
@@ -107,7 +108,8 @@ def _cmd_checks(args: argparse.Namespace) -> int:
         selected = list(fleet.descriptors)
 
     tasks = tuple(args.task) if args.task else DEFAULT_TASKS
-    results = [run_check(d, task) for d in selected for task in tasks]
+    per_project = map_ordered(lambda d: collect_checks(d, tasks), selected, jobs=args.jobs)
+    results = [result for project_results in per_project for result in project_results]
     cache.save_results(results)
     if args.json:
         return _emit_json([asdict(r) for r in results])
@@ -213,7 +215,7 @@ def _cmd_ci(args: argparse.Namespace) -> int:
             return 2
         selected = [descriptor]
     checked_at = _dt.datetime.now(tz=_dt.UTC).isoformat(timespec="seconds")
-    statuses = [collect_github(d) for d in selected]
+    statuses = map_ordered(collect_github, selected)
     cache.save_results([r for s in statuses for r in as_check_results(s, checked_at)])
     if args.json:
         return _emit_json([asdict(s) for s in statuses])
@@ -238,7 +240,7 @@ def _cmd_cloud_status(args: argparse.Namespace) -> int:
             return 2
         selected = [descriptor]
     checked_at = _dt.datetime.now(tz=_dt.UTC).isoformat(timespec="seconds")
-    statuses = [collect_cloud(d) for d in selected]
+    statuses = map_ordered(collect_cloud, selected)
     cache.save_results([r for s in statuses for r in cloud_check_results(s, checked_at)])
     if args.json:
         return _emit_json([asdict(s) for s in statuses])
@@ -439,6 +441,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub.choices["checks"].add_argument(
         "--task", action="append", help="gate to run (repeatable; default: lint, test)"
+    )
+    sub.choices["checks"].add_argument(
+        "--jobs", type=int, help="parallel projects (default: min(8, cpu count))"
     )
     sub.choices["memory"].add_argument("query", nargs="+", help="text to search for")
     return parser

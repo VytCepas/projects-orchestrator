@@ -17,6 +17,7 @@ from projects_orchestrator.checks import CheckResult
 from projects_orchestrator.descriptor import ProjectDescriptor, parse_scaffold_version
 from projects_orchestrator.drift import DriftReport, compute_drift, hook_health
 from projects_orchestrator.memory import ProjectMemory, load_project_memory
+from projects_orchestrator.pool import map_ordered
 from projects_orchestrator.registry import Fleet
 from projects_orchestrator.status import ProjectStatus, collect_status
 
@@ -87,6 +88,9 @@ def collect_snapshot(
 def fleet_snapshots(fleet: Fleet, cache_file: Path | None = None) -> list[ProjectSnapshot]:
     """Snapshot every project in the fleet, joining the checks cache.
 
+    Snapshots are collected on a bounded thread pool (the work is git/
+    filesystem-bound), so fleet wall-clock tracks the slowest project.
+
     Args:
         fleet: The discovered fleet.
         cache_file: Checks-cache override (None = default location).
@@ -95,7 +99,7 @@ def fleet_snapshots(fleet: Fleet, cache_file: Path | None = None) -> list[Projec
         One snapshot per project, in fleet (name) order.
     """
     cache = load_results(cache_file)
-    return [collect_snapshot(d, cache.get(d.name)) for d in fleet.descriptors]
+    return map_ordered(lambda d: collect_snapshot(d, cache.get(d.name)), fleet.descriptors)
 
 
 def humanize_age(iso_timestamp: str, now: _dt.datetime | None = None) -> str:

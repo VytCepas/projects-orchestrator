@@ -21,7 +21,7 @@ from projects_orchestrator.adapters.cloud import collect_cloud
 from projects_orchestrator.adapters.github import as_check_results, collect_github
 from projects_orchestrator.adapters.project_init import latest_upstream_version
 from projects_orchestrator.audit import audit_project
-from projects_orchestrator.checks import run_check
+from projects_orchestrator.checks import collect_checks
 from projects_orchestrator.descriptor import ProjectDescriptor
 from projects_orchestrator.detail import build_detail, render_detail
 from projects_orchestrator.doctor import diagnose
@@ -29,6 +29,7 @@ from projects_orchestrator.drift import compute_drift
 from projects_orchestrator.fleet import fleet_rows, fleet_snapshots, render_table
 from projects_orchestrator.memory import load_project_memory, search_memory
 from projects_orchestrator.observability import filter_since, load_events
+from projects_orchestrator.pool import map_ordered
 from projects_orchestrator.registry import Fleet, FleetConfig, discover
 from projects_orchestrator.status import collect_status
 from projects_orchestrator.upgrade import upgrade_plan
@@ -159,13 +160,11 @@ def _dispatch_check(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
     if isinstance(selected, str):
         yield selected
         return
-    results = []
-    for descriptor in selected:
-        for task in intent.args:
-            result = run_check(descriptor, task)
-            results.append(result)
-            suffix = f" — {result.detail}" if result.detail else ""
-            yield f"{result.project} {result.task}: {result.status.upper()}{suffix}"
+    per_project = map_ordered(lambda d: collect_checks(d, intent.args), selected)
+    results = [result for project_results in per_project for result in project_results]
+    for result in results:
+        suffix = f" — {result.detail}" if result.detail else ""
+        yield f"{result.project} {result.task}: {result.status.upper()}{suffix}"
     cache.save_results(results, ctx.cache_file)
 
 
