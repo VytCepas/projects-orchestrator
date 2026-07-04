@@ -19,24 +19,11 @@ from textual.widgets import DataTable, Footer, Header, Input, RichLog, TabbedCon
 from projects_orchestrator import cache
 from projects_orchestrator.controller import ControllerContext, Intent, dispatch, parse_command
 from projects_orchestrator.detail import build_detail, render_detail
-from projects_orchestrator.fleet import COLUMNS, fleet_rows, fleet_snapshots
+from projects_orchestrator.fleet import COLUMNS, cell_status, fleet_rows, fleet_snapshots
 from projects_orchestrator.registry import FleetConfig
 
-_STATUS_STYLE = {
-    "pass": "green",
-    "clean": "green",
-    "ok": "green",
-    "none": "green",
-    "yes": "green",
-    "fail": "red",
-    "missing": "red",
-    "unhealthy": "red",
-    "dirty": "yellow",
-    "diverged": "yellow",
-    "behind": "yellow",
-    "partial": "yellow",
-    "outdated": "yellow",
-}
+# Map the shared, presentation-free cell status to a terminal colour.
+_STATUS_COLOR = {"good": "green", "bad": "red", "warn": "yellow"}
 
 
 class OrchestratorApp(App[None]):
@@ -89,8 +76,8 @@ class OrchestratorApp(App[None]):
 
     @staticmethod
     def _styled(cell: str) -> Text:
-        """Color-code pass/fail-ish cells."""
-        return Text(cell, style=_STATUS_STYLE.get(cell, ""))
+        """Color-code cells via the shared status classifier."""
+        return Text(cell, style=_STATUS_COLOR.get(cell_status(cell), ""))
 
     def action_refresh(self) -> None:
         """Re-discover the fleet and redraw the table."""

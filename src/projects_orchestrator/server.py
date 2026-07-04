@@ -24,7 +24,7 @@ from urllib.parse import unquote
 
 from projects_orchestrator import cache
 from projects_orchestrator.detail import build_detail
-from projects_orchestrator.fleet import COLUMNS, fleet_rows, fleet_snapshots
+from projects_orchestrator.fleet import COLUMNS, cell_status, fleet_rows, fleet_snapshots
 from projects_orchestrator.registry import FleetConfig, discover
 
 DEFAULT_HOST = "127.0.0.1"
@@ -50,10 +50,14 @@ def snapshot_payload(
     """
     fleet = discover(config)
     snapshots = fleet_snapshots(fleet, cache_file)
+    rows = fleet_rows(snapshots)
     return {
         "generated_at": generated_at,
         "columns": list(COLUMNS),
-        "rows": fleet_rows(snapshots),
+        "rows": rows,
+        # Per-cell status from the shared classifier, so the page styles cells
+        # without re-encoding the good/bad/warn vocabulary client-side.
+        "statuses": [{column: cell_status(row[column]) for column in COLUMNS} for row in rows],
         "warnings": list(fleet.warnings),
     }
 
@@ -180,11 +184,6 @@ footer { margin-top: 1rem; color: #59636e; font-size: .8rem; }
 <aside id="drawer"><button id="close">&times;</button><div id="detail"></div></aside>
 <script>
 const COLUMNS = __COLUMNS__;
-const GOOD = new Set(["pass","clean","ok","none","yes"]);
-const BAD = new Set(["fail","missing","unhealthy"]);
-const WARN = new Set(["dirty","diverged","behind","partial","outdated"]);
-function cls(v){ if(GOOD.has(v)||(v||"").startsWith("up ")) return "good";
-  if(BAD.has(v)) return "bad"; if(WARN.has(v)) return "warn"; return ""; }
 function text(t){ const d=document.createElement("div"); d.textContent=t==null?"":t; return d.innerHTML; }
 const head=document.getElementById("head");
 head.innerHTML = COLUMNS.map(c=>"<th>"+text(c)+"</th>").join("");
@@ -192,9 +191,9 @@ async function refresh(){
   try{
     const r = await fetch("/api/snapshot.json", {cache:"no-store"});
     const data = await r.json();
-    document.getElementById("rows").innerHTML = data.rows.map(row =>
+    document.getElementById("rows").innerHTML = data.rows.map((row, i) =>
       "<tr data-name='"+text(row.Project)+"'>" + COLUMNS.map(c => {
-        const v = row[c]||""; const k = cls(v);
+        const v = row[c]||""; const k = (data.statuses[i]||{})[c] || "";
         return "<td"+(k?" class='"+k+"'":"")+">"+text(v)+"</td>";
       }).join("") + "</tr>").join("");
     document.getElementById("warnings").textContent = (data.warnings||[]).join("\\n");

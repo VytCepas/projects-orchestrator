@@ -269,6 +269,33 @@ def fleet_rows(snapshots: list[ProjectSnapshot]) -> list[dict[str, str]]:
     return [snapshot_row(s, newest) for s in snapshots]
 
 
+_GOOD_CELLS = frozenset({"pass", "clean", "ok", "none", "yes"})
+_BAD_CELLS = frozenset({"fail", "missing", "unhealthy"})
+_WARN_CELLS = frozenset({"dirty", "diverged", "behind", "partial", "outdated"})
+
+GOOD = "good"
+BAD = "bad"
+WARN = "warn"
+NEUTRAL = ""
+
+
+def cell_status(value: str) -> str:
+    """Classify a cell's text as ``good``/``bad``/``warn``/neutral (pure).
+
+    The single source of truth for status colouring across every surface: the
+    text table, the HTML snapshot, the TUI, and the live web dashboard all map
+    this presentation-free status to their own styling (CSS class, terminal
+    colour, …), so the vocabulary can never drift between them.
+    """
+    if value in _GOOD_CELLS or value.startswith("up "):
+        return GOOD
+    if value in _BAD_CELLS:
+        return BAD
+    if value in _WARN_CELLS:
+        return WARN
+    return NEUTRAL
+
+
 def render_table(rows: list[dict[str, str]]) -> str:
     """Render rows as a plain aligned text table (no dependencies).
 
