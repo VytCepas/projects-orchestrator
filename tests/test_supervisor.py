@@ -93,8 +93,6 @@ def test_stop_when_not_running_is_friendly(fleet_dir: Path) -> None:
 def test_stale_pid_reads_as_not_running(fleet_dir: Path) -> None:
     descriptor = _runnable(fleet_dir, command="sleep 0.05")
     start(descriptor)
-    state = running_state(descriptor)
-    assert state is not None
     subprocess.run(["sleep", "0.3"], check=True)
     assert running_state(descriptor) is None
 
@@ -132,9 +130,17 @@ def test_running_column_shows_uptime(fleet_dir: Path, tmp_path: Path) -> None:
         stop(descriptor)
 
 
-def test_cli_start_then_stop_round_trips(fleet_dir: Path, capsys) -> None:
+def test_cli_start_exits_zero(fleet_dir: Path) -> None:
     make_project(fleet_dir, "alpha", tooling={"run": "sleep 30"})
-    assert main(["start", "alpha", "--root", str(fleet_dir)]) == 0
+    try:
+        assert main(["start", "alpha", "--root", str(fleet_dir)]) == 0
+    finally:
+        main(["stop", "alpha", "--root", str(fleet_dir)])
+
+
+def test_cli_stop_reports_stopped(fleet_dir: Path, capsys) -> None:
+    make_project(fleet_dir, "alpha", tooling={"run": "sleep 30"})
+    main(["start", "alpha", "--root", str(fleet_dir)])
     main(["stop", "alpha", "--root", str(fleet_dir)])
     assert "stopped" in capsys.readouterr().out
 

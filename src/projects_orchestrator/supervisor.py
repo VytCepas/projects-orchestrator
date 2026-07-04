@@ -195,10 +195,19 @@ def start(descriptor: ProjectDescriptor) -> str:
 
 
 def _terminate_group(pid: int, grace: float) -> None:
-    """SIGTERM a process group, escalating to SIGKILL after ``grace``."""
+    """SIGTERM a process group, escalating to SIGKILL after ``grace``.
+
+    Supervised processes are launched with ``start_new_session=True``, so a
+    legitimate target is always its own group leader (``pgid == pid``). A
+    recycled pid that joined some other group is provably not our process —
+    fall back to signalling only the pid rather than killing an unrelated
+    group.
+    """
     try:
         group = os.getpgid(pid)
     except OSError:
+        group = None
+    if group is not None and group != pid:
         group = None
     try:
         if group is not None:
