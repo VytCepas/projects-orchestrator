@@ -39,6 +39,9 @@ from projects_orchestrator.registry import FleetConfig
         ("cloud", "cloud"),
         ("events alpha", "events"),
         ("detail alpha", "detail"),
+        ("start alpha", "start"),
+        ("stop alpha", "stop"),
+        ("logs alpha", "logs"),
         ("frobnicate", "unknown"),
     ],
 )
@@ -202,3 +205,16 @@ def test_dispatch_detail_renders_project_heading(fleet_dir: Path) -> None:
     make_project(fleet_dir, "alpha")
     lines = list(dispatch(parse_command("detail alpha"), _ctx(fleet_dir)))
     assert lines[0] == "# alpha"
+
+
+def test_dispatch_start_requires_project(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")
+    lines = list(dispatch(parse_command("start"), _ctx(fleet_dir)))
+    assert lines == ["usage: start <project>"]
+
+
+def test_dispatch_stop_not_running_is_friendly(fleet_dir: Path, tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    make_project(fleet_dir, "alpha")
+    lines = list(dispatch(parse_command("stop alpha"), _ctx(fleet_dir)))
+    assert lines == ["alpha: not running"]

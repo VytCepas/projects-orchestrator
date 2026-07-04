@@ -12,7 +12,10 @@ fleet remembers.
 ```sh
 projects-orchestrator projects            # list discovered projects
 projects-orchestrator status              # fleet table: health/branch/lint/tests/memory
-projects-orchestrator checks [project]    # run each project's own lint/test gates
+projects-orchestrator checks [project]    # run each project's own lint/test gates (--jobs N, --changed-only)
+projects-orchestrator start <project>     # launch the project's run_command (detached, logged)
+projects-orchestrator stop <project>      # terminate the supervised process
+projects-orchestrator logs <project>      # tail the captured run output (-n lines)
 projects-orchestrator memory <query>      # search every project's memory files
 projects-orchestrator drift [project]     # scaffold drift vs the recorded manifest
 projects-orchestrator doctor [project]    # diagnose contract-v1 conformance
@@ -45,6 +48,12 @@ The contract surfaces the orchestrator reads from each project-init child are
 pinned in [`docs/reference/descriptor-contract-v1.md`](docs/reference/descriptor-contract-v1.md);
 the additive v2 surfaces (deploy block, observability path, expected hooks) are
 specified in [`docs/reference/descriptor-contract-v2-proposal.md`](docs/reference/descriptor-contract-v2-proposal.md).
+
+`checks --changed-only` trusts a cached pass only for a project whose clean
+worktree is still at the same HEAD commit — note it cannot see changes in
+external services your tests hit, so run a plain `checks` when that matters.
+`start` supervision state (pid, uptime, log) lives under `$XDG_STATE_HOME`
+and feeds the status table's `Running` column.
 
 In the TUI, selecting a row opens the per-project Detail tab (descriptor,
 last-known checks, recent commits, memory) with `l`/`t` running that

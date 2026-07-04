@@ -38,6 +38,9 @@ from projects_orchestrator.registry import (
     load_fleet_config,
 )
 from projects_orchestrator.status import clean_worktree_head, collect_status
+from projects_orchestrator.supervisor import logs as run_logs
+from projects_orchestrator.supervisor import start as run_start
+from projects_orchestrator.supervisor import stop as run_stop
 from projects_orchestrator.upgrade import upgrade_plan
 
 
@@ -377,6 +380,44 @@ def _cmd_upgrade_plan(args: argparse.Namespace) -> int:
     return 1 if any(r.status == "outdated" for r in rows) else 0
 
 
+def _resolve_project(args: argparse.Namespace) -> ProjectDescriptor | None:
+    """Resolve the required project argument, printing the error itself."""
+    fleet = _discover(args)
+    descriptor = fleet.get(args.project)
+    if descriptor is None:
+        print(f"unknown project: {args.project}", file=sys.stderr)
+    return descriptor
+
+
+def _cmd_start(args: argparse.Namespace) -> int:
+    """Launch a project's declared run_command, detached and logged."""
+    descriptor = _resolve_project(args)
+    if descriptor is None:
+        return 2
+    message = run_start(descriptor)
+    print(message)
+    return 0 if "started" in message or "already running" in message else 1
+
+
+def _cmd_stop(args: argparse.Namespace) -> int:
+    """Terminate a project's supervised process."""
+    descriptor = _resolve_project(args)
+    if descriptor is None:
+        return 2
+    print(run_stop(descriptor))
+    return 0
+
+
+def _cmd_logs(args: argparse.Namespace) -> int:
+    """Show the tail of a project's captured run output."""
+    descriptor = _resolve_project(args)
+    if descriptor is None:
+        return 2
+    for line in run_logs(descriptor, lines=args.lines):
+        print(line)
+    return 0
+
+
 def _cmd_snapshot(args: argparse.Namespace) -> int:
     """Dump the full joined fleet view."""
     fleet = _discover(args)
@@ -457,6 +498,9 @@ def _build_parser() -> argparse.ArgumentParser:
             True,
         ),
         ("events", "guard/usage events from the fleet's observability logs", _cmd_events, True),
+        ("start", "launch a project's run_command (detached, logged)", _cmd_start, False),
+        ("stop", "terminate a project's supervised process", _cmd_stop, False),
+        ("logs", "tail a project's captured run output", _cmd_logs, False),
         (
             "upgrade-plan",
             "scaffold version vs upstream project-init (--apply triggers upgrades)",
@@ -485,6 +529,11 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.choices["events"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["events"].add_argument(
         "--since", help="only events at/after this ISO-8601 instant"
+    )
+    for name in ("start", "stop", "logs"):
+        sub.choices[name].add_argument("project", help="project to act on")
+    sub.choices["logs"].add_argument(
+        "-n", "--lines", type=int, default=40, help="trailing lines to show (default 40)"
     )
     sub.choices["upgrade-plan"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["upgrade-plan"].add_argument(

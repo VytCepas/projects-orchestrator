@@ -20,6 +20,7 @@ from projects_orchestrator.memory import ProjectMemory, load_project_memory
 from projects_orchestrator.pool import map_ordered
 from projects_orchestrator.registry import Fleet
 from projects_orchestrator.status import ProjectStatus, collect_status
+from projects_orchestrator.supervisor import RunState, running_state
 
 COLUMNS = (
     "Project",
@@ -37,6 +38,7 @@ COLUMNS = (
     "PRs",
     "Cloud",
     "Runnable",
+    "Running",
     "Memory",
     "Checked",
 )
@@ -53,6 +55,7 @@ class ProjectSnapshot:
         memory: The project's memory summary.
         drift: Divergence from the recorded scaffold manifest.
         hooks: Git-hook installation health (``ok``/``partial``/``missing``/``-``).
+        run_state: Live supervised-process state, or ``None`` when not running.
     """
 
     descriptor: ProjectDescriptor
@@ -61,6 +64,7 @@ class ProjectSnapshot:
     memory: ProjectMemory
     drift: DriftReport
     hooks: str
+    run_state: RunState | None = None
 
 
 def collect_snapshot(
@@ -82,6 +86,7 @@ def collect_snapshot(
         memory=load_project_memory(descriptor),
         drift=compute_drift(descriptor),
         hooks=hook_health(descriptor),
+        run_state=running_state(descriptor),
     )
 
 
@@ -191,6 +196,14 @@ def _prs_cell(snapshot: ProjectSnapshot) -> str:
     return result.detail or "0"
 
 
+def _running_cell(snapshot: ProjectSnapshot) -> str:
+    """Render the supervised-process state (``up <age>`` or ``-``)."""
+    state = snapshot.run_state
+    if state is None:
+        return "-"
+    return f"up {humanize_age(state.started_at)}"
+
+
 def _cloud_cell(snapshot: ProjectSnapshot) -> str:
     """Render the last-known cloud state (``?`` when never probed)."""
     result = snapshot.checks.get("cloud")
@@ -244,6 +257,7 @@ def snapshot_row(
         "PRs": _prs_cell(snapshot),
         "Cloud": _cloud_cell(snapshot),
         "Runnable": "yes" if snapshot.descriptor.has_task("run") else "-",
+        "Running": _running_cell(snapshot),
         "Memory": f"{memory_files} fact{'s' if memory_files != 1 else ''}",
         "Checked": _checked_cell(snapshot),
     }

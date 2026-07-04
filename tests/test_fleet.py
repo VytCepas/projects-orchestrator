@@ -44,6 +44,7 @@ def test_snapshot_row_has_all_columns(fleet_dir: Path) -> None:
         "PRs",
         "Cloud",
         "Runnable",
+        "Running",
         "Memory",
         "Checked",
     }
