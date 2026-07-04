@@ -57,8 +57,14 @@ gh_api_base() {
 
 # Distribution profile recorded by project-init in .claude/config.yaml (#247);
 # defaults to individual when unset. Gates org-only hard enforcement (#251).
+# Anchored on this file's own location (.claude/scripts/ -> ../config.yaml),
+# NOT the caller's cwd — a cwd-relative read silently resolves to the
+# 'individual' default from any subdirectory, which would let monitor_pr.sh
+# admin-merge past org branch protection and setup_github.sh skip the org
+# ruleset.
 gh_profile() {
-  local cfg=".claude/config.yaml" prof=""
+  local cfg prof=""
+  cfg="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../config.yaml"
   [ -f "$cfg" ] && prof=$(sed -nE 's/^[[:space:]]*profile:[[:space:]]*([a-z]+).*/\1/p' "$cfg" | head -1)
   printf '%s\n' "${prof:-individual}"
 }

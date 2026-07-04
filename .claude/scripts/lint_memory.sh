@@ -142,14 +142,18 @@ fi
 
 VAULT_DIR="$ROOT/.claude/vault"
 if [ -d "$VAULT_DIR" ]; then
-  # Collect all wikilink targets from vault notes
-  all_links="$(grep -roh '\[\[[^]]*\]\]' "$VAULT_DIR" 2>/dev/null | sed 's/\[\[//;s/\]\]//' | sort -u || true)"
+  # Collect all wikilink targets from vault notes, normalized to the target
+  # note's bare name: strip |alias and #heading suffixes and any path prefix.
+  all_links="$(grep -roh '\[\[[^]]*\]\]' "$VAULT_DIR" 2>/dev/null | sed 's/\[\[//;s/\]\]//;s/[|#].*$//;s#.*/##' | sort -u || true)"
 
   while IFS= read -r -d '' file; do
     name="$(basename "$file" .md)"
-    # Check if any other note links to this one
+    # Check if any other note links to this one. -Fx: the note name must match
+    # a link target exactly as a fixed string — an unanchored regex match lets
+    # metacharacters in note names ("plan(v2)") misfire and lets any note whose
+    # name is a substring of another's ("foo" vs "[[foobar]]") pass as linked.
     if [ -n "$all_links" ]; then
-      if ! echo "$all_links" | grep -q "$name"; then
+      if ! echo "$all_links" | grep -Fxq "$name"; then
         warn "$(basename "$file"): no inbound wikilinks (orphan note)"
       fi
     fi

@@ -2,20 +2,26 @@
 # `just --list` shows every recipe. Recipes are thin wrappers — logic lives
 # in the tools and their configs, never in this file.
 
-# install/sync dev dependencies (PEP 735 dependency-group; add tools with `uv add --dev`)
+# install/sync dev dependencies (PEP 735 dependency-group; add tools with `uv add --dev`).
+# A fresh scaffold has no pyproject.toml (or one without [dependency-groups])
+# yet — `uv sync --group dev` hard-fails on both, which would break CI's first
+# step before the day-one guards in typecheck/test-cov can even run.
 setup:
-    uv sync --group dev
+    sh -c 'if [ ! -f pyproject.toml ]; then echo "No pyproject.toml yet — nothing to sync."; elif grep -q "^\[dependency-groups\]" pyproject.toml; then uv sync --group dev; else uv sync; fi'
 
 # lint project code (docstring + complexity gates per ruff.toml)
 lint:
     uv run ruff check .
-    find .claude -name '*.sh' -exec shellcheck -S error -x {} +
-    find .claude -name '*.sh' -exec shfmt -d -i 2 {} +
+    sh -c 'if command -v shellcheck >/dev/null 2>&1; then find .claude -name "*.sh" -exec shellcheck -S error -x {} +; else echo "shellcheck not installed — skipping shell lint (CI still runs it). Install: https://github.com/koalaman/shellcheck#installing or run \`mise install\`."; fi'
+    sh -c 'if command -v shfmt >/dev/null 2>&1; then find .claude -name "*.sh" -exec shfmt -d -i 2 {} +; else echo "shfmt not installed — skipping shfmt check (CI still runs it). Install: https://github.com/mvdan/sh#shfmt or run \`mise install\`."; fi'
 
 # static type check (strict mode per mypy.ini; add mypy with `uv add --dev mypy`)
-# no-op on a fresh scaffold with no src/ yet — mypy errors on a missing path
+# no-op on a fresh scaffold with no src/ yet — mypy errors on a missing path.
+# --install-types fetches missing dependency stubs (types-PyYAML etc.) so
+# untyped deps don't fail the strict gate with import-untyped (#592); it
+# shells out to pip, which uv-managed environments omit — hence --with pip.
 typecheck:
-    if [ -d src ]; then uv run --with "mypy>=1.10" --with types-PyYAML mypy src/; else echo "No src/ directory yet — nothing to type-check."; fi
+    if [ -d src ]; then uv run --with "mypy>=1.10" --with pip mypy --install-types --non-interactive src/; else echo "No src/ directory yet — nothing to type-check."; fi
 
 # auto-format project code
 format:
