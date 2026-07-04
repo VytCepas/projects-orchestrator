@@ -188,6 +188,18 @@ def test_start_no_run_command_exits_nonzero(fleet_dir: Path) -> None:
     assert main(["start", "restarted", "--root", str(fleet_dir)]) == 1
 
 
+def test_serve_command_dispatches_to_server(fleet_dir: Path, monkeypatch) -> None:
+    # serve() blocks, so verify wiring by capturing the call instead of running it.
+    import projects_orchestrator.__main__ as cli
+
+    captured = {}
+    monkeypatch.setattr(
+        cli, "serve", lambda _config, host, port: captured.update(host=host, port=port)
+    )
+    assert main(["serve", "--root", str(fleet_dir), "--host", "0.0.0.0", "--port", "9999"]) == 0
+    assert captured == {"host": "0.0.0.0", "port": 9999}
+
+
 def test_project_checks_drops_head_when_worktree_changes_mid_run(
     fleet_dir: Path, monkeypatch
 ) -> None:
