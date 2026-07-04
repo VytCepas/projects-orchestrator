@@ -188,6 +188,22 @@ def test_start_no_run_command_exits_nonzero(fleet_dir: Path) -> None:
     assert main(["start", "restarted", "--root", str(fleet_dir)]) == 1
 
 
+def test_project_checks_drops_head_when_worktree_changes_mid_run(
+    fleet_dir: Path, monkeypatch
+) -> None:
+    # If the worktree changes while gates run (then reverts), the stamped HEAD
+    # must be cleared so --changed-only can never reuse the result.
+    import projects_orchestrator.__main__ as cli
+    from projects_orchestrator.descriptor import load_descriptor
+
+    descriptor = load_descriptor(make_project(fleet_dir, "alpha", tooling={"lint": "true"}))
+    heads = iter(["a" * 40, "b" * 40])  # before-run != after-run
+    monkeypatch.setattr(cli, "clean_worktree_head", lambda _d: next(heads))
+    (pair,) = cli._project_checks(descriptor, ("lint",), None, changed_only=False)
+    result, _reused = pair
+    assert result.head == ""
+
+
 def test_fleet_file_drives_discovery(fleet_dir: Path, tmp_path: Path, capsys) -> None:
     make_project(fleet_dir, "alpha")
     fleet_file = tmp_path / "fleet.yaml"

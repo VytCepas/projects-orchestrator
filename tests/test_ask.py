@@ -66,6 +66,33 @@ def test_parse_intent_reply_ignores_blank_target() -> None:
     )
 
 
+def test_parse_intent_reply_rejects_memory_without_args() -> None:
+    # An argless memory/run reply would crash the dispatcher on args[0].
+    assert parse_intent_reply(json.dumps({"verb": "memory"})) is None
+
+
+def test_parse_intent_reply_rejects_run_with_blank_arg() -> None:
+    assert parse_intent_reply(json.dumps({"verb": "run", "args": ["  "]})) is None
+
+
+def test_parse_intent_reply_accepts_memory_with_args() -> None:
+    intent = parse_intent_reply(json.dumps({"verb": "memory", "args": ["postgres"]}))
+    assert intent == Intent(verb="memory", args=("postgres",))
+
+
+def test_extract_text_prefers_first_text_block() -> None:
+    # Thinking-enabled models put a thinking block first; take the text block.
+    from projects_orchestrator.ask import _extract_text
+
+    payload = {
+        "content": [
+            {"type": "thinking", "thinking": "hmm"},
+            {"type": "text", "text": '{"verb": "status"}'},
+        ]
+    }
+    assert _extract_text(payload) == '{"verb": "status"}'
+
+
 def test_build_prompt_lists_projects() -> None:
     assert "alpha, beta" in build_prompt("q", ("alpha", "beta"))
 

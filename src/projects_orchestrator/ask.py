@@ -116,12 +116,21 @@ def parse_intent_reply(text: str) -> Intent | None:
     if verb not in ALLOWED_VERBS:
         return None
     target = raw.get("target")
-    args = raw.get("args")
+    raw_args = raw.get("args")
+    args = tuple(str(a) for a in raw_args) if isinstance(raw_args, list) else ()
+    # Verbs that dispatch on args[0] must carry a non-empty first arg; the
+    # deterministic parser guarantees this, but a model reply might not, and an
+    # argless memory/run would crash the dispatcher.
+    if verb in _ARGS_REQUIRED and (not args or not args[0].strip()):
+        return None
     return Intent(
         verb=verb,
         target=str(target) if isinstance(target, str) and target.strip() else None,
-        args=tuple(str(a) for a in args) if isinstance(args, list) else (),
+        args=args,
     )
+
+
+_ARGS_REQUIRED = frozenset({"memory", "run"})
 
 
 def _api_complete(model: str, prompt: str, api_key: str) -> str:
@@ -147,9 +156,21 @@ def _api_complete(model: str, prompt: str, api_key: str) -> str:
             payload = json.loads(response.read().decode("utf-8"))
     except (urllib.error.URLError, OSError, ValueError):
         return ""
+    return _extract_text(payload)
+
+
+def _extract_text(payload: object) -> str:
+    """Pull the answer text from a Messages API payload (pure); ``""`` if none.
+
+    Returns the first *text* content block: thinking-enabled models emit a
+    leading ``thinking`` block, so ``content[0]`` is not necessarily the text.
+    """
     content = payload.get("content") if isinstance(payload, dict) else None
     if not isinstance(content, list) or not content:
         return ""
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "text":
+            return str(block.get("text", ""))
     first = content[0]
     return str(first.get("text", "")) if isinstance(first, dict) else ""
 

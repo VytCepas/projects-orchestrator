@@ -49,6 +49,13 @@ def test_parse_command_maps_verb(text: str, verb: str) -> None:
     assert parse_command(text).verb == verb
 
 
+def test_parse_command_ask_requires_exact_token() -> None:
+    # "/asked why is ci red" must not be parsed as an /ask with question
+    # "ed why is ci red"; only the exact /ask token opens ask mode.
+    assert parse_command("/ask why is ci red").verb == "ask"
+    assert parse_command("/asked why is ci red").verb != "ask"
+
+
 def test_parse_command_checks_expands_to_both_tasks() -> None:
     assert parse_command("checks").args == ("lint", "test")
 

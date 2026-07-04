@@ -12,7 +12,7 @@ import argparse
 import datetime as _dt
 import json
 import sys
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 from projects_orchestrator import __version__, cache
@@ -138,7 +138,14 @@ def _project_checks(
             if (result := _reusable_pass(cached, task, head)) is not None
         }
     to_run = tuple(task for task in tasks if task not in reusable)
-    fresh = dict(zip(to_run, collect_checks(descriptor, to_run, head=head), strict=True))
+    fresh_results = collect_checks(descriptor, to_run, head=head)
+    # Re-verify the worktree did not change while the gates ran: a tracked file
+    # edited mid-run and reverted would otherwise stamp a pass under `head` that
+    # a fresh run at that same HEAD would not reproduce. On any change, drop the
+    # recorded identity so --changed-only can never reuse these results.
+    if head and clean_worktree_head(descriptor) != head:
+        fresh_results = [replace(result, head="") for result in fresh_results]
+    fresh = dict(zip(to_run, fresh_results, strict=True))
     return [
         (reusable[task], True) if task in reusable else (fresh[task], False) for task in tasks
     ]

@@ -75,6 +75,31 @@ def test_load_fleet_config_invalid_yaml_yields_empty(tmp_path: Path) -> None:
     assert load_fleet_config(fleet_file).roots == ()
 
 
+def test_load_fleet_config_invalid_yaml_warns(tmp_path: Path) -> None:
+    fleet_file = tmp_path / "fleet.yaml"
+    fleet_file.write_text("{[", encoding="utf-8")
+    assert load_fleet_config(fleet_file).warnings != ()
+
+
+def test_load_fleet_config_unreadable_path_warns(tmp_path: Path) -> None:
+    # A misspelled --fleet path must not look identical to an empty fleet.
+    config = load_fleet_config(tmp_path / "does-not-exist.yaml")
+    assert config.warnings != ()
+    assert "cannot read fleet file" in config.warnings[0]
+
+
+def test_discover_warns_on_duplicate_project_names(tmp_path: Path) -> None:
+    make_project(tmp_path / "root-a", "app")
+    make_project(tmp_path / "root-b", "app")
+    fleet = discover(FleetConfig(roots=(tmp_path / "root-a", tmp_path / "root-b")))
+    assert any("duplicate project name 'app'" in w for w in fleet.warnings)
+
+
+def test_discover_surfaces_fleet_config_warnings(tmp_path: Path) -> None:
+    config = load_fleet_config(tmp_path / "missing.yaml")
+    assert any("cannot read fleet file" in w for w in discover(config).warnings)
+
+
 def test_default_fleet_config_prefers_local_fleet_file(tmp_path: Path) -> None:
     (tmp_path / "fleet.yaml").write_text('roots: ["kids"]\n', encoding="utf-8")
     assert default_fleet_config(tmp_path).roots == (tmp_path / "kids",)
