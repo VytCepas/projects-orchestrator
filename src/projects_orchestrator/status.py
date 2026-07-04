@@ -98,3 +98,24 @@ def collect_status(descriptor: ProjectDescriptor) -> ProjectStatus:
         behind=behind,
         last_commit=_git(path, "log", "-1", "--format=%cI"),
     )
+
+
+def clean_worktree_head(descriptor: ProjectDescriptor) -> str:
+    """Return the HEAD commit SHA when the worktree is clean; else empty.
+
+    The empty string means "no stable identity": a dirty worktree, a
+    non-git directory, or any probe failure. Callers use this to decide
+    whether a cached check result can stand in for a fresh run — an empty
+    identity never matches, so those projects always re-run.
+
+    Args:
+        descriptor: The project to identify.
+
+    Returns:
+        The 40-char SHA for a clean checkout, or ``""``.
+    """
+    head = _git(descriptor.path, "rev-parse", "HEAD")
+    porcelain = _git(descriptor.path, "status", "--porcelain")
+    if head is None or porcelain is None or porcelain:
+        return ""
+    return head
