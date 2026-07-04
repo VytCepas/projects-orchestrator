@@ -32,6 +32,9 @@ from projects_orchestrator.observability import filter_since, load_events
 from projects_orchestrator.pool import map_ordered
 from projects_orchestrator.registry import Fleet, FleetConfig, discover
 from projects_orchestrator.status import collect_status
+from projects_orchestrator.supervisor import logs as run_logs
+from projects_orchestrator.supervisor import start as run_start
+from projects_orchestrator.supervisor import stop as run_stop
 from projects_orchestrator.upgrade import upgrade_plan
 
 HELP_TEXT = """\
@@ -41,6 +44,9 @@ commands:
   test [project|all]      run declared test gate(s)
   checks [project|all]    run lint + test gates
   run <task> [project|all]  run any declared tooling task
+  start <project>         launch the project's run_command (detached)
+  stop <project>          terminate the supervised process
+  logs <project>          tail the captured run output
   memory <query>          search every project's memory files
   drift [project|all]     scaffold drift vs the recorded manifest
   doctor [project|all]    diagnose contract-v1 conformance
@@ -60,6 +66,9 @@ _TASK_VERBS = {"lint": ("lint",), "test": ("test",), "checks": ("lint", "test")}
 
 # Verbs that take an optional project target (default "all").
 _TARGET_VERBS = {"drift", "doctor", "audit", "ci", "upgrade", "cloud", "events", "detail"}
+
+# Verbs that require exactly one project target.
+_PROJECT_VERBS = {"start", "stop", "logs"}
 
 
 @dataclass(frozen=True)
@@ -112,6 +121,8 @@ def parse_command(text: str) -> Intent:
         return Intent(verb="memory", args=(" ".join(rest),))
     if verb in _TARGET_VERBS:
         return Intent(verb=verb, target=rest[0] if rest else "all")
+    if verb in _PROJECT_VERBS:
+        return Intent(verb=verb, target=rest[0] if rest else None)
     if verb in {"projects", "refresh", "help", "quit", "exit"}:
         return Intent(verb="quit" if verb == "exit" else verb)
     return Intent(verb="unknown", args=(stripped,))
@@ -304,6 +315,24 @@ def _dispatch_detail(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
     yield from render_detail(build_detail(selected[0], cached.get(selected[0].name)))
 
 
+def _dispatch_supervise(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
+    """Start/stop/tail one project's supervised process."""
+    if intent.target is None or intent.target == "all":
+        yield f"usage: {intent.verb} <project>"
+        return
+    selected = _select_projects(ctx, intent.target)
+    if isinstance(selected, str):
+        yield selected
+        return
+    descriptor = selected[0]
+    if intent.verb == "start":
+        yield run_start(descriptor)
+    elif intent.verb == "stop":
+        yield run_stop(descriptor)
+    else:
+        yield from run_logs(descriptor)
+
+
 def _dispatch_ask(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
     """Resolve /ask to an existing intent (opt-in), then dispatch it."""
     import os
@@ -348,6 +377,9 @@ _ENGINE = {
     "cloud": _dispatch_cloud,
     "events": _dispatch_events,
     "detail": _dispatch_detail,
+    "start": _dispatch_supervise,
+    "stop": _dispatch_supervise,
+    "logs": _dispatch_supervise,
     "ask": _dispatch_ask,
     "upgrade": _dispatch_upgrade,
 }
