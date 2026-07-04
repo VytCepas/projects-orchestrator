@@ -17,3 +17,8 @@ projects: []
 # Directory-name patterns (fnmatch) to skip while scanning roots.
 exclude: []
 #  - archive-*
+
+# Also govern plain git repos (no .claude/config.yaml) with a minimal
+# inferred descriptor: language + lint/test/run from justfile / package.json
+# scripts / pyproject / Cargo.toml / go.mod conventions. Off by default.
+include_plain_repos: false

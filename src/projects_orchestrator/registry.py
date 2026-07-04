@@ -20,6 +20,7 @@ from pathlib import Path
 
 import yaml
 
+from projects_orchestrator.adapters.generic import infer_descriptor
 from projects_orchestrator.descriptor import ProjectDescriptor, load_descriptor
 
 FLEET_FILENAME = "fleet.yaml"
@@ -33,12 +34,15 @@ class FleetConfig:
         roots: Directories scanned one level deep for projects.
         projects: Explicit project paths (used even when not under a root).
         exclude: ``fnmatch`` patterns on directory names to skip.
+        include_plain_repos: Also govern git repos without a project-init
+            descriptor, via conservative inference (off by default).
         source: The fleet file this config came from, if any.
     """
 
     roots: tuple[Path, ...] = ()
     projects: tuple[Path, ...] = ()
     exclude: tuple[str, ...] = ()
+    include_plain_repos: bool = False
     source: Path | None = None
 
 
@@ -104,6 +108,7 @@ def load_fleet_config(fleet_file: Path) -> FleetConfig:
         roots=paths("roots"),
         projects=paths("projects"),
         exclude=tuple(str(p) for p in exclude) if isinstance(exclude, list) else (),
+        include_plain_repos=bool(raw.get("include_plain_repos", False)),
         source=fleet_file,
     )
 
@@ -163,6 +168,8 @@ def discover(config: FleetConfig) -> Fleet:
             continue
         seen.add(resolved)
         descriptor = load_descriptor(resolved)
+        if descriptor is None and config.include_plain_repos:
+            descriptor = infer_descriptor(resolved)
         if descriptor is None:
             if candidate in config.projects:
                 warnings.append(f"not a project-init project: {resolved}")
