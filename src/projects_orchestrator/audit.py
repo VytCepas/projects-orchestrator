@@ -96,10 +96,19 @@ def _drift_finding(descriptor: ProjectDescriptor) -> AuditFinding | None:
     return AuditFinding(descriptor.name, "drift", WARN, f"{changed} file(s) diverged from scaffold")
 
 
+def _index_mentions(index_text: str, filename: str) -> bool:
+    """Whether the index references ``filename`` on a filename boundary.
+
+    A plain substring test reports ``a.md`` as indexed whenever ``data.md`` is
+    listed; anchoring on a non-name character (or start/end) avoids that.
+    """
+    return bool(re.search(rf"(?<![\w.-]){re.escape(filename)}(?![\w.-])", index_text))
+
+
 def _read_index(memory_path: Path) -> str | None:
     """Read ``MEMORY.md`` text for index checks; ``None`` when unreadable."""
     try:
-        return (memory_path / "MEMORY.md").read_text(encoding="utf-8")
+        return (memory_path / "MEMORY.md").read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
 
@@ -122,7 +131,7 @@ def _memory_findings(descriptor: ProjectDescriptor) -> list[AuditFinding]:
             )
         if _is_empty_template(mem.body):
             findings.append(AuditFinding(name, "memory", WARN, f"{mem.path.name}: empty template"))
-        if index_text is not None and mem.path.name not in index_text:
+        if index_text is not None and not _index_mentions(index_text, mem.path.name):
             findings.append(AuditFinding(name, "memory", WARN, f"{mem.path.name}: not indexed"))
     if not findings:
         findings.append(

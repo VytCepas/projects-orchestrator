@@ -219,7 +219,10 @@ def load_descriptor(project_dir: Path) -> ProjectDescriptor | None:
     """
     config_path = project_dir / CONFIG_RELPATH
     try:
-        text = config_path.read_text(encoding="utf-8")
+        # errors="replace": a config saved in a non-UTF-8 encoding degrades to
+        # a slightly-garbled descriptor rather than dropping the project from
+        # discovery entirely (the engine never raises — ADR-003).
+        text = config_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
     return parse_config(text, project_dir)

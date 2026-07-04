@@ -46,6 +46,21 @@ def test_audit_flags_unindexed_memory_file(fleet_dir: Path) -> None:
     assert _find(_report(fleet_dir), "memory", "not indexed")
 
 
+def test_audit_unindexed_check_uses_filename_boundary(fleet_dir: Path) -> None:
+    # "a.md" is a substring of the indexed "data.md"; a plain substring test
+    # would wrongly consider a.md indexed. The boundary match must still warn.
+    project = make_project(fleet_dir, "alpha")
+    memory_dir = project / ".claude" / "memory"
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    frontmatter = "---\nname: N\ntype: project\n---\n\n- **Fact:** x.\n"
+    (memory_dir / "data.md").write_text(frontmatter, encoding="utf-8")
+    (memory_dir / "a.md").write_text(frontmatter, encoding="utf-8")
+    (memory_dir / "MEMORY.md").write_text("- [Data](data.md)\n", encoding="utf-8")
+    messages = [f.message for f in _find(_report(fleet_dir), "memory", "not indexed")]
+    assert any(m.startswith("a.md:") for m in messages)
+    assert not any(m.startswith("data.md:") for m in messages)
+
+
 def test_audit_freshness_never_checked_warns(fleet_dir: Path) -> None:
     make_project(fleet_dir, "alpha")
     assert _find(_report(fleet_dir), "freshness", "never checked")

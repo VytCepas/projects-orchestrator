@@ -181,7 +181,7 @@ def _dispatch_check(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
 
 def _dispatch_status(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
     """Show the fleet table, or one project's git health."""
-    if intent.target is None:
+    if intent.target in (None, "all"):
         snapshots = fleet_snapshots(ctx.fleet, ctx.cache_file)
         yield from render_table(fleet_rows(snapshots)).splitlines()
         return
@@ -196,10 +196,14 @@ def _dispatch_status(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
 
 def _dispatch_memory(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
     """Search the whole fleet's memory."""
+    query = intent.args[0] if intent.args else ""
+    if not query.strip():
+        yield "usage: memory <query>"
+        return
     memories = [load_project_memory(d) for d in ctx.fleet.descriptors]
-    hits = search_memory(memories, intent.args[0])
+    hits = search_memory(memories, query)
     if not hits:
-        yield f"no memory matches for: {intent.args[0]}"
+        yield f"no memory matches for: {query}"
         return
     for hit in hits[:50]:
         location = f"{hit.file.project}/{hit.file.path.name}"

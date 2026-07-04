@@ -397,7 +397,10 @@ def _cmd_start(args: argparse.Namespace) -> int:
         return 2
     message = run_start(descriptor)
     print(message)
-    return 0 if "started" in message or "already running" in message else 1
+    # Match the outcome on the "(pid " anchor the success lines carry, so a
+    # project named e.g. "restarted-service" whose failure line contains
+    # "started" as a substring is not misread as success.
+    return 0 if "(pid " in message else 1
 
 
 def _cmd_stop(args: argparse.Namespace) -> int:
@@ -425,7 +428,10 @@ def _cmd_snapshot(args: argparse.Namespace) -> int:
     snapshots = fleet_snapshots(fleet)
     if args.json:
         return _emit_json([asdict(s) for s in snapshots])
-    if args.html:
+    # -o implies --html: writing the text table to a .html file the operator
+    # named would silently produce a non-page, so treat an output path as a
+    # request for the HTML document.
+    if args.html or args.output:
         generated_at = _dt.datetime.now(tz=_dt.UTC).isoformat(timespec="seconds")
         document = render_html(fleet_rows(snapshots), generated_at)
         if args.output:

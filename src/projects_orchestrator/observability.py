@@ -122,7 +122,7 @@ def load_events(descriptor: ProjectDescriptor) -> ProjectEvents:
             return ProjectEvents(
                 project=descriptor.name, path=path, warnings=("usage log too large to read",)
             )
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ProjectEvents(
             project=descriptor.name, path=path, warnings=("no observability log",)

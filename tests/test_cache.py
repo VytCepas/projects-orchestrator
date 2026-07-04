@@ -58,3 +58,33 @@ def test_save_to_unwritable_path_still_returns_merge(tmp_path: Path) -> None:
 def test_cache_path_honors_xdg_cache_home(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
     assert cache_path() == tmp_path / "projects-orchestrator" / "checks.json"
+
+
+def test_load_type_corrupt_entry_is_dropped(tmp_path: Path) -> None:
+    # Valid JSON, but status/checked_at have the wrong types (e.g. a hand edit
+    # or bit flip). Loading must not surface a value that crashes renderers.
+    path = tmp_path / "checks.json"
+    path.write_text(
+        '{"app":{"lint":{"project":"app","task":"lint","status":7,"checked_at":5}}}',
+        encoding="utf-8",
+    )
+    assert load_results(path) == {}
+
+
+def test_load_keeps_valid_entry_beside_corrupt_one(tmp_path: Path) -> None:
+    path = tmp_path / "checks.json"
+    save_results([_result(task="lint")], path)
+    raw = path.read_text(encoding="utf-8").rstrip().removesuffix("}")
+    path.write_text(raw + ', "bad": {"lint": {"status": 9}}}', encoding="utf-8")
+    loaded = load_results(path)
+    assert loaded["alpha"]["lint"].status == "pass"
+    assert "bad" not in loaded
+
+
+def test_load_integer_duration_is_coerced_to_float(tmp_path: Path) -> None:
+    path = tmp_path / "checks.json"
+    path.write_text(
+        '{"app":{"lint":{"project":"app","task":"lint","status":"pass","duration":3}}}',
+        encoding="utf-8",
+    )
+    assert load_results(path)["app"]["lint"].duration == 3.0

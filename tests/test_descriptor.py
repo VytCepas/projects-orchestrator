@@ -61,6 +61,15 @@ def test_load_descriptor_returns_none_for_non_project(tmp_path: Path) -> None:
     assert load_descriptor(tmp_path) is None
 
 
+def test_load_descriptor_non_utf8_config_does_not_raise(tmp_path: Path) -> None:
+    # A config saved in a non-UTF-8 encoding must degrade, not crash discovery.
+    project = tmp_path / "cafe"
+    (project / ".claude").mkdir(parents=True)
+    (project / ".claude" / "config.yaml").write_bytes(b"project:\n  name: caf\xe9\n")
+    descriptor = load_descriptor(project)
+    assert descriptor is not None
+
+
 def test_parse_config_invalid_yaml_degrades_with_warning(tmp_path: Path) -> None:
     descriptor = parse_config("{unclosed: [", tmp_path)
     assert descriptor.warnings != ()

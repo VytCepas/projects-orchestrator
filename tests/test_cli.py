@@ -170,6 +170,24 @@ def test_snapshot_json_has_descriptor(fleet_dir: Path, capsys) -> None:
     assert json.loads(capsys.readouterr().out)[0]["descriptor"]["name"] == "alpha"
 
 
+def test_snapshot_output_path_writes_html_without_html_flag(
+    fleet_dir: Path, tmp_path: Path
+) -> None:
+    # -o implies --html: an operator naming a .html file must get the page,
+    # not a silently-discarded text table.
+    make_project(fleet_dir, "alpha")
+    out = tmp_path / "fleet.html"
+    assert main(["snapshot", "--root", str(fleet_dir), "-o", str(out)]) == 0
+    assert out.read_text(encoding="utf-8").lstrip().startswith("<")
+
+
+def test_start_no_run_command_exits_nonzero(fleet_dir: Path) -> None:
+    # A project whose name contains "started" as a substring (e.g. "restarted")
+    # must still report failure when it has no run_command.
+    make_project(fleet_dir, "restarted")
+    assert main(["start", "restarted", "--root", str(fleet_dir)]) == 1
+
+
 def test_fleet_file_drives_discovery(fleet_dir: Path, tmp_path: Path, capsys) -> None:
     make_project(fleet_dir, "alpha")
     fleet_file = tmp_path / "fleet.yaml"

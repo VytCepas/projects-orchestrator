@@ -63,6 +63,18 @@ def test_drift_summary_clean_is_none(fleet_dir: Path) -> None:
     assert compute_drift(_project_with_manifest(fleet_dir)).summary == "none"
 
 
+def test_drift_reports_unhashable_tracked_file_as_modified(fleet_dir: Path, monkeypatch) -> None:
+    # A tracked file that exists but cannot be hashed (too large / unreadable)
+    # must not be silently reported as clean — it cannot match its recorded SHA.
+    import projects_orchestrator.drift as drift_mod
+
+    descriptor = _project_with_manifest(fleet_dir)
+    monkeypatch.setattr(drift_mod, "_sha256", lambda _path: None)
+    report = compute_drift(descriptor)
+    assert report.modified == ("README.md",)
+    assert report.status == "drift"
+
+
 def test_hook_health_no_hooks_dir_is_dash(fleet_dir: Path) -> None:
     descriptor = load_descriptor(make_project(fleet_dir, "alpha"))
     assert hook_health(descriptor) == "-"

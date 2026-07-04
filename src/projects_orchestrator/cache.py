@@ -51,15 +51,40 @@ def load_results(path: Path | None = None) -> dict[str, dict[str, CheckResult]]:
         for task, entry in tasks.items():
             if not isinstance(entry, dict):
                 continue
-            try:
-                result = CheckResult(**{k: entry[k] for k in _RESULT_FIELDS if k in entry})
-            except TypeError:
+            result = _coerce_result(entry)
+            if result is None:
                 continue
             results.setdefault(str(project), {})[str(task)] = result
     return results
 
 
-_RESULT_FIELDS = ("project", "task", "status", "detail", "duration", "checked_at", "head")
+_STR_FIELDS = ("project", "task", "status", "detail", "checked_at", "head")
+_FLOAT_FIELDS = ("duration",)
+
+
+def _coerce_result(entry: dict[str, object]) -> CheckResult | None:
+    """Build a :class:`CheckResult` from a cache entry; ``None`` if malformed.
+
+    Field *types* are validated, not just presence: a valid-JSON but
+    type-corrupt entry (e.g. ``status`` as an int from a hand edit or bit
+    flip) is dropped rather than loaded, so it cannot crash the renderers
+    downstream — a corrupt cache reads as empty (ADR-003).
+    """
+    values: dict[str, object] = {}
+    for key in _STR_FIELDS:
+        if key in entry:
+            if not isinstance(entry[key], str):
+                return None
+            values[key] = entry[key]
+    for key in _FLOAT_FIELDS:
+        if key in entry:
+            if not isinstance(entry[key], (int, float)) or isinstance(entry[key], bool):
+                return None
+            values[key] = float(entry[key])  # type: ignore[arg-type]
+    try:
+        return CheckResult(**values)  # type: ignore[arg-type]
+    except TypeError:
+        return None
 
 
 def save_results(

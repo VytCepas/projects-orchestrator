@@ -29,7 +29,9 @@ CI_RUNNING = "running"
 
 # gh reads the repo from the working directory's remote; both degrade offline.
 _CI_COMMAND = "gh run list --limit 1 --json status,conclusion"
-_PR_COMMAND = "gh pr list --state open --json number"
+# --limit overrides gh's default page size of 30, which would silently cap the
+# open-PR count exactly where a large backlog is the signal that matters.
+_PR_COMMAND = "gh pr list --state open --json number --limit 1000"
 
 _GH_TIMEOUT = 20.0
 
