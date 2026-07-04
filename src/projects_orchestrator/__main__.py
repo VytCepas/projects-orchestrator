@@ -27,6 +27,7 @@ from projects_orchestrator.descriptor import ProjectDescriptor
 from projects_orchestrator.doctor import diagnose
 from projects_orchestrator.drift import compute_drift
 from projects_orchestrator.fleet import fleet_rows, fleet_snapshots, render_table
+from projects_orchestrator.html import render_html
 from projects_orchestrator.memory import load_project_memory, search_memory
 from projects_orchestrator.observability import filter_since, load_events
 from projects_orchestrator.pool import map_ordered
@@ -419,11 +420,24 @@ def _cmd_logs(args: argparse.Namespace) -> int:
 
 
 def _cmd_snapshot(args: argparse.Namespace) -> int:
-    """Dump the full joined fleet view."""
+    """Dump the full joined fleet view (text, JSON, or standalone HTML)."""
     fleet = _discover(args)
     snapshots = fleet_snapshots(fleet)
     if args.json:
         return _emit_json([asdict(s) for s in snapshots])
+    if args.html:
+        generated_at = _dt.datetime.now(tz=_dt.UTC).isoformat(timespec="seconds")
+        document = render_html(fleet_rows(snapshots), generated_at)
+        if args.output:
+            try:
+                Path(args.output).write_text(document, encoding="utf-8")
+            except OSError as exc:
+                print(f"cannot write {args.output}: {exc}", file=sys.stderr)
+                return 1
+            print(f"wrote {args.output}")
+        else:
+            print(document, end="")
+        return 0
     print(render_table(fleet_rows(snapshots)))
     return 0
 
@@ -538,6 +552,12 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.choices["upgrade-plan"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["upgrade-plan"].add_argument(
         "--apply", action="store_true", help="dispatch the upgrade workflow for outdated projects"
+    )
+    sub.choices["snapshot"].add_argument(
+        "--html", action="store_true", help="render a self-contained HTML dashboard"
+    )
+    sub.choices["snapshot"].add_argument(
+        "-o", "--output", help="write the HTML to this file instead of stdout"
     )
     sub.choices["checks"].add_argument(
         "--task", action="append", help="gate to run (repeatable; default: lint, test)"

@@ -25,6 +25,7 @@ projects-orchestrator cloud-status [project]  # deploy/runtime status (contract-
 projects-orchestrator events [project]    # guard/usage events from observability logs (--since ISO)
 projects-orchestrator upgrade-plan        # scaffold version vs upstream (--apply to trigger upgrades)
 projects-orchestrator snapshot --json     # full machine-readable fleet state
+projects-orchestrator snapshot --html -o fleet.html  # self-contained HTML dashboard
 projects-orchestrator controller          # deterministic command REPL
 projects-orchestrator tui                 # terminal UI (needs the tui extra)
 ```
