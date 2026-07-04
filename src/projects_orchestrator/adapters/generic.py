@@ -51,7 +51,13 @@ def _just_recipes(project_dir: Path) -> set[str]:
     text = _read_text(project_dir / "justfile")
     return {
         match.group(1)
-        for match in re.finditer(r"^([A-Za-z][\w-]*)(?:\s+[\w-]+)*\s*:(?!=)", text, re.MULTILINE)
+        for match in re.finditer(
+            # Horizontal whitespace only — `\s` would cross newlines and let a
+            # bare `set export` line swallow the next line's recipe name.
+            r"^([A-Za-z][\w-]*)(?:[^\S\n]+[\w-]+)*[^\S\n]*:(?!=)",
+            text,
+            re.MULTILINE,
+        )
     }
 
 

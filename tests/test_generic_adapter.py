@@ -81,6 +81,16 @@ def test_infer_justfile_ignores_assignments(fleet_dir: Path) -> None:
     assert infer_descriptor(repo).tooling == {"lint": "just lint"}
 
 
+def test_infer_justfile_recipe_after_set_directive(fleet_dir: Path) -> None:
+    repo = _plain_repo(fleet_dir, "j", {"justfile": "set export\n\ntest:\n    pytest -q\n"})
+    assert infer_descriptor(repo).tooling == {"test": "just test"}
+
+
+def test_infer_justfile_bare_word_is_not_a_recipe(fleet_dir: Path) -> None:
+    repo = _plain_repo(fleet_dir, "j", {"justfile": "run\nbuild:\n    make\n"})
+    assert infer_descriptor(repo).tooling == {}
+
+
 def test_infer_no_manifest_means_no_commands(fleet_dir: Path) -> None:
     repo = _plain_repo(fleet_dir, "bare")
     assert infer_descriptor(repo).tooling == {}
