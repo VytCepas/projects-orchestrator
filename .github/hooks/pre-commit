@@ -1,11 +1,70 @@
 #!/usr/bin/env bash
-# pre-commit hook: scan staged changes for secrets with gitleaks (ADR-007).
+# pre-commit hook (ADR-007). Two gates, fastest-feedback-first:
+#   1. Lint: run `just lint` so a human committing from a terminal/IDE is held
+#      to the SAME static gate CI runs (ruff + shfmt + shellcheck). The Claude
+#      pre_commit_gate.sh only fires for agent-driven commits; this catches
+#      everyone. Fail-CLOSED when the tooling is present (block the commit,
+#      bypassable with `git commit --no-verify`); fail-open when `just`/the
+#      recipe is absent so a fresh clone without the toolchain still commits.
+#   2. Secrets: scan staged changes with gitleaks. Fail-OPEN if gitleaks is
+#      missing — the CI secret-scan job is the hard backstop.
 # Install: .claude/scripts/install_hooks.sh
-#
-# Fail-open by design: if gitleaks is not installed the hook warns and lets
-# the commit through — the CI secret-scan job is the hard backstop that
-# scans full history and blocks the merge.
 
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+
+# 1. Lint gate — same command surface as CI and the agent commit gate (PI-139).
+if command -v just >/dev/null 2>&1 && [ -f "$REPO_ROOT/justfile" ] &&
+  (cd "$REPO_ROOT" && just --show lint >/dev/null 2>&1); then
+  # Lint exactly the STAGED snapshot, not the working tree: otherwise an unstaged
+  # fix could mask a staged lint error (or unstaged WIP could fail a clean
+  # commit). Temporarily strip unstaged tracked changes with a saved patch — NOT
+  # `git stash`, whose pop merges and leaves conflict markers when the same file
+  # is both staged and unstaged. A patch reverse/forward is conflict-free here
+  # because `just lint` is read-only. A trap always restores; if the tree can't
+  # be isolated safely (e.g. binary diffs, apply failure), fall back to linting
+  # the worktree rather than risk touching it. No unstaged changes → the worktree
+  # already equals the index, so skip the dance entirely.
+  _patch=""
+  _restore() {
+    if [ -n "$_patch" ]; then
+      git apply --whitespace=nowarn "$_patch" >/dev/null 2>&1 || true
+      rm -f "$_patch"
+      _patch=""
+    fi
+  }
+  if ! git diff --quiet 2>/dev/null; then
+    _p="$(mktemp)"
+    if git diff --binary --no-color >"$_p" 2>/dev/null &&
+      git apply -R --whitespace=nowarn "$_p" >/dev/null 2>&1; then
+      _patch="$_p"
+      trap _restore EXIT
+    else
+      rm -f "$_p"
+    fi
+  fi
+  if ! (cd "$REPO_ROOT" && just lint); then
+    _restore
+    trap - EXIT
+    echo "" >&2
+    echo "❌ pre-commit: 'just lint' failed — fix the errors above before committing." >&2
+    # `just lint` lints the whole tree, so untracked files are included too.
+    # That's usually what you want, but it means an untracked file unrelated to
+    # this commit can trip the gate — call that out so it's diagnosable rather
+    # than baffling.
+    if [ -n "$(git ls-files --others --exclude-standard 2>/dev/null)" ]; then
+      echo "   Note: untracked files are linted too; if the error is in one, it isn't part" >&2
+      echo "   of this commit — check 'git status' (or 'git stash -u' them, then retry)." >&2
+    fi
+    echo "   (bypass in an emergency with: git commit --no-verify)" >&2
+    exit 1
+  fi
+  _restore
+  trap - EXIT
+fi
+
+# 2. Secret scan.
 if ! command -v gitleaks >/dev/null 2>&1; then
   echo "WARNING: gitleaks not installed — skipping local secret scan." >&2
   echo "  CI will still scan; install for fast local feedback:" >&2

@@ -4,6 +4,20 @@ globs: ["**/*.ts", "**/*.tsx", "tsconfig.json", "tsconfig.base.json"]
 alwaysApply: false
 ---
 
+## TypeScript only — no plain JavaScript
+
+Project source is **TypeScript, not JavaScript**. Write `.ts`/`.tsx`; do not add
+`.js`/`.jsx` source files. This is a deliberate safety choice: the strict gates
+below only see files `tsconfig.json` includes (`**/*.ts`, `**/*.tsx`), so a plain
+`.js` file silently escapes `tsc`, the type-aware eslint rules, and the coverage
+gate entirely — untyped, unchecked code hiding inside a "green" build.
+
+Do **not** re-open that hole: never set `allowJs` in `tsconfig*.json`, and never
+widen the project `include` (or an eslint `files` block) to `**/*.js`. The only
+`.js`/`.mjs`/`.cjs` files in a scaffold are tooling configs (e.g.
+`eslint.config.mjs`), which `eslint.config.mjs` lints with type-checking
+disabled on purpose — that carve-out is for config, not for product code.
+
 ## TypeScript environment
 
 ```bash

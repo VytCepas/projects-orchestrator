@@ -14,9 +14,23 @@ cargo audit                                       # dependency CVE/advisory scan
 cargo cyclonedx --format json                     # CycloneDX SBOM (`just sbom`, #574) — release.yml attaches it to Releases
 cargo deny check licenses                         # license compliance (`just license`, #579) — allow-list in deny.toml (denies GPL/AGPL)
 cargo test                                        # property-based tests with proptest (`just fuzz`, #580)
-cargo clippy -- -D warnings -D clippy::pedantic   # pedantic + cognitive-complexity gate per clippy.toml
+cargo clippy -- -D warnings -D clippy::pedantic -D clippy::cognitive_complexity -D missing_docs   # lint + complexity + public-API docs
 cargo fmt --check                                 # verifies only; `cargo fmt` (no flag) writes changes
 ```
+
+## Enforced complexity and docs (parity with Python's ruff gate)
+
+`just lint` denies two extra lints beyond `-D pedantic`:
+
+- `clippy::cognitive_complexity` — a nursery lint (so **not** enabled by
+  `-D pedantic` on its own) that activates the `cognitive-complexity-threshold`
+  in `clippy.toml`. Mirrors ruff's `max-complexity = 10`.
+- `missing_docs` — every public item needs a doc comment (`///`), and every
+  crate needs a crate-level `//!` doc. This is the Rust analog to ruff's `D`
+  gate (which requires module + public-symbol docstrings) — so a fresh
+  `cargo init` project needs a `//! …` line at the top of `main.rs`/`lib.rs`
+  before `just lint` passes, exactly as a new Python module needs a docstring.
+  Private items are exempt.
 
 ## Property-based testing (proptest, #580)
 

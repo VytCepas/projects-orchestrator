@@ -374,7 +374,9 @@ write_bullets() {
   echo
   echo "## Acceptance criteria"
   echo
-  write_list "Define acceptance criteria before implementation" "${ACCEPTANCE[@]}"
+  # ${arr[@]+...} guard: expanding an empty array under `set -u` is fatal on
+  # bash < 4.4 (macOS ships 3.2), so a run without --acceptance would die here.
+  write_list "Define acceptance criteria before implementation" ${ACCEPTANCE[@]+"${ACCEPTANCE[@]}"}
   echo
   echo "## Definition of Ready"
   echo
@@ -429,7 +431,10 @@ if [ -n "$MILESTONE" ]; then
   CREATE_ARGS+=(--milestone "$MILESTONE")
 fi
 
-ISSUE_URL=$(gh issue create "${CREATE_ARGS[@]}" "${LABEL_ARGS[@]}")
+# LABEL_ARGS stays empty when the label is missing and cannot be created (the
+# documented continue-without-label fallback) — guard the expansion so that
+# path survives `set -u` on bash < 4.4 (macOS ships 3.2).
+ISSUE_URL=$(gh issue create "${CREATE_ARGS[@]}" ${LABEL_ARGS[@]+"${LABEL_ARGS[@]}"})
 ISSUE_NUMBER=$(echo "$ISSUE_URL" | grep -oE '[0-9]+$')
 
 # ---------------------------------------------------------------------------
@@ -529,6 +534,7 @@ PYEOF
   fi
 
   if [ -z "$item_id" ]; then
+    rm -f "$pdata_file"
     echo "Warning: could not add #$issue_num to project #$project_num — skipping field sync" >&2
     return 0
   fi

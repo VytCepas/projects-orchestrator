@@ -62,8 +62,11 @@ else:
 
 
 def _run(cmd: list[str]) -> tuple[int, str]:
+    # Per-call timeout must stay well below the hook budget (settings.json
+    # "timeout": 60): a PreToolUse hook that exceeds its budget is killed and
+    # FAILS OPEN, so one hung gh call must never eat the whole allowance.
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)  # noqa: S603 — internal lifecycle command, fixed argv
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)  # noqa: S603 — argv list built from internal literals/validated state, never a shell string
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return 1, ""
     return proc.returncode, proc.stdout
@@ -304,15 +307,20 @@ _HEREDOC_RE = re.compile(
 # push`, `git -c k=v push`). Left unnormalized they defeat every `git push`
 # rule, including the direct-push-to-main block (2026-07 review). Options that
 # consume a value are listed with their value; boolean options stand alone.
+# An option value is one shell word INCLUDING quoted runs — `-c foo='a b'`
+# must normalize away too: a bare \S+ stops at the space inside the quotes
+# and the mangled residue defeats every git rule (mirrors the quoted-value
+# matcher in pre_commit_gate.sh).
+_GIT_OPT_VAL = r"(?:[^\s'\"]|'[^']*'|\"[^\"]*\")+"
 _GIT_GLOBAL_OPT = (
     r"(?:"
-    r"-C[ \t]+\S+"  # -C <path>
-    r"|-c[ \t]+\S+"  # -c <name=value>
-    r"|--git-dir(?:=\S+|[ \t]+\S+)"
-    r"|--work-tree(?:=\S+|[ \t]+\S+)"
-    r"|--namespace(?:=\S+|[ \t]+\S+)"
-    r"|--config-env(?:=\S+|[ \t]+\S+)"
-    r"|--exec-path(?:=\S+)?"
+    rf"-C[ \t]+{_GIT_OPT_VAL}"  # -C <path>
+    rf"|-c[ \t]+{_GIT_OPT_VAL}"  # -c <name=value>
+    rf"|--git-dir(?:={_GIT_OPT_VAL}|[ \t]+{_GIT_OPT_VAL})"
+    rf"|--work-tree(?:={_GIT_OPT_VAL}|[ \t]+{_GIT_OPT_VAL})"
+    rf"|--namespace(?:={_GIT_OPT_VAL}|[ \t]+{_GIT_OPT_VAL})"
+    rf"|--config-env(?:={_GIT_OPT_VAL}|[ \t]+{_GIT_OPT_VAL})"
+    rf"|--exec-path(?:={_GIT_OPT_VAL})?"
     r"|--no-pager|--paginate|-p|-P|--bare"
     r"|--no-replace-objects|--literal-pathspecs|--no-optional-locks|--icase-pathspecs"
     r")"
@@ -531,7 +539,7 @@ def cmd_push(branch: str | None, max_retries: int, *, force: bool = False) -> in
         push_cmd = ["git", "push", "-u", "origin", branch]
         if force:
             push_cmd.append("--force-with-lease")
-        proc = subprocess.run(push_cmd)  # noqa: S603 — internal git push, fixed argv
+        proc = subprocess.run(push_cmd)  # noqa: S603 — fixed git argv + validated branch name, never a shell string
         if proc.returncode == 0:
             sys.stdout.write(f"push: pushed {branch} ({expected_sha})\n")
             return 0
@@ -627,7 +635,7 @@ def cmd_finish(pr_number: int | None, review_cycle: int | None) -> int:
     monitor_args = ["bash", str(script), str(pr_number), "--merge"]
     if review_cycle is not None:
         monitor_args += ["--review-cycle", str(review_cycle)]
-    return subprocess.run(monitor_args).returncode  # noqa: S603 — internal monitor script, fixed argv
+    return subprocess.run(monitor_args).returncode  # noqa: S603 — fixed bash argv + resolved script path, never a shell string
 
 
 _VALID_TYPES = {"feat", "fix", "chore", "docs", "test"}
@@ -688,10 +696,18 @@ def cmd_create_pr_nojira(
     if rc != 0:
         return rc
 
-    code, url = _gh(["pr", "view", "--json", "url", "-q", ".url"])
-    if code == 0 and url.strip():
-        sys.stdout.write(f"Draft PR already exists: {url.strip()}\n")
-        return 0
+    # `gh pr view` with no selector also resolves the most recent CLOSED/MERGED
+    # PR for the branch — reusing a branch name after a merge must open a new
+    # PR, not report the merged one as "already exists" (matches check_pr_opened).
+    code, out = _gh(["pr", "view", "--json", "url,state"])
+    if code == 0:
+        try:
+            data = json.loads(out or "{}")
+        except json.JSONDecodeError:
+            data = {}
+        if data.get("state") == "OPEN" and data.get("url"):
+            sys.stdout.write(f"Draft PR already exists: {data['url']}\n")
+            return 0
 
     # Conventional Commits, no scope = no linked issue (ADR-006)
     pr_title = f"{type_}: {title}"

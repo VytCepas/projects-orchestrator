@@ -17,8 +17,14 @@ command -v gh >/dev/null 2>&1 || {
   exit 1
 }
 
+# Anchor sibling-script and config lookups on this script's location, not the
+# caller's cwd — invoked from a subdirectory, a cwd-relative path would derive
+# the wrong project key and then die at the push_branch.sh call, stranding the
+# repo on a fresh unpushed branch with no PR.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 # Resolve the base branch (ADR-014) from the promotion chain via gh_host.sh.
-source "$(dirname "$0")/gh_host.sh"
+source "$SCRIPT_DIR/gh_host.sh"
 
 VALID_TYPES="feat fix chore docs test"
 
@@ -61,7 +67,7 @@ derive_project_key() {
   fi
 
   local configured=""
-  configured=$(grep '^[[:space:]]*project_key:' .claude/config.yaml 2>/dev/null |
+  configured=$(grep '^[[:space:]]*project_key:' "$SCRIPT_DIR/../config.yaml" 2>/dev/null |
     head -n 1 |
     cut -d: -f2- |
     sed 's/#.*$//' |
@@ -98,11 +104,20 @@ if ! echo "$PROJECT_KEY" | grep -qE '^[A-Z][A-Z0-9]{1,9}$'; then
 fi
 
 # --- Fetch issue title ---
-ISSUE_TITLE=$(gh issue view "$ISSUE_NUMBER" --json title -q '.title' 2>/dev/null)
+# `|| true`: under set -e a failing gh would kill the script at this assignment
+# before the error branch below could run. Capture stderr to a file (NOT 2>&1 —
+# that would mix gh's error text into ISSUE_TITLE and defeat the empty-check)
+# so an auth/network failure is reported as itself, not as "issue not found"
+# (Copilot review).
+GH_ERR=$(mktemp)
+ISSUE_TITLE=$(gh issue view "$ISSUE_NUMBER" --json title -q '.title' 2>"$GH_ERR" || true)
 if [ -z "$ISSUE_TITLE" ]; then
-  echo "ERROR: issue #$ISSUE_NUMBER not found" >&2
+  echo "ERROR: could not fetch issue #$ISSUE_NUMBER — it may not exist, or gh failed:" >&2
+  sed 's/^/  /' "$GH_ERR" >&2
+  rm -f "$GH_ERR"
   exit 1
 fi
+rm -f "$GH_ERR"
 
 ISSUE_REF="${PROJECT_KEY}-${ISSUE_NUMBER}"
 
@@ -159,7 +174,7 @@ if [ -z "$(git rev-list "${BASE_BRANCH}..HEAD" 2>/dev/null || true)" ]; then
 fi
 
 # --- Push and set upstream (retry + remote-SHA verification) ---
-.claude/scripts/push_branch.sh "$BRANCH"
+"$SCRIPT_DIR/push_branch.sh" "$BRANCH"
 
 # --- Open draft PR ---
 # Conventional Commits with issue key as scope (ADR-006)
