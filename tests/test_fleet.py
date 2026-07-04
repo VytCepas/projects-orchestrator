@@ -10,6 +10,7 @@ from conftest import add_memory, git_init, make_project
 from projects_orchestrator.checks import CheckResult
 from projects_orchestrator.descriptor import load_descriptor
 from projects_orchestrator.fleet import (
+    cell_status,
     collect_snapshot,
     fleet_rows,
     fleet_snapshots,
@@ -23,6 +24,26 @@ from projects_orchestrator.registry import FleetConfig, discover
 
 def _snapshot(fleet_dir: Path, cached: dict | None = None, name: str = "alpha"):
     return collect_snapshot(load_descriptor(fleet_dir / name), cached)
+
+
+def test_cell_status_classifies_good_values() -> None:
+    assert cell_status("pass") == "good"
+
+
+def test_cell_status_classifies_bad_values() -> None:
+    assert cell_status("fail") == "bad"
+
+
+def test_cell_status_classifies_warn_values() -> None:
+    assert cell_status("behind") == "warn"
+
+
+def test_cell_status_uptime_is_good() -> None:
+    assert cell_status("up 3d") == "good"
+
+
+def test_cell_status_unknown_is_neutral() -> None:
+    assert cell_status("?") == ""
 
 
 def test_snapshot_row_has_all_columns(fleet_dir: Path) -> None:

@@ -42,6 +42,17 @@ def test_snapshot_payload_reflects_projects_added_after_start(fleet_dir: Path) -
     assert len(payload["rows"]) == 2  # type: ignore[arg-type]
 
 
+def test_snapshot_payload_statuses_come_from_shared_classifier(fleet_dir: Path) -> None:
+    # The page styles cells from server-supplied statuses, not a client-side
+    # copy of the good/bad/warn vocabulary. A declared run_command → Runnable
+    # cell "yes" → status "good".
+    make_project(fleet_dir, "alpha", tooling={"run": "true"})
+    payload = snapshot_payload(_config(fleet_dir), None, "now")
+    statuses = payload["statuses"]
+    assert statuses[0]["Runnable"] == "good"  # type: ignore[index]
+    assert set(statuses[0]) == set(payload["columns"])  # type: ignore[index,arg-type]
+
+
 def test_project_payload_returns_detail_sections(fleet_dir: Path) -> None:
     make_project(fleet_dir, "alpha")
     payload = project_payload(_config(fleet_dir), None, "alpha")

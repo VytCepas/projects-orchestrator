@@ -12,11 +12,7 @@ from __future__ import annotations
 
 import html as _html
 
-from projects_orchestrator.fleet import COLUMNS
-
-_GOOD = frozenset({"pass", "clean", "ok", "none", "yes"})
-_BAD = frozenset({"fail", "missing", "unhealthy"})
-_WARN = frozenset({"dirty", "diverged", "behind", "partial", "outdated"})
+from projects_orchestrator.fleet import COLUMNS, cell_status
 
 _STYLE = """
 body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; margin: 2rem;
@@ -34,20 +30,9 @@ footer { margin-top: 1rem; color: #59636e; font-size: .8rem; }
 """
 
 
-def _cell_class(text: str) -> str:
-    """Map a cell's text to its status CSS class (empty when neutral)."""
-    if text in _GOOD or text.startswith("up "):
-        return "good"
-    if text in _BAD:
-        return "bad"
-    if text in _WARN:
-        return "warn"
-    return ""
-
-
 def _cell(text: str) -> str:
-    """Render one escaped table cell."""
-    css = _cell_class(text)
+    """Render one escaped table cell, coloured by the shared status classifier."""
+    css = cell_status(text)
     attr = f' class="{css}"' if css else ""
     return f"<td{attr}>{_html.escape(text)}</td>"
 

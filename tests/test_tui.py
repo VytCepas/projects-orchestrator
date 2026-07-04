@@ -43,6 +43,15 @@ async def test_refresh_binding_picks_up_new_project(fleet_dir: Path) -> None:
         assert app.query_one("#fleet-table", DataTable).row_count == 2
 
 
+def test_styled_uses_shared_status_classifier() -> None:
+    # The TUI now colours via fleet.cell_status, so a running "up …" cell is
+    # green (the old hardcoded style map missed it).
+    assert OrchestratorApp._styled("up 3d").style == "green"
+    assert OrchestratorApp._styled("fail").style == "red"
+    assert OrchestratorApp._styled("behind").style == "yellow"
+    assert OrchestratorApp._styled("?").style == ""
+
+
 async def test_controller_input_streams_output(fleet_dir: Path) -> None:
     make_project(fleet_dir, "alpha")
     app = _app(fleet_dir)
