@@ -120,6 +120,27 @@ def test_v2_config_parses_hooks_expected(fleet_dir: Path) -> None:
     assert descriptor.hooks_expected == ("pre-commit", "commit-msg")
 
 
+def test_memory_path_escaping_project_root_is_clamped(tmp_path: Path) -> None:
+    text = "project:\n  name: alpha\nmemory:\n  memory_path: ../../etc\n"
+    descriptor = parse_config(text, tmp_path)
+    assert descriptor.memory_path == tmp_path.resolve() / ".claude/memory"
+
+
+def test_memory_path_escaping_project_root_warns(tmp_path: Path) -> None:
+    text = "project:\n  name: alpha\nmemory:\n  memory_path: /etc\n"
+    assert any("escapes the project root" in w for w in parse_config(text, tmp_path).warnings)
+
+
+def test_observability_path_escaping_project_root_is_ignored(tmp_path: Path) -> None:
+    text = (
+        "project:\n  name: alpha\n  project_init_contract_version: 2\n"
+        "observability:\n  path: ../../var/log\n"
+    )
+    descriptor = parse_config(text, tmp_path)
+    assert descriptor.observability_path is None
+    assert any("escapes the project root" in w for w in descriptor.warnings)
+
+
 def test_v1_config_ignores_v2_fields(tmp_path: Path) -> None:
     text = (
         "project:\n  name: alpha\n  project_init_contract_version: 1\n"

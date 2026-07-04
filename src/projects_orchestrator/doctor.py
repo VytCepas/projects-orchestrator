@@ -1,10 +1,13 @@
-"""Diagnose each child's conformance to descriptor contract v1.
+"""Diagnose each child's conformance to the descriptor contract.
 
 ``doctor`` answers one question: *can the orchestrator fully manage this
 project?* It reads only the contract surfaces
 (see ``docs/reference/descriptor-contract-v1.md``) and reports one finding per
-requirement. Like the rest of the engine it never raises — a broken or
-half-scaffolded child yields ``fail``/``warn`` findings, not an exception.
+requirement. Versions between v1 and the highest understood contract
+(``CONTRACT_VERSION_MAX``) pass; a newer version warns, since the orchestrator
+may misread surfaces it does not yet know. Like the rest of the engine it never
+raises — a broken or half-scaffolded child yields ``fail``/``warn`` findings,
+not an exception.
 
 Severity is manageability, not correctness: ``fail`` means the orchestrator
 cannot treat the project as a contract-v1 child; ``warn`` means a capability
@@ -16,14 +19,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from projects_orchestrator.descriptor import ProjectDescriptor, parse_scaffold_version
+from projects_orchestrator.descriptor import (
+    CONTRACT_V2,
+    ProjectDescriptor,
+    parse_scaffold_version,
+)
 from projects_orchestrator.drift import compute_drift, hook_health
 
 OK = "ok"
 WARN = "warn"
 FAIL = "fail"
 
+# Lowest and highest contract versions this orchestrator actually understands.
 CONTRACT_VERSION = 1
+CONTRACT_VERSION_MAX = CONTRACT_V2
 
 
 @dataclass(frozen=True)
@@ -75,9 +84,19 @@ def _check_config(descriptor: ProjectDescriptor) -> Finding:
 def _check_contract(descriptor: ProjectDescriptor) -> Finding:
     """A contract version is declared and understood."""
     version = descriptor.contract_version
-    if version >= CONTRACT_VERSION:
-        return Finding("contract", OK, f"contract v{version}")
-    return Finding("contract", FAIL, "no project_init_contract_version — predates the contract")
+    if version < CONTRACT_VERSION:
+        return Finding(
+            "contract", FAIL, "no project_init_contract_version — predates the contract"
+        )
+    if version > CONTRACT_VERSION_MAX:
+        # A newer child may use surfaces this orchestrator misreads — flag it
+        # rather than silently claiming full conformance.
+        return Finding(
+            "contract",
+            WARN,
+            f"contract v{version} is newer than understood (v{CONTRACT_VERSION_MAX}) — upgrade the orchestrator",
+        )
+    return Finding("contract", OK, f"contract v{version}")
 
 
 def _check_scaffold(descriptor: ProjectDescriptor) -> Finding:

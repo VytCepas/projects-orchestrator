@@ -61,9 +61,16 @@ observability:
 Consumed by `observability.py` (`events` command). Today the location is an
 undocumented convention; v2 names it so fleet ingestion doesn't guess. When
 undeclared (or at v1) the orchestrator falls back to
-`.claude/observability/`. The log itself stays `usage.jsonl`, one JSON object
-per line; the reader tolerates `ts`/`timestamp` and `action`/`decision`
-aliases and skips (and counts) malformed lines.
+`.claude/observability/`. A declared `path` that escapes the project root
+(`../…` or absolute) is ignored with a warning — the orchestrator only ever
+reads inside the project it governs. The log itself stays `usage.jsonl`, one
+JSON object per line; the reader tolerates `ts`/`timestamp` and
+`action`/`decision` aliases, skips (and counts) malformed lines, and counts
+events whose timestamp is present but unparseable.
+
+**Timestamps.** Event and `--since` instants may be ISO-8601
+(`2026-07-04T10:00:00Z`) or raw epoch-seconds; a naive ISO stamp is read as
+UTC. This is the pinned timestamp contract for the log.
 
 ### `hooks.expected` — the git hooks the scaffold ships
 
@@ -85,3 +92,16 @@ Undeclared (or v1) keeps the globbing fallback.
 config tests in `tests/test_descriptor.py`. v0/v1 children are unaffected —
 the fields stay at their empty defaults and every consumer falls back to the
 v1 behavior.
+
+**Read-surface hardening (orchestrator-side, done).** `memory_path` and
+`observability.path` are clamped under the project root (an escaping value is
+rejected with a warning, never read); `doctor` warns on a `contract_version`
+newer than the orchestrator understands (`CONTRACT_VERSION_MAX`) instead of
+claiming full conformance; the observability timestamp format is pinned above.
+
+**Remaining before this doc is frozen (upstream, project-init).** project-init
+must actually emit `project_init_contract_version: 2` with these blocks, and
+should constrain `deploy.app`/`region` to `^[A-Za-z0-9._-]+$` at scaffold time
+(the orchestrator already `shlex.quote`s them defensively). File that upstream
+issue and record its link here; then rename this page to
+`descriptor-contract-v2.md`.

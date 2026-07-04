@@ -119,12 +119,32 @@ def _extract_deploy(raw: dict[str, Any]) -> DeployConfig | None:
     )
 
 
-def _extract_observability_path(raw: dict[str, Any], project_dir: Path) -> Path | None:
-    """Resolve the v2 ``observability.path``; ``None`` when undeclared."""
+def _contained_path(project_dir: Path, relative: str) -> Path | None:
+    """Join ``relative`` under ``project_dir``, or ``None`` if it escapes.
+
+    A descriptor is data the orchestrator only reads, but a ``memory_path`` or
+    ``observability.path`` of ``../../etc`` or ``/etc`` would resolve outside
+    the project root (``Path('/proj') / '/etc'`` is ``/etc``). Reject any value
+    whose resolved location is not the project dir or beneath it; contained
+    values keep their plain (unresolved) join so callers compare cleanly.
+    """
+    resolved = (project_dir / relative).resolve()
+    if resolved == project_dir or project_dir in resolved.parents:
+        return project_dir / relative
+    return None
+
+
+def _extract_observability_path(
+    raw: dict[str, Any], project_dir: Path, warnings: list[str]
+) -> Path | None:
+    """Resolve the v2 ``observability.path``; ``None`` when undeclared/escaping."""
     declared = _as_mapping(raw.get("observability")).get("path")
     if not isinstance(declared, str) or not declared.strip():
         return None
-    return project_dir / declared.strip()
+    contained = _contained_path(project_dir, declared.strip())
+    if contained is None:
+        warnings.append(f"observability.path '{declared.strip()}' escapes the project root — ignored")
+    return contained
 
 
 def _extract_hooks_expected(raw: dict[str, Any]) -> tuple[str, ...]:
@@ -163,6 +183,10 @@ def parse_config(text: str, project_dir: Path) -> ProjectDescriptor:
     project = _as_mapping(raw.get("project"))
     memory = _as_mapping(raw.get("memory"))
     memory_rel = str(memory.get("memory_path") or ".claude/memory")
+    memory_path = _contained_path(project_dir, memory_rel)
+    if memory_path is None:
+        warnings.append(f"memory_path '{memory_rel}' escapes the project root — using .claude/memory")
+        memory_path = project_dir / ".claude/memory"
     contract_version = _as_int(project.get("project_init_contract_version"))
     is_v2 = contract_version >= CONTRACT_V2
 
@@ -174,10 +198,12 @@ def parse_config(text: str, project_dir: Path) -> ProjectDescriptor:
         contract_version=contract_version,
         project_init_version=str(project.get("project_init_version") or "unknown"),
         memory_tier=_as_int(memory.get("tier")),
-        memory_path=(project_dir / memory_rel),
+        memory_path=memory_path,
         tooling=_extract_tooling(raw),
         deploy=_extract_deploy(raw) if is_v2 else None,
-        observability_path=_extract_observability_path(raw, project_dir) if is_v2 else None,
+        observability_path=(
+            _extract_observability_path(raw, project_dir, warnings) if is_v2 else None
+        ),
         hooks_expected=_extract_hooks_expected(raw) if is_v2 else (),
         warnings=tuple(warnings),
     )

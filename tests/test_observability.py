@@ -108,3 +108,21 @@ def test_filter_since_unparseable_bound_keeps_everything() -> None:
 def test_filter_since_drops_events_without_timestamp() -> None:
     events = _events("")
     assert filter_since(events, "2026-07-01T10:00:00+00:00") == ()
+
+
+def test_filter_since_accepts_epoch_seconds_bound_and_stamps() -> None:
+    # 1_751_364_000 = 2025-07-01T10:00:00Z; keep the later of the two epochs.
+    events = _events("1751360400", "1751367600")
+    assert len(filter_since(events, "1751364000")) == 1
+
+
+def test_filter_since_matches_epoch_stamp_against_iso_bound() -> None:
+    events = _events("1751367600")  # 2025-07-01T12:00:00Z
+    assert len(filter_since(events, "2025-07-01T11:00:00+00:00")) == 1
+
+
+def test_load_events_warns_on_unparseable_timestamp(fleet_dir: Path) -> None:
+    project = make_project(fleet_dir, "alpha")
+    _write_log(project, ['{"ts": "not-a-date", "hook": "prod_guard", "action": "block"}'])
+    warnings = load_events(load_descriptor(project)).warnings
+    assert any("unparseable timestamp" in w for w in warnings)
