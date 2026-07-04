@@ -26,6 +26,7 @@ projects-orchestrator events [project]    # guard/usage events from observabilit
 projects-orchestrator upgrade-plan        # scaffold version vs upstream (--apply to trigger upgrades)
 projects-orchestrator snapshot --json     # full machine-readable fleet state
 projects-orchestrator snapshot --html -o fleet.html  # self-contained HTML dashboard
+projects-orchestrator serve               # live auto-refreshing dashboard (--host, --port)
 projects-orchestrator controller          # deterministic command REPL
 projects-orchestrator tui                 # terminal UI (needs the tui extra)
 ```

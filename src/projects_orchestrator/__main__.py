@@ -38,6 +38,7 @@ from projects_orchestrator.registry import (
     discover,
     load_fleet_config,
 )
+from projects_orchestrator.server import DEFAULT_HOST, DEFAULT_PORT, serve
 from projects_orchestrator.status import clean_worktree_head, collect_status
 from projects_orchestrator.supervisor import logs as run_logs
 from projects_orchestrator.supervisor import start as run_start
@@ -455,6 +456,12 @@ def _cmd_snapshot(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_serve(args: argparse.Namespace) -> int:
+    """Serve the live fleet dashboard over HTTP until interrupted."""
+    serve(_fleet_config(args), host=args.host, port=args.port)
+    return 0
+
+
 def _cmd_controller(args: argparse.Namespace) -> int:
     """Run the deterministic command REPL."""
     ctx = ControllerContext(config=_fleet_config(args))
@@ -535,6 +542,7 @@ def _build_parser() -> argparse.ArgumentParser:
             True,
         ),
         ("snapshot", "full joined fleet view", _cmd_snapshot, True),
+        ("serve", "serve the live fleet dashboard over HTTP", _cmd_serve, False),
         ("controller", "interactive deterministic command REPL", _cmd_controller, False),
         ("tui", "terminal UI (requires the tui extra)", _cmd_tui, False),
     ]
@@ -584,6 +592,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="skip gates whose last cached pass is at the current clean HEAD",
     )
     sub.choices["memory"].add_argument("query", nargs="+", help="text to search for")
+    sub.choices["serve"].add_argument(
+        "--host", default=DEFAULT_HOST, help=f"bind host (default {DEFAULT_HOST})"
+    )
+    sub.choices["serve"].add_argument(
+        "--port", type=int, default=DEFAULT_PORT, help=f"bind port (default {DEFAULT_PORT})"
+    )
     return parser
 
 
