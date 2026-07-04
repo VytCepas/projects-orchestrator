@@ -21,6 +21,7 @@ only the explicit ``cloud-status`` command makes the calls.
 from __future__ import annotations
 
 import json
+import shlex
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -161,7 +162,12 @@ def collect_cloud(descriptor: ProjectDescriptor, timeout: float = _PROBE_TIMEOUT
         result = run_command(_FLY_COMMAND, cwd=descriptor.path, timeout=timeout)
         state, revision = parse_fly_status(result.stdout) if result.ok else (STATE_UNKNOWN, "")
     elif deploy.target == "cloud-run":
-        command = _CLOUD_RUN_COMMAND.format(app=deploy.app, region=deploy.region)
+        # deploy.app/region are descriptor data, not vetted commands: quote
+        # them so a hostile child config can't inject shell into the
+        # nominally read-only cloud-status probe.
+        command = _CLOUD_RUN_COMMAND.format(
+            app=shlex.quote(deploy.app), region=shlex.quote(deploy.region)
+        )
         result = run_command(command, cwd=descriptor.path, timeout=timeout)
         state, revision = (
             parse_cloud_run_status(result.stdout) if result.ok else (STATE_UNKNOWN, "")

@@ -81,6 +81,19 @@ def test_collect_cloud_unknown_target_is_unknown(fleet_dir: Path) -> None:
     assert collect_cloud(descriptor).state == "unknown"
 
 
+def test_collect_cloud_does_not_execute_injected_app_name(fleet_dir: Path) -> None:
+    # A hostile deploy.app must not inject shell into the read-only probe.
+    marker = fleet_dir / "INJECTED"
+    config = (
+        "project:\n  name: alpha\n  project_init_contract_version: 2\n"
+        "language: python\ndelivery: service\n"
+        f"deploy:\n  target: cloud-run\n  app: \"x; touch {marker}\"\n  region: us\n"
+    )
+    descriptor = load_descriptor(make_project(fleet_dir, "alpha", config_text=config))
+    collect_cloud(descriptor)
+    assert not marker.exists()
+
+
 class _HealthHandler(http.server.BaseHTTPRequestHandler):
     status = 200
 

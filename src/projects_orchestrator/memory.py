@@ -100,7 +100,7 @@ def _read_memory_file(path: Path, project: str) -> MemoryFile | None:
     try:
         if path.stat().st_size > _MAX_FILE_BYTES:
             return None
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
     meta, body = _split_frontmatter(text)

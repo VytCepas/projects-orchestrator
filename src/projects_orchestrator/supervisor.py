@@ -55,6 +55,7 @@ class RunState:
     started_at: str
     command: str
     log_path: Path
+    start_ticks: int | None = None
 
 
 def state_dir() -> Path:
@@ -67,6 +68,27 @@ def state_dir() -> Path:
 def _state_file(project: str) -> Path:
     """Return the state-file path for one project."""
     return state_dir() / f"{project}.json"
+
+
+def _proc_start_ticks(pid: int) -> int | None:
+    """Read a pid's start time (clock ticks since boot) from ``/proc``.
+
+    Returns ``None`` when ``/proc`` is unavailable (non-Linux) or the pid is
+    gone. Two processes that reuse the same pid across a reboot or pid wrap
+    have different start times, so comparing this against the value recorded
+    at launch distinguishes our process from a recycled impostor.
+    """
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        # Field 22 (1-indexed) is starttime. comm (field 2) is parenthesized and
+        # may contain spaces/parens, so parse the fields after the final ')'.
+        after_comm = stat.rsplit(")", 1)[1].split()
+        return int(after_comm[19])
+    except (IndexError, ValueError):
+        return None
 
 
 def _pid_alive(pid: int) -> bool:
@@ -102,6 +124,8 @@ def _load_state(project: str) -> RunState | None:
         return None
     if not isinstance(raw, dict):
         return None
+    start_ticks_raw = raw.get("start_ticks")
+    start_ticks = int(start_ticks_raw) if isinstance(start_ticks_raw, int) else None
     try:
         return RunState(
             project=project,
@@ -109,6 +133,7 @@ def _load_state(project: str) -> RunState | None:
             started_at=str(raw.get("started_at", "")),
             command=str(raw.get("command", "")),
             log_path=Path(str(raw.get("log_path", ""))),
+            start_ticks=start_ticks,
         )
     except (KeyError, TypeError, ValueError):
         return None
@@ -134,6 +159,12 @@ def running_state(descriptor: ProjectDescriptor) -> RunState | None:
     if state is None:
         return None
     if not _pid_alive(state.pid):
+        _clear_state(descriptor.name)
+        return None
+    # Guard against pid reuse: if the pid is live but its start time no longer
+    # matches what we recorded at launch, it is a different process — treat the
+    # supervised one as gone rather than reporting it up (or signaling it).
+    if state.start_ticks is not None and _proc_start_ticks(state.pid) != state.start_ticks:
         _clear_state(descriptor.name)
         return None
     return state
@@ -176,6 +207,7 @@ def start(descriptor: ProjectDescriptor) -> str:
             started_at=_dt.datetime.now(tz=_dt.UTC).isoformat(timespec="seconds"),
             command=command,
             log_path=log_path,
+            start_ticks=_proc_start_ticks(process.pid),
         )
         _state_file(descriptor.name).write_text(
             json.dumps(
@@ -184,6 +216,7 @@ def start(descriptor: ProjectDescriptor) -> str:
                     "started_at": state.started_at,
                     "command": state.command,
                     "log_path": str(state.log_path),
+                    "start_ticks": state.start_ticks,
                 },
                 indent=2,
             ),

@@ -97,6 +97,40 @@ def test_stale_pid_reads_as_not_running(fleet_dir: Path) -> None:
     assert running_state(descriptor) is None
 
 
+def test_start_records_process_start_ticks(fleet_dir: Path) -> None:
+    descriptor = _runnable(fleet_dir)
+    start(descriptor)
+    try:
+        state = running_state(descriptor)
+        assert state is not None
+        assert state.start_ticks is not None  # recorded on Linux /proc
+    finally:
+        stop(descriptor)
+
+
+def test_running_state_detects_pid_reuse(fleet_dir: Path) -> None:
+    import json
+    import signal
+
+    from projects_orchestrator.supervisor import _state_file
+
+    descriptor = _runnable(fleet_dir, command="sleep 30")
+    start(descriptor)
+    state = running_state(descriptor)
+    assert state is not None and state.start_ticks is not None
+    real_pid = state.pid
+    try:
+        # Simulate the pid having been recycled to a different process: the pid
+        # is still live, but its recorded start time no longer matches.
+        state_file = _state_file("alpha")
+        data = json.loads(state_file.read_text(encoding="utf-8"))
+        data["start_ticks"] = data["start_ticks"] + 1
+        state_file.write_text(json.dumps(data), encoding="utf-8")
+        assert running_state(descriptor) is None
+    finally:
+        os.kill(real_pid, signal.SIGKILL)
+
+
 def test_logs_capture_run_output(fleet_dir: Path) -> None:
     descriptor = _runnable(fleet_dir, command="echo hello-from-run; sleep 20")
     start(descriptor)

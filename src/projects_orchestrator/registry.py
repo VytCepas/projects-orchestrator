@@ -44,6 +44,7 @@ class FleetConfig:
     exclude: tuple[str, ...] = ()
     include_plain_repos: bool = False
     source: Path | None = None
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -91,10 +92,15 @@ def load_fleet_config(fleet_file: Path) -> FleetConfig:
         whose ``source`` is still set so callers can report it.
     """
     base = fleet_file.parent.resolve()
+    warnings: tuple[str, ...] = ()
     try:
-        raw = yaml.safe_load(fleet_file.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError):
-        raw = None
+        raw = yaml.safe_load(fleet_file.read_text(encoding="utf-8", errors="replace"))
+    except OSError as exc:
+        # A misspelled or unreadable --fleet path otherwise looks exactly like
+        # an empty fleet (no projects, exit 0). Surface it instead.
+        raw, warnings = None, (f"cannot read fleet file {fleet_file}: {exc}",)
+    except yaml.YAMLError as exc:
+        raw, warnings = None, (f"invalid fleet file {fleet_file}: {exc}",)
     raw = raw if isinstance(raw, dict) else {}
 
     def paths(key: str) -> tuple[Path, ...]:
@@ -110,6 +116,7 @@ def load_fleet_config(fleet_file: Path) -> FleetConfig:
         exclude=tuple(str(p) for p in exclude) if isinstance(exclude, list) else (),
         include_plain_repos=bool(raw.get("include_plain_repos", False)),
         source=fleet_file,
+        warnings=warnings,
     )
 
 
@@ -155,7 +162,7 @@ def discover(config: FleetConfig) -> Fleet:
         The fleet, with warnings for paths that were configured but are
         not usable projects.
     """
-    warnings: list[str] = []
+    warnings: list[str] = list(config.warnings)
     candidates: list[Path] = list(config.projects)
     for root in config.roots:
         candidates.extend(_scan_root(root, config, warnings))
@@ -177,4 +184,22 @@ def discover(config: FleetConfig) -> Fleet:
         found.append(descriptor)
 
     found.sort(key=lambda d: d.name.lower())
+    warnings.extend(_duplicate_name_warnings(found))
     return Fleet(descriptors=tuple(found), config=config, warnings=tuple(warnings))
+
+
+def _duplicate_name_warnings(found: list[ProjectDescriptor]) -> list[str]:
+    """Warn when two discovered projects share a name.
+
+    Discovery dedupes by resolved path, but the cache, supervisor state, and
+    name lookups are all keyed by name — so a collision silently merges two
+    projects' results and makes only one addressable. Surface it.
+    """
+    counts: dict[str, int] = {}
+    for descriptor in found:
+        counts[descriptor.name] = counts.get(descriptor.name, 0) + 1
+    return [
+        f"duplicate project name '{name}' ({count} paths) — only one is addressable by name"
+        for name, count in sorted(counts.items())
+        if count > 1
+    ]

@@ -31,7 +31,7 @@ from projects_orchestrator.memory import load_project_memory, search_memory
 from projects_orchestrator.observability import filter_since, load_events
 from projects_orchestrator.pool import map_ordered
 from projects_orchestrator.registry import Fleet, FleetConfig, discover
-from projects_orchestrator.status import collect_status
+from projects_orchestrator.status import clean_worktree_head, collect_status
 from projects_orchestrator.supervisor import logs as run_logs
 from projects_orchestrator.supervisor import start as run_start
 from projects_orchestrator.supervisor import stop as run_stop
@@ -106,7 +106,7 @@ def parse_command(text: str) -> Intent:
     stripped = text.strip()
     if not stripped:
         return Intent(verb="help")
-    if stripped.startswith("/ask"):
+    if stripped == "/ask" or stripped.startswith("/ask "):
         return Intent(verb="ask", args=(stripped[len("/ask") :].strip(),))
 
     word, *rest = stripped.split()
@@ -171,7 +171,11 @@ def _dispatch_check(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
     if isinstance(selected, str):
         yield selected
         return
-    per_project = map_ordered(lambda d: collect_checks(d, intent.args), selected)
+    # Stamp the clean-worktree HEAD so a REPL/TUI run's cached passes can later
+    # satisfy `checks --changed-only` (an unstamped result never matches).
+    per_project = map_ordered(
+        lambda d: collect_checks(d, intent.args, head=clean_worktree_head(d)), selected
+    )
     results = [result for project_results in per_project for result in project_results]
     for result in results:
         suffix = f" — {result.detail}" if result.detail else ""
@@ -181,7 +185,7 @@ def _dispatch_check(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
 
 def _dispatch_status(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
     """Show the fleet table, or one project's git health."""
-    if intent.target is None:
+    if intent.target in (None, "all"):
         snapshots = fleet_snapshots(ctx.fleet, ctx.cache_file)
         yield from render_table(fleet_rows(snapshots)).splitlines()
         return
@@ -196,10 +200,14 @@ def _dispatch_status(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
 
 def _dispatch_memory(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
     """Search the whole fleet's memory."""
+    query = intent.args[0] if intent.args else ""
+    if not query.strip():
+        yield "usage: memory <query>"
+        return
     memories = [load_project_memory(d) for d in ctx.fleet.descriptors]
-    hits = search_memory(memories, intent.args[0])
+    hits = search_memory(memories, query)
     if not hits:
-        yield f"no memory matches for: {intent.args[0]}"
+        yield f"no memory matches for: {query}"
         return
     for hit in hits[:50]:
         location = f"{hit.file.project}/{hit.file.path.name}"

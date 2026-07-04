@@ -52,6 +52,13 @@ def test_parse_pr_count_garbage_is_none() -> None:
     assert parse_pr_count("not json") is None
 
 
+def test_pr_command_overrides_gh_default_page_size() -> None:
+    # Without --limit, gh caps the list at 30, silently undercounting backlogs.
+    from projects_orchestrator.adapters.github import _PR_COMMAND
+
+    assert "--limit" in _PR_COMMAND
+
+
 def test_as_check_results_maps_known_pr_count() -> None:
     results = as_check_results(GithubStatus("alpha", ci="pass", open_prs=3), "2026-07-03T00:00:00")
     prs = next(r for r in results if r.task == "prs")

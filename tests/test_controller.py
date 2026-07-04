@@ -49,6 +49,13 @@ def test_parse_command_maps_verb(text: str, verb: str) -> None:
     assert parse_command(text).verb == verb
 
 
+def test_parse_command_ask_requires_exact_token() -> None:
+    # "/asked why is ci red" must not be parsed as an /ask with question
+    # "ed why is ci red"; only the exact /ask token opens ask mode.
+    assert parse_command("/ask why is ci red").verb == "ask"
+    assert parse_command("/asked why is ci red").verb != "ask"
+
+
 def test_parse_command_checks_expands_to_both_tasks() -> None:
     assert parse_command("checks").args == ("lint", "test")
 
@@ -114,6 +121,32 @@ def test_dispatch_status_single_project(fleet_dir: Path) -> None:
     make_project(fleet_dir, "alpha")
     lines = list(dispatch(parse_command("status alpha"), _ctx(fleet_dir)))
     assert lines[0].startswith("alpha:")
+
+
+def test_dispatch_status_all_renders_table(fleet_dir: Path) -> None:
+    # "status all" must render the fleet table, not crash or show one project.
+    make_project(fleet_dir, "alpha")
+    make_project(fleet_dir, "beta")
+    lines = list(dispatch(parse_command("status all"), _ctx(fleet_dir)))
+    assert lines[0].startswith("Project")
+    assert any("alpha" in line for line in lines)
+    assert any("beta" in line for line in lines)
+
+
+def test_dispatch_status_all_on_empty_fleet_does_not_crash(tmp_path: Path) -> None:
+    # Previously raised IndexError on selected[0]; now renders the (empty) table.
+    ctx = ControllerContext(config=FleetConfig(roots=(tmp_path,)))
+    lines = list(dispatch(parse_command("status all"), ctx))
+    assert lines  # a line was produced, not an exception
+
+
+def test_dispatch_memory_empty_query_shows_usage(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")
+    # An empty args tuple (reachable via the /ask verb path) must not crash.
+    from projects_orchestrator.controller import Intent, _dispatch_memory
+
+    lines = list(_dispatch_memory(_ctx(fleet_dir), Intent(verb="memory")))
+    assert lines == ["usage: memory <query>"]
 
 
 def test_dispatch_memory_finds_fact(fleet_dir: Path) -> None:

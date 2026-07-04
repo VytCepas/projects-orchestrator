@@ -7,6 +7,9 @@ instead of crashing the controller.
 
 from __future__ import annotations
 
+import contextlib
+import os
+import signal
 import subprocess
 import time
 from dataclasses import dataclass
@@ -64,22 +67,18 @@ def run_command(command: str, cwd: Path, timeout: float = DEFAULT_TIMEOUT) -> Ru
     """
     start = time.monotonic()
     try:
-        proc = subprocess.run(  # noqa: S602 — tooling commands are trusted shell strings from project descriptors (see docstring)
+        # start_new_session puts the shell (and everything it spawns) in its
+        # own process group, so a timeout can kill the whole tree instead of
+        # only /bin/sh — otherwise a gate like `uv run pytest` leaks the real
+        # runner, holding ports and locks after the "kill".
+        proc = subprocess.Popen(  # noqa: S602 — tooling commands are trusted shell strings from project descriptors (see docstring)
             command,
             shell=True,  # nosemgrep: python.lang.security.audit.subprocess-shell-true.subprocess-shell-true — see above; trusted descriptor commands, not user input
             cwd=cwd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired as exc:
-        return RunResult(
-            command=command,
-            returncode=None,
-            stdout=_cap(_decode(exc.stdout)),
-            stderr=_cap(_decode(exc.stderr)),
-            duration=time.monotonic() - start,
-            timed_out=True,
+            start_new_session=True,
         )
     except OSError as exc:
         return RunResult(
@@ -88,13 +87,35 @@ def run_command(command: str, cwd: Path, timeout: float = DEFAULT_TIMEOUT) -> Ru
             duration=time.monotonic() - start,
             error=str(exc),
         )
+
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        stdout, stderr = proc.communicate()
+        return RunResult(
+            command=command,
+            returncode=None,
+            stdout=_cap(_decode(stdout)),
+            stderr=_cap(_decode(stderr)),
+            duration=time.monotonic() - start,
+            timed_out=True,
+        )
     return RunResult(
         command=command,
         returncode=proc.returncode,
-        stdout=_cap(proc.stdout),
-        stderr=_cap(proc.stderr),
+        stdout=_cap(stdout),
+        stderr=_cap(stderr),
         duration=time.monotonic() - start,
     )
+
+
+def _kill_tree(proc: subprocess.Popen[str]) -> None:
+    """SIGKILL the timed-out command's whole process group, then the process."""
+    with contextlib.suppress(OSError):
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    with contextlib.suppress(OSError):
+        proc.kill()
 
 
 def _decode(data: str | bytes | None) -> str:

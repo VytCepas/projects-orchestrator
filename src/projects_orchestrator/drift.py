@@ -54,7 +54,9 @@ class DriftReport:
 def _load_manifest(project_dir: Path) -> dict[str, str]:
     """Read ``scaffold.manifest`` from the project config; empty on failure."""
     try:
-        raw = yaml.safe_load((project_dir / CONFIG_RELPATH).read_text(encoding="utf-8"))
+        raw = yaml.safe_load(
+            (project_dir / CONFIG_RELPATH).read_text(encoding="utf-8", errors="replace")
+        )
     except (OSError, yaml.YAMLError):
         return {}
     if not isinstance(raw, dict):
@@ -98,7 +100,10 @@ def compute_drift(descriptor: ProjectDescriptor) -> DriftReport:
             missing.append(relpath)
             continue
         actual = _sha256(target)
-        if actual is not None and actual != expected.lower():
+        # A tracked file we cannot hash (too large or unreadable) cannot match
+        # the recorded SHA-256 of a scaffold file — treat it as drifted rather
+        # than silently "clean", which would hide a real divergence.
+        if actual != expected.lower():
             modified.append(relpath)
 
     status = "clean" if not modified and not missing else "drift"
