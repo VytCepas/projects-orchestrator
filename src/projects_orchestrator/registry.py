@@ -188,6 +188,62 @@ def discover(config: FleetConfig) -> Fleet:
     return Fleet(descriptors=tuple(found), config=config, warnings=tuple(warnings))
 
 
+@dataclass(frozen=True)
+class RegisterOutcome:
+    """The result of registering a project path into a fleet file.
+
+    Attributes:
+        fleet_file: The fleet file that was written (or would have been).
+        project: The resolved project path.
+        added: Whether the path was newly added (``False`` when already listed).
+        warnings: Non-fatal problems (an unreadable existing fleet file).
+    """
+
+    fleet_file: Path
+    project: Path
+    added: bool
+    warnings: tuple[str, ...] = ()
+
+
+def register_project(fleet_file: Path, project: Path) -> RegisterOutcome:
+    """Add a project path to a fleet file's ``projects:`` list; never raises.
+
+    Consumes the ``scaffold --json`` seam: a freshly-scaffolded project is
+    registered into the orchestrator's own fleet file (not the child tree —
+    ADR-003 forbids writing to children, not to the orchestrator's registry)
+    so the next ``discover`` governs it without a manual edit. Idempotent: a
+    path already listed is left as-is.
+
+    Args:
+        fleet_file: The fleet file to write (created when absent).
+        project: The project root to register.
+
+    Returns:
+        A :class:`RegisterOutcome`; a write failure surfaces as a warning with
+        ``added=False`` rather than an exception.
+    """
+    resolved = project.resolve()
+    existing = load_fleet_config(fleet_file) if fleet_file.is_file() else None
+    warnings = existing.warnings if existing is not None else ()
+    listed = {p.resolve() for p in (existing.projects if existing is not None else ())}
+    if resolved in listed:
+        return RegisterOutcome(fleet_file, resolved, added=False, warnings=warnings)
+
+    projects = sorted({*listed, resolved}, key=str)
+    document = {
+        "projects": [str(p) for p in projects],
+        "roots": [str(p) for p in (existing.roots if existing is not None else ())],
+    }
+    try:
+        fleet_file.parent.mkdir(parents=True, exist_ok=True)
+        fleet_file.write_text(yaml.safe_dump(document, sort_keys=True), encoding="utf-8")
+    except OSError as exc:
+        return RegisterOutcome(
+            fleet_file, resolved, added=False, warnings=(*warnings, f"cannot write {fleet_file}: {exc}")
+        )
+    return RegisterOutcome(fleet_file, resolved, added=True, warnings=warnings)
+
+
 def _duplicate_name_warnings(found: list[ProjectDescriptor]) -> list[str]:
     """Warn when two discovered projects share a name.
 

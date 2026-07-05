@@ -21,7 +21,11 @@ from projects_orchestrator.adapters.cloud import collect_cloud
 from projects_orchestrator.adapters.github import as_check_results, collect_github
 from projects_orchestrator.adapters.gitlab import as_check_results as gitlab_check_results
 from projects_orchestrator.adapters.gitlab import collect_gitlab, provider_is_gitlab
-from projects_orchestrator.adapters.project_init import latest_upstream_version, trigger_upgrade
+from projects_orchestrator.adapters.project_init import (
+    latest_upstream_version,
+    parse_scaffold_result,
+    trigger_upgrade,
+)
 from projects_orchestrator.audit import audit_project, render_markdown
 from projects_orchestrator.capabilities import (
     HOOK,
@@ -59,11 +63,13 @@ from projects_orchestrator.notify import (
 from projects_orchestrator.observability import filter_since, load_events
 from projects_orchestrator.pool import map_ordered
 from projects_orchestrator.registry import (
+    FLEET_FILENAME,
     Fleet,
     FleetConfig,
     default_fleet_config,
     discover,
     load_fleet_config,
+    register_project,
 )
 from projects_orchestrator.server import DEFAULT_HOST, DEFAULT_PORT, serve
 from projects_orchestrator.status import clean_worktree_head, collect_status
@@ -493,6 +499,55 @@ def _cmd_upgrade_plan(args: argparse.Namespace) -> int:
     return 1 if any(r.status == "outdated" for r in rows) else 0
 
 
+def _cmd_register(args: argparse.Namespace) -> int:
+    """Register a freshly-scaffolded project from `scaffold --json` output.
+
+    Consumes the project-init ``--json`` seam (#510): reads a scaffold-result
+    document (a file path, or ``-`` for stdin) and adds the new project to the
+    fleet file so the next command governs it — no manual edit, no second read.
+    """
+    raw = sys.stdin.read() if args.result == "-" else _read_text_or_none(args.result)
+    if raw is None:
+        print(f"cannot read scaffold result: {args.result}", file=sys.stderr)
+        return 2
+    result = parse_scaffold_result(raw)
+    if result is None:
+        print("not a project-init scaffold result (no 'target')", file=sys.stderr)
+        return 1
+    fleet_file = Path(args.fleet) if args.fleet else Path.cwd() / FLEET_FILENAME
+    outcome = register_project(fleet_file, result.target)
+    for warning in outcome.warnings:
+        print(f"warning: {warning}", file=sys.stderr)
+    if args.json:
+        return _emit_json(
+            {
+                "target": str(outcome.project),
+                "fleet_file": str(outcome.fleet_file),
+                "added": outcome.added,
+                "contract_version": result.contract_version,
+                "files_created": result.files_created,
+                "conflicts": list(result.conflicts),
+            }
+        )
+    verb = "registered" if outcome.added else "already registered"
+    print(
+        f"{verb} {outcome.project} in {outcome.fleet_file} "
+        f"(contract v{result.contract_version}, {result.files_created} files)"
+    )
+    for conflict in result.conflicts:
+        print(f"  scaffold conflict (left unwritten): {conflict}", file=sys.stderr)
+    # A write failure surfaces as a warning with added=False; treat as an error.
+    return 0 if outcome.added or not outcome.warnings else 1
+
+
+def _read_text_or_none(path: str) -> str | None:
+    """Read a file's text, or ``None`` when it is unreadable."""
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
 def _resolve_project(args: argparse.Namespace) -> ProjectDescriptor | None:
     """Resolve the required project argument, printing the error itself."""
     fleet = _discover(args)
@@ -710,6 +765,12 @@ def _build_parser() -> argparse.ArgumentParser:
             _cmd_upgrade_plan,
             True,
         ),
+        (
+            "register",
+            "register a scaffolded project from `project-init scaffold --json` output",
+            _cmd_register,
+            True,
+        ),
         ("snapshot", "full joined fleet view", _cmd_snapshot, True),
         ("serve", "serve the live fleet dashboard over HTTP", _cmd_serve, False),
         ("controller", "interactive deterministic command REPL", _cmd_controller, False),
@@ -757,6 +818,9 @@ def _build_parser() -> argparse.ArgumentParser:
         sub.choices[name].add_argument("project", help="project to act on")
     sub.choices["logs"].add_argument(
         "-n", "--lines", type=int, default=40, help="trailing lines to show (default 40)"
+    )
+    sub.choices["register"].add_argument(
+        "result", help="path to `scaffold --json` output, or '-' for stdin"
     )
     sub.choices["upgrade-plan"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["upgrade-plan"].add_argument(

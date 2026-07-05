@@ -147,6 +147,39 @@ def test_memory_notes_unqueried_rag_endpoint(fleet_dir: Path, capsys) -> None:
     assert "RAG endpoint" in capsys.readouterr().err
 
 
+def test_register_adds_scaffolded_project(tmp_path: Path, capsys) -> None:
+    project = make_project(tmp_path, "alpha")
+    result = tmp_path / "scaffold.json"
+    result.write_text(
+        json.dumps({"target": str(project), "contract_version": "1", "files_created": 42}),
+        encoding="utf-8",
+    )
+    fleet_file = tmp_path / "fleet.yaml"
+    assert main(["register", str(result), "--fleet", str(fleet_file)]) == 0
+    assert "registered" in capsys.readouterr().out
+
+
+def test_register_makes_project_discoverable(tmp_path: Path, capsys) -> None:
+    project = make_project(tmp_path, "alpha")
+    result = tmp_path / "scaffold.json"
+    result.write_text(json.dumps({"target": str(project)}), encoding="utf-8")
+    fleet_file = tmp_path / "fleet.yaml"
+    main(["register", str(result), "--fleet", str(fleet_file)])
+    capsys.readouterr()
+    main(["projects", "--fleet", str(fleet_file)])
+    assert "alpha" in capsys.readouterr().out
+
+
+def test_register_invalid_result_exits_one(tmp_path: Path) -> None:
+    result = tmp_path / "scaffold.json"
+    result.write_text(json.dumps({"preset": "auto"}), encoding="utf-8")
+    assert main(["register", str(result), "--fleet", str(tmp_path / "fleet.yaml")]) == 1
+
+
+def test_register_missing_file_exits_two(tmp_path: Path) -> None:
+    assert main(["register", str(tmp_path / "absent.json"), "--fleet", str(tmp_path / "f.yaml")]) == 2
+
+
 def test_drift_no_manifest_exits_zero(fleet_dir: Path) -> None:
     make_project(fleet_dir, "alpha")
     assert main(["drift", "--root", str(fleet_dir)]) == 0
