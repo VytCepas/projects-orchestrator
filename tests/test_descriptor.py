@@ -47,6 +47,15 @@ def test_load_descriptor_reads_tooling_commands(fleet_dir: Path) -> None:
     assert load_descriptor(project).tooling == {"lint": "true", "test": "false"}
 
 
+def test_load_descriptor_reads_host(tmp_path: Path) -> None:
+    text = "project:\n  name: alpha\n  project_init_host: gitlab.com\n"
+    assert parse_config(text, tmp_path).host == "gitlab.com"
+
+
+def test_load_descriptor_host_defaults_empty(tmp_path: Path) -> None:
+    assert parse_config("project:\n  name: alpha\n", tmp_path).host == ""
+
+
 def test_load_descriptor_reads_contract_version(fleet_dir: Path) -> None:
     project = make_project(fleet_dir, "alpha")
     assert load_descriptor(project).contract_version == 1

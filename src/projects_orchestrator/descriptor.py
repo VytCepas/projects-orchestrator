@@ -60,6 +60,9 @@ class ProjectDescriptor:
             below v2 or when undeclared (callers fall back to convention).
         hooks_expected: Contract-v2 list of git hooks the scaffold ships;
             empty below v2 or when undeclared (callers fall back to globbing).
+        host: Upstream forge host (``project.project_init_host``), e.g.
+            ``github.com`` or ``gitlab.com``; empty when undeclared. Selects
+            which forge adapter probes CI (``ci`` command).
         warnings: Human-readable parse problems, empty when the config is clean.
     """
 
@@ -75,6 +78,7 @@ class ProjectDescriptor:
     deploy: DeployConfig | None = None
     observability_path: Path | None = None
     hooks_expected: tuple[str, ...] = ()
+    host: str = ""
     warnings: tuple[str, ...] = ()
 
     def has_task(self, task: str) -> bool:
@@ -205,6 +209,7 @@ def parse_config(text: str, project_dir: Path) -> ProjectDescriptor:
             _extract_observability_path(raw, project_dir, warnings) if is_v2 else None
         ),
         hooks_expected=_extract_hooks_expected(raw) if is_v2 else (),
+        host=str(project.get("project_init_host") or ""),
         warnings=tuple(warnings),
     )
 

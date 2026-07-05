@@ -173,6 +173,17 @@ def test_ci_json_reports_status(fleet_dir: Path, capsys) -> None:
     assert json.loads(capsys.readouterr().out)[0]["ci"] == "unknown"
 
 
+def test_ci_gitlab_host_reports_merge_requests(fleet_dir: Path, capsys) -> None:
+    # A gitlab.com host routes through the glab adapter — the count unit is MR.
+    config = (
+        "project:\n  name: alpha\n  project_init_contract_version: 1\n"
+        "  project_init_host: gitlab.com\nlanguage: python\n"
+    )
+    make_project(fleet_dir, "alpha", config_text=config)
+    main(["ci", "--root", str(fleet_dir)])
+    assert "open MR(s)" in capsys.readouterr().out
+
+
 def test_upgrade_plan_offline_renders(fleet_dir: Path, capsys) -> None:
     make_project(fleet_dir, "alpha")
     main(["upgrade-plan", "--root", str(fleet_dir)])
