@@ -141,6 +141,24 @@ def test_audit_markdown_renders_heading(fleet_dir: Path, capsys) -> None:
     assert "## alpha" in capsys.readouterr().out
 
 
+def test_audit_digest_first_run_exits_one_then_zero(fleet_dir: Path, tmp_path, monkeypatch) -> None:
+    # First --digest run surfaces new issues (exit 1); an unchanged re-run has
+    # no new issues (exit 0).
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    make_project(fleet_dir, "alpha")
+    assert main(["audit", "--root", str(fleet_dir), "--digest"]) == 1
+    assert main(["audit", "--root", str(fleet_dir), "--digest"]) == 0
+
+
+def test_audit_digest_reports_no_change_on_second_run(fleet_dir: Path, tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    make_project(fleet_dir, "alpha")
+    main(["audit", "--root", str(fleet_dir), "--digest"])
+    capsys.readouterr()
+    main(["audit", "--root", str(fleet_dir), "--digest"])
+    assert "no change since last run" in capsys.readouterr().out
+
+
 def test_ci_offline_exits_zero(fleet_dir: Path) -> None:
     make_project(fleet_dir, "alpha")
     assert main(["ci", "--root", str(fleet_dir)]) == 0
