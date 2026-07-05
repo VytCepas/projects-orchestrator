@@ -44,6 +44,21 @@ def test_parse_event_tolerates_aliases() -> None:
     assert parse_event(line, "alpha").action == "ask"
 
 
+def test_parse_event_reads_project_init_event_field() -> None:
+    # project-init's guards log the outcome under `event`, not `action`.
+    line = json.dumps({"ts": "2026-07-01T10:00:00+00:00", "event": "block"})
+    assert parse_event(line, "alpha").action == "block"
+
+
+def test_parse_event_passes_through_session() -> None:
+    line = json.dumps({"event": "allow", "session": "sess-42"})
+    assert parse_event(line, "alpha").session == "sess-42"
+
+
+def test_parse_event_session_defaults_empty() -> None:
+    assert parse_event(json.dumps({"event": "allow"}), "alpha").session == ""
+
+
 def test_parse_event_non_object_is_none() -> None:
     assert parse_event("[1, 2]", "alpha") is None
 

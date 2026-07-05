@@ -177,3 +177,65 @@ def test_v2_deploy_defaults_to_none_target(tmp_path: Path) -> None:
         "deploy:\n  app: svc\n"
     )
     assert parse_config(text, tmp_path).deploy.target == "none"
+
+
+def _memory_config(tier: int, extra: str = "") -> str:
+    return (
+        "project:\n  name: alpha\n"
+        f"memory:\n  tier: {tier}\n  stack: obsidian-graphify-rag\n"
+        "  memory_path: .claude/memory\n" + extra
+    )
+
+
+def test_descriptor_reads_memory_stack(tmp_path: Path) -> None:
+    assert parse_config(_memory_config(0), tmp_path).memory_stack == "obsidian-graphify-rag"
+
+
+def test_memory_stack_defaults_unknown(tmp_path: Path) -> None:
+    assert parse_config("project:\n  name: alpha\n", tmp_path).memory_stack == "unknown"
+
+
+def test_tier1_config_exposes_vault_path(tmp_path: Path) -> None:
+    descriptor = parse_config(_memory_config(1, "  vault_path: .claude/vault\n"), tmp_path)
+    assert descriptor.vault_path == tmp_path.resolve() / ".claude/vault"
+
+
+def test_tier0_config_ignores_vault_path(tmp_path: Path) -> None:
+    # Below tier 1 the vault surface does not exist — a stray value is ignored.
+    descriptor = parse_config(_memory_config(0, "  vault_path: .claude/vault\n"), tmp_path)
+    assert descriptor.vault_path is None
+
+
+def test_tier2_config_exposes_graph_path(tmp_path: Path) -> None:
+    descriptor = parse_config(_memory_config(2, "  graph_path: graphify-out/graph.json\n"), tmp_path)
+    assert descriptor.graph_path == tmp_path.resolve() / "graphify-out/graph.json"
+
+
+def test_tier1_config_ignores_graph_path(tmp_path: Path) -> None:
+    descriptor = parse_config(_memory_config(1, "  graph_path: graphify-out/graph.json\n"), tmp_path)
+    assert descriptor.graph_path is None
+
+
+def test_tier3_config_exposes_rag_endpoint(tmp_path: Path) -> None:
+    descriptor = parse_config(_memory_config(3, "  rag_endpoint: http://127.0.0.1:8099\n"), tmp_path)
+    assert descriptor.rag_endpoint == "http://127.0.0.1:8099"
+
+
+def test_tier2_config_ignores_rag_endpoint(tmp_path: Path) -> None:
+    descriptor = parse_config(_memory_config(2, "  rag_endpoint: http://127.0.0.1:8099\n"), tmp_path)
+    assert descriptor.rag_endpoint == ""
+
+
+def test_tier3_unset_rag_endpoint_is_empty(tmp_path: Path) -> None:
+    # A tier-3 child that has not run its RAG setup yet omits the endpoint.
+    assert parse_config(_memory_config(3), tmp_path).rag_endpoint == ""
+
+
+def test_vault_path_escaping_project_root_is_ignored(tmp_path: Path) -> None:
+    descriptor = parse_config(_memory_config(1, "  vault_path: ../../etc\n"), tmp_path)
+    assert descriptor.vault_path is None
+
+
+def test_vault_path_escaping_project_root_warns(tmp_path: Path) -> None:
+    descriptor = parse_config(_memory_config(1, "  vault_path: /etc\n"), tmp_path)
+    assert any("escapes the project root" in w for w in descriptor.warnings)

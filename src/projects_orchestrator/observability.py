@@ -39,6 +39,8 @@ class GuardEvent:
         hook: Guard that fired (``prod_guard``, ``package_guard``, …).
         action: What the guard did (``ask`` | ``block`` | ``allow`` | …).
         command: The command the guard evaluated, when recorded.
+        session: Agent session id the event belongs to, when recorded — lets
+            the fleet group a run's events across projects (empty when absent).
     """
 
     project: str
@@ -46,6 +48,7 @@ class GuardEvent:
     hook: str = "unknown"
     action: str = "unknown"
     command: str = ""
+    session: str = ""
 
 
 @dataclass(frozen=True)
@@ -89,7 +92,10 @@ def parse_event(line: str, project: str) -> GuardEvent | None:
 
     Returns:
         The event, or ``None`` when the line is not a JSON object. Field
-        aliases are tolerated (``ts``/``timestamp``, ``action``/``decision``).
+        aliases are tolerated (``ts``/``timestamp``, and
+        ``action``/``decision``/``event`` — project-init's guards log the
+        outcome under ``event``, which the reader previously dropped so every
+        row read ``action=unknown``).
     """
     try:
         entry = json.loads(line)
@@ -101,8 +107,9 @@ def parse_event(line: str, project: str) -> GuardEvent | None:
         project=project,
         timestamp=str(entry.get("ts") or entry.get("timestamp") or ""),
         hook=str(entry.get("hook") or "unknown"),
-        action=str(entry.get("action") or entry.get("decision") or "unknown"),
+        action=str(entry.get("action") or entry.get("decision") or entry.get("event") or "unknown"),
         command=str(entry.get("command") or ""),
+        session=str(entry.get("session") or ""),
     )
 
 

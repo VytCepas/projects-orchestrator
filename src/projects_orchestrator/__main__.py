@@ -396,7 +396,11 @@ def _cmd_events(args: argparse.Namespace) -> int:
         for event in filter_since(report.events, since):
             empty = False
             command = f" — {event.command}" if event.command else ""
-            print(f"{event.project} {event.timestamp} [{event.hook}] {event.action}{command}")
+            session = f" ({event.session})" if event.session else ""
+            print(
+                f"{event.project} {event.timestamp} [{event.hook}]"
+                f" {event.action}{session}{command}"
+            )
     if empty:
         print("no events recorded")
     return 0
