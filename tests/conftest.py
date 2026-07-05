@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -124,6 +125,77 @@ def make_project_v2(
             observability_path=observability_path,
         ),
     )
+
+
+MEMORY_CONFIG_TEMPLATE = """\
+project:
+  name: "{name}"
+  project_init_version: 0.7.0
+  project_init_contract_version: 1
+
+language: python
+delivery: library
+
+memory:
+  tier: {tier}
+  stack: {stack}
+  memory_path: .claude/memory
+{surfaces}
+
+tooling:
+  lint_command: "true"
+"""
+
+
+def make_memory_project(
+    base: Path,
+    name: str,
+    tier: int,
+    graph_path: str = "",
+    rag_endpoint: str = "",
+) -> Path:
+    """Create a project declaring a memory tier and its retrieval surfaces.
+
+    Args:
+        base: Parent directory to create the project under.
+        name: Project (directory) name.
+        tier: Memory tier written to ``memory.tier``.
+        graph_path: ``memory.graph_path`` value (omitted when empty).
+        rag_endpoint: ``memory.rag_endpoint`` value (omitted when empty).
+
+    Returns:
+        The project root path.
+    """
+    lines = []
+    if graph_path:
+        lines.append(f"  graph_path: {graph_path}")
+    if rag_endpoint:
+        lines.append(f"  rag_endpoint: {rag_endpoint}")
+    stack = "obsidian-graphify-rag" if tier >= 3 else "obsidian-graphify"
+    return make_project(
+        base,
+        name,
+        config_text=MEMORY_CONFIG_TEMPLATE.format(
+            name=name, tier=tier, stack=stack, surfaces="\n".join(lines)
+        ),
+    )
+
+
+def add_graph(project: Path, nodes: list[dict[str, str]], relpath: str = "graphify-out/graph.json") -> Path:
+    """Write a graphify-shaped ``graph.json`` with the given nodes.
+
+    Args:
+        project: Project root to write under.
+        nodes: Node dicts (e.g. ``{"name": ..., "description": ...}``).
+        relpath: Where to write the graph, relative to the project root.
+
+    Returns:
+        The written graph.json path.
+    """
+    path = project / relpath
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"nodes": nodes}), encoding="utf-8")
+    return path
 
 
 def add_memory(project: Path, filename: str, **fields: str) -> Path:

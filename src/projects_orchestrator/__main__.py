@@ -49,7 +49,7 @@ from projects_orchestrator.history import DEFAULT_TREND_WIDTH as HISTORY_TREND_W
 from projects_orchestrator.history import load_history, project_history, sparkline, transitions
 from projects_orchestrator.history import record as history_record
 from projects_orchestrator.html import render_html
-from projects_orchestrator.memory import load_project_memory, search_memory
+from projects_orchestrator.memory import load_memory, retrieval_mode, search_memory
 from projects_orchestrator.notify import (
     alerts_payload,
     fleet_alerts,
@@ -212,9 +212,19 @@ def _cmd_checks(args: argparse.Namespace) -> int:
 
 
 def _cmd_memory(args: argparse.Namespace) -> int:
-    """Search every project's memory files."""
+    """Search every project's memory, using each project's tier retrieval surface."""
     fleet = _discover(args)
-    memories = [load_project_memory(d) for d in fleet.descriptors]
+    # Degrade-by-tier (ADR-025 §4): grep the memory_path baseline, and add the
+    # graph's facts for tier>=2 children. RAG-tier children are noted so an
+    # operator knows a surface exists that this local-only search does not query.
+    for descriptor in fleet.descriptors:
+        if retrieval_mode(descriptor) == "rag":
+            print(
+                f"note: {descriptor.name} exposes a tier-3 RAG endpoint "
+                f"({descriptor.rag_endpoint}) not queried by local search",
+                file=sys.stderr,
+            )
+    memories = [load_memory(d) for d in fleet.descriptors]
     hits = search_memory(memories, " ".join(args.query))
     if args.json:
         return _emit_json([asdict(h) for h in hits])
