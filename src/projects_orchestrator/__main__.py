@@ -34,6 +34,9 @@ from projects_orchestrator.digest import (
 from projects_orchestrator.doctor import diagnose
 from projects_orchestrator.drift import compute_drift
 from projects_orchestrator.fleet import fleet_rows, fleet_snapshots, render_table
+from projects_orchestrator.history import DEFAULT_TREND_WIDTH as HISTORY_TREND_WIDTH
+from projects_orchestrator.history import load_history, project_history, sparkline, transitions
+from projects_orchestrator.history import record as history_record
 from projects_orchestrator.html import render_html
 from projects_orchestrator.memory import load_project_memory, search_memory
 from projects_orchestrator.notify import (
@@ -185,7 +188,9 @@ def _cmd_checks(args: argparse.Namespace) -> int:
         jobs=args.jobs,
     )
     pairs = [pair for project_pairs in per_project for pair in project_pairs]
-    cache.save_results([result for result, reused in pairs if not reused])
+    fresh = [result for result, reused in pairs if not reused]
+    cache.save_results(fresh)
+    history_record(fresh)
     if args.json:
         return _emit_json([{**asdict(r), "cached": reused} for r, reused in pairs])
     for result, reused in pairs:
@@ -476,6 +481,36 @@ def _cmd_snapshot(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_history(args: argparse.Namespace) -> int:
+    """Show per-task check-history trends and pass/fail transitions for a project."""
+    fleet = _discover(args)
+    descriptor = fleet.get(args.project)
+    if descriptor is None:
+        print(f"unknown project: {args.project}", file=sys.stderr)
+        return 2
+    by_task = project_history(load_history(), descriptor.name)
+    if args.json:
+        return _emit_json(
+            {
+                task: {
+                    "trend": sparkline(entries, args.width),
+                    "transitions": [asdict(e) for e in transitions(entries)],
+                }
+                for task, entries in by_task.items()
+            }
+        )
+    if not by_task:
+        print(f"{descriptor.name}: no check history yet")
+        return 0
+    for task in sorted(by_task):
+        entries = by_task[task]
+        print(f"{task}: {sparkline(entries, args.width)}  ({len(entries)} run(s))")
+        last = transitions(entries)[-1] if transitions(entries) else None
+        if last is not None:
+            print(f"  last change: {last.status} at {last.checked_at}")
+    return 0
+
+
 def _cmd_notify(args: argparse.Namespace) -> int:
     """Compute threshold alerts and optionally push them to a webhook."""
     fleet = _discover(args)
@@ -574,6 +609,7 @@ def _build_parser() -> argparse.ArgumentParser:
             True,
         ),
         ("events", "guard/usage events from the fleet's observability logs", _cmd_events, True),
+        ("history", "per-task check-history trend and pass/fail transitions", _cmd_history, True),
         (
             "notify",
             "threshold alerts (CI red, drift, hooks, cloud) — optionally to a webhook",
@@ -617,6 +653,10 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.choices["events"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["events"].add_argument(
         "--since", help="only events at/after this ISO-8601 instant"
+    )
+    sub.choices["history"].add_argument("project", help="project to show history for")
+    sub.choices["history"].add_argument(
+        "-n", "--width", type=int, default=HISTORY_TREND_WIDTH, help="trend width (default 10)"
     )
     sub.choices["notify"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["notify"].add_argument(

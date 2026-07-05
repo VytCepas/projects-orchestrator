@@ -23,6 +23,7 @@ projects-orchestrator audit [project]     # one governance report (--markdown; -
 projects-orchestrator ci [project]        # latest CI conclusion + open-PR count via gh
 projects-orchestrator cloud-status [project]  # deploy/runtime status (contract-v2 deploy block)
 projects-orchestrator events [project]    # guard/usage events from observability logs (--since ISO)
+projects-orchestrator history <project>   # per-task check-history trend (sparkline) + pass/fail transitions
 projects-orchestrator notify [project]    # threshold alerts (CI red/drift/hooks/cloud) — --webhook to push
 projects-orchestrator upgrade-plan        # scaffold version vs upstream (--apply to trigger upgrades)
 projects-orchestrator snapshot --json     # full machine-readable fleet state

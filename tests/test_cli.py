@@ -15,6 +15,9 @@ from projects_orchestrator.__main__ import main
 @pytest.fixture(autouse=True)
 def _isolated_cache(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    # `checks` now records history under XDG_STATE_HOME — isolate it too so no
+    # test writes to the real ~/.local/state.
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
 
 
 def test_version_is_set() -> None:
@@ -204,6 +207,30 @@ def test_start_no_run_command_exits_nonzero(fleet_dir: Path) -> None:
     # must still report failure when it has no run_command.
     make_project(fleet_dir, "restarted")
     assert main(["start", "restarted", "--root", str(fleet_dir)]) == 1
+
+
+def test_checks_records_history_read_back_by_history_command(
+    fleet_dir: Path, tmp_path, monkeypatch, capsys
+) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    make_project(fleet_dir, "alpha", tooling={"test": "true"})
+    main(["checks", "--root", str(fleet_dir), "--task", "test"])
+    capsys.readouterr()
+    assert main(["history", "alpha", "--root", str(fleet_dir)]) == 0
+    out = capsys.readouterr().out
+    assert "test:" in out and "+" in out
+
+
+def test_history_unknown_project_exits_2(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")
+    assert main(["history", "ghost", "--root", str(fleet_dir)]) == 2
+
+
+def test_history_no_runs_is_friendly(fleet_dir: Path, tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    make_project(fleet_dir, "alpha")
+    main(["history", "alpha", "--root", str(fleet_dir)])
+    assert "no check history yet" in capsys.readouterr().out
 
 
 def test_notify_clean_fleet_exits_zero(fleet_dir: Path, capsys) -> None:
