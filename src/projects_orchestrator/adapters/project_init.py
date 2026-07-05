@@ -17,14 +17,32 @@ import json
 from pathlib import Path
 from typing import Any
 
+from projects_orchestrator.adapters.gitlab import provider_is_gitlab
 from projects_orchestrator.descriptor import ProjectDescriptor, parse_scaffold_version
 from projects_orchestrator.runner import run_command
 
 UPSTREAM_REPO = "VytCepas/project-init"
 UPGRADE_WORKFLOW = "project-init-upgrade.yml"
 
+# Where each forge's upgrade workflow lives in a child tree. project-init ships
+# the GitHub Actions workflow today; the GitLab CI path is the convention its
+# forge-agnostic upgrade path will adopt (VytCepas/project-init side). Gating
+# dispatch on the file's presence keeps the mutation forge-aware and makes a
+# child without an upgrade path report a clear reason instead of a silent fail.
+GITHUB_UPGRADE_WORKFLOW = Path(".github/workflows") / UPGRADE_WORKFLOW
+GITLAB_UPGRADE_WORKFLOW = Path(".gitlab") / UPGRADE_WORKFLOW
+
+# Dispatch outcomes (returned by trigger_upgrade).
+DISPATCHED = "dispatched"
+FAILED = "failed"
+NO_WORKFLOW = "no upgrade workflow"
+
 _LATEST_COMMAND = f"gh release view --repo {UPSTREAM_REPO} --json tagName"
-_TRIGGER_COMMAND = f"gh workflow run {UPGRADE_WORKFLOW}"
+_GITHUB_TRIGGER_COMMAND = f"gh workflow run {UPGRADE_WORKFLOW}"
+# GitLab has no per-file workflow_dispatch; the mirror is triggering the child's
+# pipeline (the reviewed upgrade job runs inside it). Only reached when the child
+# ships GITLAB_UPGRADE_WORKFLOW, so this never fires an unrelated pipeline.
+_GITLAB_TRIGGER_COMMAND = "glab ci run"
 
 _GH_TIMEOUT = 20.0
 
@@ -74,20 +92,42 @@ def latest_upstream_version(cwd: Path, timeout: float = _GH_TIMEOUT) -> tuple[in
     return parse_release_tag(result.stdout)
 
 
-def trigger_upgrade(descriptor: ProjectDescriptor, timeout: float = _GH_TIMEOUT) -> str:
-    """Dispatch a child's ``project-init-upgrade.yml`` workflow; never raises.
+def upgrade_workflow_relpath(descriptor: ProjectDescriptor) -> Path:
+    """Return where this child's upgrade workflow lives, by forge (pure)."""
+    return GITLAB_UPGRADE_WORKFLOW if provider_is_gitlab(descriptor) else GITHUB_UPGRADE_WORKFLOW
 
-    Runs ``gh workflow run`` in the child's directory so ``gh`` resolves the
-    repo from its remote. This only *dispatches* the child's own reviewed-PR
-    upgrade channel — it never writes to the child tree.
+
+def has_upgrade_workflow(descriptor: ProjectDescriptor) -> bool:
+    """Whether the child ships a reachable upgrade workflow for its forge.
+
+    The one sanctioned mutation path (``upgrade-plan --apply``) can only
+    dispatch when this is true; a GitLab-hosted or ``--lifecycle none`` child
+    that lacks the workflow is diagnosable via ``doctor`` rather than a silent
+    dispatch failure.
+    """
+    return (descriptor.path / upgrade_workflow_relpath(descriptor)).is_file()
+
+
+def trigger_upgrade(descriptor: ProjectDescriptor, timeout: float = _GH_TIMEOUT) -> str:
+    """Dispatch a child's forge-appropriate upgrade workflow; never raises.
+
+    Chooses the forge from the descriptor host: a GitLab child dispatches via
+    ``glab`` (its pipeline), every other child via ``gh workflow run``. Runs in
+    the child's directory so the CLI resolves the repo from its remote. This
+    only *dispatches* the child's own reviewed-PR upgrade channel — it never
+    writes to the child tree.
 
     Args:
         descriptor: The child project to upgrade.
         timeout: Command timeout in seconds.
 
     Returns:
-        ``dispatched`` on success, else ``failed`` (gh missing/offline/no such
-        workflow).
+        :data:`DISPATCHED` on success; :data:`NO_WORKFLOW` when the child ships
+        no upgrade workflow for its forge (a clear, non-silent reason
+        ``--apply`` cannot proceed); else :data:`FAILED` (CLI missing/offline).
     """
-    result = run_command(_TRIGGER_COMMAND, cwd=descriptor.path, timeout=timeout)
-    return "dispatched" if result.ok else "failed"
+    if not has_upgrade_workflow(descriptor):
+        return NO_WORKFLOW
+    command = _GITLAB_TRIGGER_COMMAND if provider_is_gitlab(descriptor) else _GITHUB_TRIGGER_COMMAND
+    result = run_command(command, cwd=descriptor.path, timeout=timeout)
+    return DISPATCHED if result.ok else FAILED

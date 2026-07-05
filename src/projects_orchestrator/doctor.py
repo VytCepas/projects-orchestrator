@@ -19,6 +19,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from projects_orchestrator.adapters.project_init import (
+    has_upgrade_workflow,
+    upgrade_workflow_relpath,
+)
 from projects_orchestrator.descriptor import (
     CONTRACT_V2,
     ProjectDescriptor,
@@ -131,6 +135,19 @@ def _check_tooling(descriptor: ProjectDescriptor) -> Finding:
     return Finding("tooling", WARN, "no *_command declared — nothing to check")
 
 
+def _check_upgrade(descriptor: ProjectDescriptor) -> Finding:
+    """The child ships an upgrade workflow ``upgrade-plan --apply`` can dispatch.
+
+    Absence is a real capability gap (a GitLab-hosted or ``--lifecycle none``
+    child), so warn — otherwise ``--apply`` would report ``no upgrade workflow``
+    with no prior diagnosis.
+    """
+    relpath = upgrade_workflow_relpath(descriptor)
+    if has_upgrade_workflow(descriptor):
+        return Finding("upgrade", OK, f"{relpath} present")
+    return Finding("upgrade", WARN, f"no {relpath} — upgrade-plan --apply cannot dispatch")
+
+
 _CHECKS = (
     _check_config,
     _check_contract,
@@ -138,6 +155,7 @@ _CHECKS = (
     _check_manifest,
     _check_hooks,
     _check_tooling,
+    _check_upgrade,
 )
 
 

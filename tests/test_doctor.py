@@ -88,6 +88,19 @@ def test_diagnose_tooling_warn_without_commands(fleet_dir: Path) -> None:
     assert _finding(_report(fleet_dir), "tooling").status == "warn"
 
 
+def test_diagnose_upgrade_warn_without_workflow(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")
+    assert _finding(_report(fleet_dir), "upgrade").status == "warn"
+
+
+def test_diagnose_upgrade_ok_with_workflow(fleet_dir: Path) -> None:
+    project = make_project(fleet_dir, "alpha")
+    workflow = project / ".github/workflows/project-init-upgrade.yml"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text("name: upgrade\n", encoding="utf-8")
+    assert _finding(_report(fleet_dir), "upgrade").status == "ok"
+
+
 def test_report_status_is_fail_when_any_finding_fails(fleet_dir: Path) -> None:
     make_project(fleet_dir, "alpha", config_text="project:\n  name: alpha\n")
     assert _report(fleet_dir).status == "fail"
