@@ -154,6 +154,71 @@ def add_memory(project: Path, filename: str, **fields: str) -> Path:
     return path
 
 
+CAPABILITIES_TEMPLATE = """\
+# Capabilities
+
+## Skills ({skill_count})
+
+| Skill | Description |
+|---|---|
+{skills}
+
+## Hooks
+
+| Event | Script |
+|---|---|
+{hooks}
+
+## MCP servers ({mcp_count})
+
+{mcps}
+"""
+
+
+def add_capabilities(
+    project: Path,
+    skills: list[str] | None = None,
+    mcp_servers: list[str] | None = None,
+    hooks: list[tuple[str, str]] | None = None,
+) -> Path:
+    """Write a project-init-shaped ``.claude/CAPABILITIES.md`` inventory.
+
+    Args:
+        project: Project root to write under.
+        skills: Skill names (each gets a placeholder description).
+        mcp_servers: MCP server names (each gets a placeholder invocation).
+        hooks: ``(event, script)`` pairs.
+
+    Returns:
+        The written CAPABILITIES.md path.
+    """
+    skills = skills if skills is not None else ["plan", "status"]
+    mcp_servers = mcp_servers if mcp_servers is not None else []
+    hooks = hooks if hooks is not None else [("PreToolUse", "prod_guard.py")]
+    skill_rows = "\n".join(f"| {name} | does {name} |" for name in skills)
+    hook_rows = "\n".join(f"| {event} | {script} |" for event, script in hooks)
+    if mcp_servers:
+        mcp_rows = "| Server | Invocation |\n|---|---|\n" + "\n".join(
+            f"| {name} | bunx {name} |" for name in mcp_servers
+        )
+    else:
+        mcp_rows = "_None selected._"
+    claude_dir = project / ".claude"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    path = claude_dir / "CAPABILITIES.md"
+    path.write_text(
+        CAPABILITIES_TEMPLATE.format(
+            skill_count=len(skills),
+            skills=skill_rows,
+            hooks=hook_rows,
+            mcp_count=len(mcp_servers),
+            mcps=mcp_rows,
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 def git_init(project: Path, commit: bool = True) -> None:
     """Turn a project directory into a real git repo with one commit."""
     run = lambda *args: subprocess.run(  # noqa: E731

@@ -18,12 +18,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from projects_orchestrator.capabilities import MCP, SKILL, parse_capabilities
 from projects_orchestrator.descriptor import parse_config
 from projects_orchestrator.drift import _load_manifest
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "project_init"
 _CONFIG_V1 = _FIXTURES / "config.v1.yaml"
 _SCAFFOLD_RESULT_V1 = _FIXTURES / "scaffold_result.v1.json"
+_CAPABILITIES_V1 = _FIXTURES / "capabilities.v1.md"
 
 
 def _descriptor(tmp_path: Path):
@@ -63,6 +65,24 @@ def test_real_config_carries_a_hashable_scaffold_manifest(tmp_path: Path) -> Non
     manifest = _load_manifest(tmp_path)
     assert manifest, "scaffold.manifest is the whole contract for drift detection"
     assert all(len(sha) == 64 for sha in manifest.values())  # sha256 hex
+
+
+def test_real_capabilities_md_exposes_the_skill_inventory() -> None:
+    # CAPABILITIES.md is the ADR-025 §3 capability inventory the fleet aggregates.
+    # A real github-lifecycle scaffold ships a non-empty skill set the parser reads.
+    inventory = parse_capabilities(
+        _CAPABILITIES_V1.read_text(encoding="utf-8"), "demo-service", _CAPABILITIES_V1
+    )
+    assert inventory.of_kind(SKILL), "the capability inventory must expose skills"
+
+
+def test_real_capabilities_md_v1_ships_no_mcp_servers() -> None:
+    # demo-service scaffolds with installed_mcps: none; when project-init emits a
+    # scaffold that wires MCP servers this fixture refresh flips deliberately.
+    inventory = parse_capabilities(
+        _CAPABILITIES_V1.read_text(encoding="utf-8"), "demo-service", _CAPABILITIES_V1
+    )
+    assert inventory.of_kind(MCP) == ()
 
 
 def test_scaffold_result_json_carries_the_registration_seam() -> None:

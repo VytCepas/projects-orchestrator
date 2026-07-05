@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import add_memory, git_init, make_project
+from conftest import add_capabilities, add_memory, git_init, make_project
 
 from projects_orchestrator import __version__
 from projects_orchestrator.__main__ import main
@@ -97,6 +97,31 @@ def test_memory_search_json(fleet_dir: Path, capsys) -> None:
     add_memory(make_project(fleet_dir, "alpha"), "project_context.md", body="uses postgres 16")
     main(["memory", "postgres", "--root", str(fleet_dir), "--json"])
     assert json.loads(capsys.readouterr().out)[0]["file"]["project"] == "alpha"
+
+
+def test_capabilities_summarizes_each_project(fleet_dir: Path, capsys) -> None:
+    add_capabilities(make_project(fleet_dir, "alpha"), skills=["plan", "status"])
+    main(["capabilities", "--root", str(fleet_dir)])
+    assert "2 skill(s)" in capsys.readouterr().out
+
+
+def test_capabilities_kind_inverts_to_projects(fleet_dir: Path, capsys) -> None:
+    add_capabilities(make_project(fleet_dir, "alpha"), mcp_servers=["context7"])
+    add_capabilities(make_project(fleet_dir, "beta"), mcp_servers=["context7"])
+    main(["capabilities", "--root", str(fleet_dir), "--kind", "mcp"])
+    assert "context7: alpha, beta" in capsys.readouterr().out
+
+
+def test_capabilities_missing_inventory_is_reported(fleet_dir: Path, capsys) -> None:
+    make_project(fleet_dir, "alpha")
+    main(["capabilities", "--root", str(fleet_dir)])
+    assert "no CAPABILITIES.md" in capsys.readouterr().out
+
+
+def test_capabilities_json_is_parseable(fleet_dir: Path, capsys) -> None:
+    add_capabilities(make_project(fleet_dir, "alpha"), skills=["plan"])
+    main(["capabilities", "--root", str(fleet_dir), "--json"])
+    assert json.loads(capsys.readouterr().out)[0]["skills"][0]["name"] == "plan"
 
 
 def test_drift_no_manifest_exits_zero(fleet_dir: Path) -> None:
