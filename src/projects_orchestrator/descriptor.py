@@ -33,12 +33,17 @@ class DeployConfig:
         app: App/service name at the target.
         region: Target region, when the platform needs one.
         health_url: HTTP health-check URL, empty when undeclared.
+        workflow: The child's ``workflow_dispatch`` deploy pipeline the
+            orchestrator triggers for cloud actions (ADR-005); empty falls back
+            to the ``deploy.yml`` convention. The orchestrator never runs a
+            platform mutation itself — it only dispatches this workflow.
     """
 
     target: str = DEPLOY_NONE
     app: str = ""
     region: str = ""
     health_url: str = ""
+    workflow: str = ""
 
 
 @dataclass(frozen=True)
@@ -120,6 +125,7 @@ def _extract_deploy(raw: dict[str, Any]) -> DeployConfig | None:
         app=str(deploy.get("app") or ""),
         region=str(deploy.get("region") or ""),
         health_url=str(deploy.get("health_url") or ""),
+        workflow=str(deploy.get("workflow") or ""),
     )
 
 
@@ -147,7 +153,9 @@ def _extract_observability_path(
         return None
     contained = _contained_path(project_dir, declared.strip())
     if contained is None:
-        warnings.append(f"observability.path '{declared.strip()}' escapes the project root — ignored")
+        warnings.append(
+            f"observability.path '{declared.strip()}' escapes the project root — ignored"
+        )
     return contained
 
 
@@ -189,7 +197,9 @@ def parse_config(text: str, project_dir: Path) -> ProjectDescriptor:
     memory_rel = str(memory.get("memory_path") or ".claude/memory")
     memory_path = _contained_path(project_dir, memory_rel)
     if memory_path is None:
-        warnings.append(f"memory_path '{memory_rel}' escapes the project root — using .claude/memory")
+        warnings.append(
+            f"memory_path '{memory_rel}' escapes the project root — using .claude/memory"
+        )
         memory_path = project_dir / ".claude/memory"
     contract_version = _as_int(project.get("project_init_contract_version"))
     is_v2 = contract_version >= CONTRACT_V2

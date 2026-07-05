@@ -119,6 +119,19 @@ def test_v2_config_parses_health_url(fleet_dir: Path) -> None:
     assert load_descriptor(project).deploy.health_url == "https://x.example/health"
 
 
+def test_v2_config_parses_deploy_workflow(tmp_path: Path) -> None:
+    text = (
+        "project:\n  project_init_contract_version: 2\n"
+        "deploy:\n  target: fly\n  workflow: ship.yml\n"
+    )
+    assert parse_config(text, tmp_path).deploy.workflow == "ship.yml"
+
+
+def test_v2_deploy_workflow_defaults_empty(tmp_path: Path) -> None:
+    text = "project:\n  project_init_contract_version: 2\ndeploy:\n  target: fly\n"
+    assert parse_config(text, tmp_path).deploy.workflow == ""
+
+
 def test_v2_config_resolves_observability_path(fleet_dir: Path) -> None:
     project = make_project_v2(fleet_dir, "alpha", observability_path="logs/agent")
     assert load_descriptor(project).observability_path == project.resolve() / "logs/agent"

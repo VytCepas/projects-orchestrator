@@ -54,6 +54,7 @@ meaningful (`checks` exits non-zero on a failed gate, `drift` on divergence,
 |---|---|---|
 | `checks [project] --jobs N --changed-only` | Run each project's *declared* lint/test gates — never a guessed command. Fans out across a bounded pool; `--changed-only` trusts a cached pass for a clean worktree still at the same HEAD. | `checks.py`, `cache.py`, `pool.py` |
 | `start` / `stop` / `logs` | Launch a project's `run_command` detached and logged, terminate the supervised process, or tail its output. Supervision state (pid, uptime, log) lives under `$XDG_STATE_HOME` and feeds the status table. | `supervisor.py`, `runner.py` |
+| `deploy <project> --action deploy\|rollback\|restart --apply` | Trigger a cloud action by **dispatching the child's own deploy workflow** — the orchestrator holds no cloud credentials and runs no platform command itself. Dry-run by default; only `--apply` fires. | `adapters/cloud.py` |
 
 ### 3. Govern & converge
 
@@ -152,6 +153,27 @@ in adapters, and per-project work fans out over a bounded pool.
 4. **Only `ci` and `cloud-status` touch the network**; every other command reads the cache.
 5. **Adding a column** is one entry in `COLUMNS` + a value in `snapshot_row` — every surface inherits it.
 6. **The controller is LLM-free** — `/ask` may only choose among existing intents; the dispatcher executes them.
+7. **Control plane, not data plane** — the orchestrator *decides and dispatches*; the child's CI *executes with the credentials*. Dangerous verbs (scaffold upgrade, cloud deploy/rollback/restart) trigger the child's own reviewed workflow rather than running a mutation locally, so production credentials never enter the orchestrator's process.
 
-See [ADR-003: Fleet Engine](../../.claude/docs/adr/adr-003-fleet-engine.md) for
-the decision record behind this shape.
+### Cloud actions (the control plane)
+
+The orchestrator can *act* on the fleet, not just observe it — but only through
+a deliberately narrow, dispatch-based control plane:
+
+- **Run gates** (`checks`) — execute each project's declared lint/test commands.
+- **Supervise processes** (`start`/`stop`/`logs`) — a small process manager for
+  each project's `run_command`.
+- **Trigger scaffold upgrades** (`upgrade-plan --apply`) — dispatch the child's
+  `project-init-upgrade.yml`.
+- **Trigger cloud actions** (`deploy`) — dispatch the child's deploy workflow
+  for `deploy`/`rollback`/`restart`.
+
+Everything that rewrites a repo or mutates production goes through *that repo's
+own reviewed CI*, never through a shell the orchestrator (or an agent driving
+it) runs in. The `deploy` command is dry-run by default, and the REPL/TUI
+cockpit is plan-only — it reports what `deploy --apply` would dispatch but never
+fires it. See [ADR-005](../../.claude/docs/adr/adr-005-cloud-control-plane.md).
+
+See [ADR-003: Fleet Engine](../../.claude/docs/adr/adr-003-fleet-engine.md) and
+[ADR-005: Cloud Control Plane](../../.claude/docs/adr/adr-005-cloud-control-plane.md)
+for the decision records behind this shape.

@@ -17,7 +17,7 @@ from pathlib import Path
 
 from projects_orchestrator import cache
 from projects_orchestrator.adapters.cloud import as_check_results as cloud_check_results
-from projects_orchestrator.adapters.cloud import collect_cloud
+from projects_orchestrator.adapters.cloud import collect_cloud, trigger_deploy
 from projects_orchestrator.adapters.github import as_check_results, collect_github
 from projects_orchestrator.adapters.project_init import latest_upstream_version
 from projects_orchestrator.audit import audit_project
@@ -47,6 +47,7 @@ commands:
   start <project>         launch the project's run_command (detached)
   stop <project>          terminate the supervised process
   logs <project>          tail the captured run output
+  deploy <project> [action]  plan a cloud action (deploy|rollback|restart); dispatch via CLI --apply
   memory <query>          search every project's memory files
   drift [project|all]     scaffold drift vs the recorded manifest
   doctor [project|all]    diagnose contract-v1 conformance
@@ -67,8 +68,9 @@ _TASK_VERBS = {"lint": ("lint",), "test": ("test",), "checks": ("lint", "test")}
 # Verbs that take an optional project target (default "all").
 _TARGET_VERBS = {"drift", "doctor", "audit", "ci", "upgrade", "cloud", "events", "detail"}
 
-# Verbs that require exactly one project target.
-_PROJECT_VERBS = {"start", "stop", "logs"}
+# Verbs that require exactly one project target (plus an optional trailing
+# argument, e.g. the deploy action — supervise verbs ignore it).
+_PROJECT_VERBS = {"start", "stop", "logs", "deploy"}
 
 
 @dataclass(frozen=True)
@@ -122,7 +124,11 @@ def parse_command(text: str) -> Intent:
     if verb in _TARGET_VERBS:
         return Intent(verb=verb, target=rest[0] if rest else "all")
     if verb in _PROJECT_VERBS:
-        return Intent(verb=verb, target=rest[0] if rest else None)
+        return Intent(
+            verb=verb,
+            target=rest[0] if rest else None,
+            args=(rest[1],) if len(rest) > 1 else (),
+        )
     if verb in {"projects", "refresh", "help", "quit", "exit"}:
         return Intent(verb="quit" if verb == "exit" else verb)
     return Intent(verb="unknown", args=(stripped,))
@@ -341,6 +347,31 @@ def _dispatch_supervise(ctx: ControllerContext, intent: Intent) -> Iterator[str]
         yield from run_logs(descriptor)
 
 
+def _dispatch_deploy(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
+    """Plan a cloud action from the cockpit — never dispatch (ADR-005).
+
+    The REPL/TUI is plan-only: it reports what the CLI ``deploy --apply`` would
+    dispatch, so an agent driving the controller cannot fire a production
+    deploy by typing a line.
+    """
+    if intent.target is None or intent.target == "all":
+        yield "usage: deploy <project> [deploy|rollback|restart]"
+        return
+    selected = _select_projects(ctx, intent.target)
+    if isinstance(selected, str):
+        yield selected
+        return
+    action = intent.args[0] if intent.args else "deploy"
+    result = trigger_deploy(selected[0], action, apply=False)
+    if result.status == "planned":
+        yield (
+            f"{result.project}: {result.action} planned via {result.workflow} "
+            f"— run `deploy {result.project} --apply` on the CLI to dispatch"
+        )
+        return
+    yield f"{result.project}: {result.action} {result.status} — {result.detail}"
+
+
 def _dispatch_ask(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
     """Resolve /ask to an existing intent (opt-in), then dispatch it."""
     import os
@@ -388,6 +419,7 @@ _ENGINE = {
     "start": _dispatch_supervise,
     "stop": _dispatch_supervise,
     "logs": _dispatch_supervise,
+    "deploy": _dispatch_deploy,
     "ask": _dispatch_ask,
     "upgrade": _dispatch_upgrade,
 }

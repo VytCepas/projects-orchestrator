@@ -16,8 +16,8 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 from projects_orchestrator import __version__, cache
+from projects_orchestrator.adapters.cloud import DEPLOY_ACTIONS, collect_cloud, trigger_deploy
 from projects_orchestrator.adapters.cloud import as_check_results as cloud_check_results
-from projects_orchestrator.adapters.cloud import collect_cloud
 from projects_orchestrator.adapters.github import as_check_results, collect_github
 from projects_orchestrator.adapters.gitlab import as_check_results as gitlab_check_results
 from projects_orchestrator.adapters.gitlab import collect_gitlab, provider_is_gitlab
@@ -165,9 +165,7 @@ def _project_checks(
     if head and clean_worktree_head(descriptor) != head:
         fresh_results = [replace(result, head="") for result in fresh_results]
     fresh = dict(zip(to_run, fresh_results, strict=True))
-    return [
-        (reusable[task], True) if task in reusable else (fresh[task], False) for task in tasks
-    ]
+    return [(reusable[task], True) if task in reusable else (fresh[task], False) for task in tasks]
 
 
 def _cmd_checks(args: argparse.Namespace) -> int:
@@ -448,6 +446,26 @@ def _resolve_project(args: argparse.Namespace) -> ProjectDescriptor | None:
     return descriptor
 
 
+def _cmd_deploy(args: argparse.Namespace) -> int:
+    """Dispatch a project's deploy workflow for a cloud action (ADR-005).
+
+    Dry-run by default: prints the plan and dispatches nothing. ``--apply``
+    triggers the child's own ``workflow_dispatch`` pipeline, where production
+    credentials live — the orchestrator holds none (ADR-012). Exits 1 when an
+    applied dispatch fails.
+    """
+    descriptor = _resolve_project(args)
+    if descriptor is None:
+        return 2
+    result = trigger_deploy(descriptor, args.action, apply=args.apply)
+    if args.json:
+        return _emit_json(asdict(result))
+    workflow = f" via {result.workflow}" if result.workflow else ""
+    detail = f" — {result.detail}" if result.detail else ""
+    print(f"{result.project}: {result.action} {result.status}{workflow}{detail}")
+    return 1 if result.status == "failed" else 0
+
+
 def _cmd_start(args: argparse.Namespace) -> int:
     """Launch a project's declared run_command, detached and logged."""
     descriptor = _resolve_project(args)
@@ -641,6 +659,12 @@ def _build_parser() -> argparse.ArgumentParser:
             _cmd_notify,
             True,
         ),
+        (
+            "deploy",
+            "dispatch a project's deploy workflow (deploy/rollback/restart; --apply)",
+            _cmd_deploy,
+            True,
+        ),
         ("start", "launch a project's run_command (detached, logged)", _cmd_start, False),
         ("stop", "terminate a project's supervised process", _cmd_stop, False),
         ("logs", "tail a project's captured run output", _cmd_logs, False),
@@ -676,9 +700,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.choices["ci"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["cloud-status"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["events"].add_argument("project", nargs="?", help="limit to one project")
-    sub.choices["events"].add_argument(
-        "--since", help="only events at/after this ISO-8601 instant"
-    )
+    sub.choices["events"].add_argument("--since", help="only events at/after this ISO-8601 instant")
     sub.choices["history"].add_argument("project", help="project to show history for")
     sub.choices["history"].add_argument(
         "-n", "--width", type=int, default=HISTORY_TREND_WIDTH, help="trend width (default 10)"
@@ -687,8 +709,19 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.choices["notify"].add_argument(
         "--webhook", help="POST alerts as JSON to this URL (Slack-compatible)"
     )
-    for name in ("start", "stop", "logs"):
+    for name in ("start", "stop", "logs", "deploy"):
         sub.choices[name].add_argument("project", help="project to act on")
+    sub.choices["deploy"].add_argument(
+        "--action",
+        choices=DEPLOY_ACTIONS,
+        default="deploy",
+        help="cloud action to dispatch (default: deploy)",
+    )
+    sub.choices["deploy"].add_argument(
+        "--apply",
+        action="store_true",
+        help="actually dispatch the workflow (default: dry-run plan only)",
+    )
     sub.choices["logs"].add_argument(
         "-n", "--lines", type=int, default=40, help="trailing lines to show (default 40)"
     )

@@ -39,11 +39,26 @@ STATE_UNKNOWN = "unknown"
 HEALTHY = "healthy"
 UNHEALTHY = "unhealthy"
 
+# Cloud control plane (ADR-005). Actions are *dispatched* to the child's own
+# workflow_dispatch pipeline — the orchestrator never holds cloud credentials
+# or runs a platform mutation itself. Credentials stay in review-gated CI
+# (ADR-012). The default workflow name is the convention a child unlocks by
+# shipping it; ``deploy.workflow`` overrides it.
+DEPLOY_ACTIONS = ("deploy", "rollback", "restart")
+DEFAULT_DEPLOY_WORKFLOW = "deploy.yml"
+
+DISPATCH_PLANNED = "planned"
+DISPATCH_DISPATCHED = "dispatched"
+DISPATCH_FAILED = "failed"
+DISPATCH_SKIPPED = "skipped"
+
 _FLY_COMMAND = "flyctl status --json"
 _CLOUD_RUN_COMMAND = "gcloud run services describe {app} --region {region} --format=json"
+_DISPATCH_COMMAND = "gh workflow run {workflow} -f action={action}"
 
 _PROBE_TIMEOUT = 20.0
 _HEALTH_TIMEOUT = 5.0
+_DISPATCH_TIMEOUT = 20.0
 
 
 @dataclass(frozen=True)
@@ -214,3 +229,83 @@ def as_check_results(status: CloudStatus, checked_at: str) -> list[CheckResult]:
             checked_at=checked_at,
         )
     ]
+
+
+@dataclass(frozen=True)
+class DeployDispatch:
+    """The outcome of one cloud action for one project (ADR-005).
+
+    Attributes:
+        project: Project name.
+        action: Requested action (``deploy`` | ``rollback`` | ``restart``).
+        workflow: The child workflow that would be / was dispatched; empty when
+            skipped.
+        status: ``planned`` (dry run, nothing dispatched) | ``dispatched`` |
+            ``failed`` (gh missing/offline/no such workflow) | ``skipped``
+            (no deploy target, or an unknown action).
+        detail: Human-readable note (why it was skipped, or the dry-run hint).
+    """
+
+    project: str
+    action: str
+    workflow: str = ""
+    status: str = DISPATCH_SKIPPED
+    detail: str = ""
+
+
+def trigger_deploy(
+    descriptor: ProjectDescriptor,
+    action: str = "deploy",
+    *,
+    apply: bool = False,
+    timeout: float = _DISPATCH_TIMEOUT,
+) -> DeployDispatch:
+    """Dispatch a child's deploy workflow for a cloud action; never raises.
+
+    Read-only toward the child tree and the cloud: this only *dispatches* the
+    child's own ``workflow_dispatch`` pipeline (``deploy.workflow``, default
+    ``deploy.yml``) with an ``action`` input. The mutation runs in the child's
+    CI, where production credentials live — the orchestrator holds none and
+    runs no platform command itself (ADR-005 / ADR-012).
+
+    Args:
+        descriptor: The service project to act on.
+        action: One of :data:`DEPLOY_ACTIONS`.
+        apply: When ``False`` (the default) nothing is dispatched — the result
+            is ``planned`` and no subprocess runs, so any surface can call it
+            safely. Only ``apply=True`` fires ``gh workflow run``.
+        timeout: Command timeout in seconds.
+
+    Returns:
+        A :class:`DeployDispatch`. ``skipped`` for a non-service project (no
+        deploy target) or an unknown action; ``planned`` on a dry run;
+        ``dispatched``/``failed`` once applied.
+    """
+    deploy = descriptor.deploy
+    if deploy is None or deploy.target == DEPLOY_NONE:
+        return DeployDispatch(project=descriptor.name, action=action, detail="no deploy target")
+    if action not in DEPLOY_ACTIONS:
+        return DeployDispatch(
+            project=descriptor.name,
+            action=action,
+            detail=f"unknown action (expected {', '.join(DEPLOY_ACTIONS)})",
+        )
+    workflow = deploy.workflow or DEFAULT_DEPLOY_WORKFLOW
+    if not apply:
+        return DeployDispatch(
+            project=descriptor.name,
+            action=action,
+            workflow=workflow,
+            status=DISPATCH_PLANNED,
+            detail="dry run — pass --apply to dispatch",
+        )
+    # workflow/action are descriptor/enum data, but quote defensively so a
+    # hostile child config can never inject shell into the dispatch command.
+    command = _DISPATCH_COMMAND.format(workflow=shlex.quote(workflow), action=shlex.quote(action))
+    result = run_command(command, cwd=descriptor.path, timeout=timeout)
+    return DeployDispatch(
+        project=descriptor.name,
+        action=action,
+        workflow=workflow,
+        status=DISPATCH_DISPATCHED if result.ok else DISPATCH_FAILED,
+    )

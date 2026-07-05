@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from conftest import add_memory, make_project
+from conftest import add_memory, make_project, make_project_v2
 
 from projects_orchestrator.controller import ControllerContext, dispatch, parse_command
 from projects_orchestrator.registry import FleetConfig
@@ -42,6 +42,8 @@ from projects_orchestrator.registry import FleetConfig
         ("start alpha", "start"),
         ("stop alpha", "stop"),
         ("logs alpha", "logs"),
+        ("deploy alpha", "deploy"),
+        ("deploy alpha rollback", "deploy"),
         ("frobnicate", "unknown"),
     ],
 )
@@ -109,6 +111,26 @@ def test_dispatch_check_persists_results_to_cache(fleet_dir: Path) -> None:
     cache_file = fleet_dir / "checks.json"
     list(dispatch(parse_command("lint alpha"), _ctx(fleet_dir, cache_file)))
     assert cache_file.is_file()
+
+
+def test_dispatch_deploy_from_repl_is_plan_only(fleet_dir: Path) -> None:
+    # The cockpit never dispatches (ADR-005): a REPL `deploy` reports the plan
+    # and points at the CLI --apply, so an agent can't fire a prod deploy.
+    make_project_v2(fleet_dir, "alpha", deploy_target="fly")
+    lines = list(dispatch(parse_command("deploy alpha"), _ctx(fleet_dir)))
+    assert any("planned" in line and "--apply" in line for line in lines)
+
+
+def test_dispatch_deploy_carries_action(fleet_dir: Path) -> None:
+    make_project_v2(fleet_dir, "alpha", deploy_target="fly")
+    lines = list(dispatch(parse_command("deploy alpha rollback"), _ctx(fleet_dir)))
+    assert any("rollback" in line for line in lines)
+
+
+def test_dispatch_deploy_requires_project(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")
+    lines = list(dispatch(parse_command("deploy"), _ctx(fleet_dir)))
+    assert "usage: deploy" in lines[0]
 
 
 def test_dispatch_status_table_has_header(fleet_dir: Path) -> None:

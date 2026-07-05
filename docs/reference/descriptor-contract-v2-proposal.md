@@ -36,9 +36,11 @@ deploy:
   app: my-service      # app/service name at the target
   region: fra          # when the platform needs one
   health_url: https://my-service.example/healthz
+  workflow: deploy.yml # the child's workflow_dispatch deploy pipeline
 ```
 
-Consumed by `adapters/cloud.py` (`cloud-status` command, `Cloud` column):
+Consumed by `adapters/cloud.py` (`cloud-status` command + `Cloud` column for
+reads; the `deploy` command for actions):
 
 | Key | Type | Consumed as | Missing → |
 |---|---|---|---|
@@ -46,10 +48,19 @@ Consumed by `adapters/cloud.py` (`cloud-status` command, `Cloud` column):
 | `deploy.app` | string | app name interpolated into the probe command | empty |
 | `deploy.region` | string | region interpolated into the probe command | empty |
 | `deploy.health_url` | string (http/https) | bounded stdlib GET → `healthy`/`unhealthy`/`unknown` | no health probe |
+| `deploy.workflow` | string | the child workflow the `deploy` command dispatches for cloud actions | `deploy.yml` (convention) |
 
 `deploy: none` — or omitting the block — stays valid and free: the adapter
-short-circuits with no subprocess and no network call. All probes are
-read-only; mutations stay in review-gated CI (ADR-012).
+short-circuits with no subprocess and no network call.
+
+**Reads are read-only; actions are dispatch-only.** The status probes above
+never mutate. The `deploy` command (`deploy`/`rollback`/`restart`) does *not*
+run `flyctl`/`gcloud` locally either — it dispatches the child's own
+`workflow_dispatch` pipeline (`deploy.workflow`) with an `action` input, so
+production credentials stay in the child's review-gated CI and never enter the
+orchestrator. This is the same dispatch pattern as `upgrade-plan --apply`, and
+it is dry-run by default (only `--apply` fires). See
+[ADR-005](../../.claude/docs/adr/adr-005-cloud-control-plane.md).
 
 ### `observability.path` — where guard/usage logs live
 

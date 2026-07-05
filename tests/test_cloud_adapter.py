@@ -17,6 +17,7 @@ from projects_orchestrator.adapters.cloud import (
     parse_cloud_run_status,
     parse_fly_status,
     probe_health,
+    trigger_deploy,
 )
 from projects_orchestrator.descriptor import load_descriptor
 
@@ -150,3 +151,42 @@ def test_as_check_results_unhealthy_is_fail() -> None:
 def test_as_check_results_detail_carries_revision() -> None:
     status = CloudStatus(project="alpha", target="fly", state="deployed", revision="42")
     assert as_check_results(status, "")[0].detail == "42"
+
+
+# --- cloud control plane (ADR-005): dispatch-only deploy actions ---
+
+
+def test_trigger_deploy_no_target_is_skipped(fleet_dir: Path) -> None:
+    descriptor = load_descriptor(make_project(fleet_dir, "alpha"))
+    assert trigger_deploy(descriptor, "deploy", apply=True).status == "skipped"
+
+
+def test_trigger_deploy_unknown_action_is_skipped(fleet_dir: Path) -> None:
+    descriptor = load_descriptor(make_project_v2(fleet_dir, "alpha", deploy_target="fly"))
+    assert trigger_deploy(descriptor, "nuke", apply=True).status == "skipped"
+
+
+def test_trigger_deploy_dry_run_is_planned(fleet_dir: Path) -> None:
+    # apply=False must never shell out — it only reports the plan.
+    descriptor = load_descriptor(make_project_v2(fleet_dir, "alpha", deploy_target="fly"))
+    assert trigger_deploy(descriptor, "deploy").status == "planned"
+
+
+def test_trigger_deploy_dry_run_carries_default_workflow(fleet_dir: Path) -> None:
+    descriptor = load_descriptor(make_project_v2(fleet_dir, "alpha", deploy_target="fly"))
+    assert trigger_deploy(descriptor, "rollback").workflow == "deploy.yml"
+
+
+def test_trigger_deploy_uses_declared_workflow(fleet_dir: Path) -> None:
+    config = (
+        "project:\n  name: alpha\n  project_init_contract_version: 2\n"
+        "language: python\ndelivery: service\n"
+        "deploy:\n  target: fly\n  app: alpha-svc\n  workflow: ship.yml\n"
+    )
+    descriptor = load_descriptor(make_project(fleet_dir, "alpha", config_text=config))
+    assert trigger_deploy(descriptor, "deploy").workflow == "ship.yml"
+
+
+def test_trigger_deploy_degrades_to_failed_offline(fleet_dir: Path) -> None:
+    descriptor = load_descriptor(make_project_v2(fleet_dir, "alpha", deploy_target="fly"))
+    assert trigger_deploy(descriptor, "deploy", apply=True, timeout=10.0).status == "failed"

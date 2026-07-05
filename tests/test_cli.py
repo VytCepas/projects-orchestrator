@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import add_memory, git_init, make_project
+from conftest import add_memory, git_init, make_project, make_project_v2
 
 from projects_orchestrator import __version__
 from projects_orchestrator.__main__ import main
@@ -56,6 +56,22 @@ def test_status_single_project(fleet_dir: Path, capsys) -> None:
     git_init(make_project(fleet_dir, "alpha"))
     main(["status", "alpha", "--root", str(fleet_dir)])
     assert "alpha: clean on main" in capsys.readouterr().out
+
+
+def test_deploy_dry_run_is_planned(fleet_dir: Path, capsys) -> None:
+    # Without --apply the deploy command dispatches nothing (ADR-005): it only
+    # prints the plan, so it is safe to run from any surface.
+    make_project_v2(fleet_dir, "alpha", deploy_target="fly")
+    exit_code = main(["deploy", "alpha", "--root", str(fleet_dir)])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "planned" in out
+
+
+def test_deploy_non_service_is_skipped(fleet_dir: Path, capsys) -> None:
+    make_project(fleet_dir, "alpha")
+    main(["deploy", "alpha", "--action", "rollback", "--root", str(fleet_dir)])
+    assert "skipped" in capsys.readouterr().out
 
 
 def test_status_unknown_project_exits_2(fleet_dir: Path) -> None:
