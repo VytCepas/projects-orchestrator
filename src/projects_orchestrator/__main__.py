@@ -24,6 +24,13 @@ from projects_orchestrator.audit import audit_project, render_markdown
 from projects_orchestrator.checks import DEFAULT_TASKS, CheckResult, collect_checks
 from projects_orchestrator.controller import ControllerContext, dispatch, parse_command
 from projects_orchestrator.descriptor import ProjectDescriptor
+from projects_orchestrator.digest import (
+    compute_digest,
+    digest_payload,
+    load_prior,
+    render_digest,
+    save_current,
+)
 from projects_orchestrator.doctor import diagnose
 from projects_orchestrator.drift import compute_drift
 from projects_orchestrator.fleet import fleet_rows, fleet_snapshots, render_table
@@ -257,6 +264,13 @@ def _cmd_audit(args: argparse.Namespace) -> int:
         selected = [descriptor]
     cached = cache.load_results()
     reports = [audit_project(d, cached.get(d.name)) for d in selected]
+    if args.digest:
+        digest = compute_digest(reports, load_prior())
+        save_current(reports)
+        if args.json:
+            return _emit_json(digest_payload(digest))
+        print(render_digest(digest))
+        return 1 if digest.new else 0
     if args.json:
         return _emit_json([asdict(r) for r in reports])
     if args.markdown:
@@ -592,6 +606,11 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.choices["audit"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["audit"].add_argument(
         "--markdown", action="store_true", help="render the report as Markdown"
+    )
+    sub.choices["audit"].add_argument(
+        "--digest",
+        action="store_true",
+        help="show only what changed since the last audit run (exit 1 on new issues)",
     )
     sub.choices["ci"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["cloud-status"].add_argument("project", nargs="?", help="limit to one project")

@@ -19,7 +19,7 @@ projects-orchestrator logs <project>      # tail the captured run output (-n lin
 projects-orchestrator memory <query>      # search every project's memory files
 projects-orchestrator drift [project]     # scaffold drift vs the recorded manifest
 projects-orchestrator doctor [project]    # diagnose contract-v1 conformance
-projects-orchestrator audit [project]     # one governance report (--markdown for a digest)
+projects-orchestrator audit [project]     # one governance report (--markdown; --digest for a delta vs last run)
 projects-orchestrator ci [project]        # latest CI conclusion + open-PR count via gh
 projects-orchestrator cloud-status [project]  # deploy/runtime status (contract-v2 deploy block)
 projects-orchestrator events [project]    # guard/usage events from observability logs (--since ISO)
