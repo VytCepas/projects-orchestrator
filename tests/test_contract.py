@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from projects_orchestrator.adapters.project_init import parse_scaffold_result
 from projects_orchestrator.capabilities import MCP, SKILL, parse_capabilities
 from projects_orchestrator.descriptor import parse_config
 from projects_orchestrator.drift import _load_manifest
@@ -93,6 +94,14 @@ def test_scaffold_result_json_carries_the_registration_seam() -> None:
     assert result["config"] == ".claude/config.yaml"
     assert set(result["memory"]) >= {"tier", "stack", "memory_path"}
     assert isinstance(result["files_created"], int)
+
+
+def test_scaffold_result_parses_through_the_consumer() -> None:
+    # The real --json fixture must parse through the seam the `register` command
+    # uses, so an upstream shape change fails here rather than at register time.
+    parsed = parse_scaffold_result(_SCAFFOLD_RESULT_V1.read_text(encoding="utf-8"))
+    assert parsed is not None
+    assert parsed.contract_version == 1  # string "1" upstream → int for the reader
 
 
 # --- Known contract state: v2 surfaces are NOT yet emitted (epic #68) ---

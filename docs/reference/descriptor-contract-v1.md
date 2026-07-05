@@ -27,8 +27,12 @@ this file exists and is readable.
 | `project.project_init_version` | string (`MAJOR.MINOR.PATCH`) | `Scaffold` column + `Latest` staleness compare | `unknown` (not comparable) |
 | `language` | string | descriptor `language` | `unknown` |
 | `delivery` | string (`library`/`service`/`prototype`) | descriptor `delivery` | `unknown` |
-| `memory.tier` | int (`0`–`3`) | memory tier | `0` |
-| `memory.memory_path` | string (repo-relative) | memory directory location | `.claude/memory` |
+| `memory.tier` | int (`0`–`3`) | memory tier; selects the retrieval surface | `0` |
+| `memory.stack` | string | declared backend (`auto`/`obsidian-only`/…) | `unknown` |
+| `memory.memory_path` | string (repo-relative) | memory directory location (the anchor) | `.claude/memory` |
+| `memory.vault_path` | string (repo-relative) | Obsidian vault; **read only at tier ≥ 1** | `None` |
+| `memory.graph_path` | string (repo-relative) | graphify graph; **read only at tier ≥ 2** | `None` |
+| `memory.rag_endpoint` | string (URL/addr) | RAG query endpoint; **read only at tier ≥ 3** | empty |
 | `tooling.<task>_command` | string (shell) | the gate run for `<task>` (`lint`, `test`, `run`, …) | task is `skip` |
 
 Notes:
@@ -36,6 +40,15 @@ Notes:
 - **Tooling.** Only keys ending in `_command` with a non-empty string value are
   read; the `_command` suffix is stripped to form the task name. An undeclared
   gate is never guessed — it is skipped.
+- **Tier-gated memory surfaces (ADR-024/ADR-025).** `vault_path`, `graph_path`,
+  and `rag_endpoint` are *higher-tier retrieval surfaces*: each is read only at
+  or above the tier that introduces it (1, 2, 3 respectively). The anchors
+  (`tier`, `memory_path`, `MEMORY.md`) never move between tiers — higher tiers
+  only **add** surfaces — so a tier-0 reader stays correct against a tier-3
+  child, and a stray higher-tier value on a lower-tier config is ignored.
+  `vault_path`/`graph_path` escaping the project root are dropped with a
+  warning, exactly like `memory_path`. Retrieval degrades by tier
+  (`memory.retrieval_mode`): RAG → graph → grep.
 - **Version format.** `project_init_version` is compared by splitting on `.`
   into integer components (`0.5.2` → `(0, 5, 2)`). Any non-integer component
   (e.g. `1.2.0-rc1`) makes the version *not comparable* — the `Latest` cell
@@ -88,6 +101,38 @@ type: user | feedback | project | reference
 - `name` falls back to the file stem, `description` to empty, `type` to
   `unknown` when frontmatter is absent — malformed files degrade to untyped
   entries rather than failing the read.
+
+## 5. `.claude/CAPABILITIES.md` — capability inventory
+
+Read by `capabilities.py` (the `capabilities` command). project-init generates
+this surface-independent inventory (ADR-017) of the skills, hooks, and MCP
+servers the scaffold gave the agent, as markdown section tables
+(`## Skills (N)`, `## Hooks`, `## MCP servers (N)`). The orchestrator parses
+those tables and inverts them across the fleet — *which projects expose which
+skill/MCP* (ADR-025 §3). A missing or malformed file degrades to an empty
+inventory, never an error.
+
+## 6. `project-init scaffold --json` — the registration seam
+
+Read by `adapters/project_init.py` (`parse_scaffold_result`) and the `register`
+command. project-init emits this JSON "for a root orchestrator driving
+project-init" (#510): the freshly-scaffolded `target`, its `contract_version`,
+`config` path, `memory` tier/stack, `files_created`, and `conflicts`. `register`
+adds `target` to the orchestrator's own fleet file so the next command governs
+the new project — no manual edit, no second config read. Numbers emitted as
+strings (`"1"`) are tolerated; a document with no `target` is rejected. This is
+the one place the orchestrator *writes* — to its **own** registry, never to a
+child tree (ADR-003).
+
+## Machine source of truth (pending)
+
+project-init plans a shared `descriptor.schema.json` (VytCepas/project-init#603)
+as the machine-checkable definition of the surfaces above. Once it ships, this
+page and [contract v2](descriptor-contract-v2-proposal.md) will cross-link it as
+the authority and the golden fixtures under `tests/fixtures/project_init/` will
+be validated against it directly. Until then, the producer→consumer contract
+test (`tests/test_contract.py`) is the tripwire: it parses a **real** project-init
+scaffold through every reader above, so an upstream shape change fails CI.
 
 ## Compatibility policy
 

@@ -14,6 +14,7 @@ the child's own reviewed-PR upgrade workflow, which stays the sole write path
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +54,79 @@ def _loads(stdout: str) -> Any:
         return json.loads(stdout)
     except (ValueError, TypeError):
         return None
+
+
+def _coerce_int(value: Any, default: int = 0) -> int:
+    """Coerce ``value`` to int (project-init emits some numbers as strings)."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+@dataclass(frozen=True)
+class ScaffoldResult:
+    """The machine-readable result of ``project-init scaffold --json`` (#510).
+
+    project-init emits this seam explicitly "for a root orchestrator driving
+    project-init": it names the freshly-scaffolded project and its key contract
+    facts, so the orchestrator can register the new project from one call
+    without a second config read.
+
+    Attributes:
+        target: Absolute path to the scaffolded project root.
+        preset: Preset the scaffold was rendered from.
+        contract_version: Descriptor-contract version stamped into the config.
+        config_relpath: Where the descriptor lives under ``target``.
+        memory_tier: Memory tier the scaffold selected.
+        memory_stack: Memory backend the scaffold selected.
+        files_created: Number of files the scaffold wrote.
+        conflicts: Paths the scaffold left unwritten because they existed.
+    """
+
+    target: Path
+    preset: str = ""
+    contract_version: int = 0
+    config_relpath: str = ".claude/config.yaml"
+    memory_tier: int = 0
+    memory_stack: str = "unknown"
+    files_created: int = 0
+    conflicts: tuple[str, ...] = field(default_factory=tuple)
+
+
+def parse_scaffold_result(text: str) -> ScaffoldResult | None:
+    """Parse ``scaffold --json`` stdout into a :class:`ScaffoldResult` (pure).
+
+    Args:
+        text: The JSON document project-init wrote to stdout.
+
+    Returns:
+        The parsed result, or ``None`` when the document is not an object or
+        names no ``target`` (the one field the orchestrator cannot invent).
+        Numbers emitted as strings (``"1"``, ``"0"``) are tolerated.
+    """
+    data = _loads(text)
+    if not isinstance(data, dict):
+        return None
+    target = data.get("target")
+    if not isinstance(target, str) or not target.strip():
+        return None
+    raw_memory = data.get("memory")
+    memory: dict[str, Any] = raw_memory if isinstance(raw_memory, dict) else {}
+    raw_conflicts = data.get("conflicts")
+    conflicts = (
+        tuple(str(c) for c in raw_conflicts) if isinstance(raw_conflicts, list) else ()
+    )
+    return ScaffoldResult(
+        target=Path(target.strip()),
+        preset=str(data.get("preset") or ""),
+        contract_version=_coerce_int(data.get("contract_version")),
+        config_relpath=str(data.get("config") or ".claude/config.yaml"),
+        memory_tier=_coerce_int(memory.get("tier")),
+        memory_stack=str(memory.get("stack") or "unknown"),
+        files_created=_coerce_int(data.get("files_created")),
+        conflicts=conflicts,
+    )
 
 
 def parse_release_tag(stdout: str) -> tuple[int, int, int] | None:

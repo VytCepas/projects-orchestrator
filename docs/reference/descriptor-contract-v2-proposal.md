@@ -65,8 +65,10 @@ undeclared (or at v1) the orchestrator falls back to
 (`../…` or absolute) is ignored with a warning — the orchestrator only ever
 reads inside the project it governs. The log itself stays `usage.jsonl`, one
 JSON object per line; the reader tolerates `ts`/`timestamp` and
-`action`/`decision` aliases, skips (and counts) malformed lines, and counts
-events whose timestamp is present but unparseable.
+`action`/`decision`/`event` aliases (project-init's guards log the outcome
+under `event`), passes through an optional `session` id so a run's events group
+across projects, skips (and counts) malformed lines, and counts events whose
+timestamp is present but unparseable.
 
 **Timestamps.** Event and `--since` instants may be ISO-8601
 (`2026-07-04T10:00:00Z`) or raw epoch-seconds; a naive ISO stamp is read as
@@ -104,4 +106,18 @@ must actually emit `project_init_contract_version: 2` with these blocks, and
 should constrain `deploy.app`/`region` to `^[A-Za-z0-9._-]+$` at scaffold time
 (the orchestrator already `shlex.quote`s them defensively). File that upstream
 issue and record its link here; then rename this page to
-`descriptor-contract-v2.md`.
+`descriptor-contract-v2.md`. The rename is intentionally *not* done yet — no
+child emits contract v2 today, so freezing the page would document a shape the
+producer does not yet ship.
+
+**Machine source of truth (pending).** When project-init ships the shared
+`descriptor.schema.json` (VytCepas/project-init#603), both this page and
+[contract v1](descriptor-contract-v1.md) will cross-link it as the authority
+and validate the golden fixtures against it. Until then the producer→consumer
+contract test (`tests/test_contract.py`) is the tripwire.
+
+**Registration seam (consumed).** project-init's `scaffold --json` output
+(#510) is no longer a tested-but-dead seam: `adapters/project_init.parse_scaffold_result`
++ the `register` command read it to register a freshly-scaffolded project
+into the fleet without a second config read. See
+[contract v1 §6](descriptor-contract-v1.md).
