@@ -23,6 +23,15 @@ from projects_orchestrator.adapters.gitlab import as_check_results as gitlab_che
 from projects_orchestrator.adapters.gitlab import collect_gitlab, provider_is_gitlab
 from projects_orchestrator.adapters.project_init import latest_upstream_version, trigger_upgrade
 from projects_orchestrator.audit import audit_project, render_markdown
+from projects_orchestrator.capabilities import (
+    HOOK,
+    MCP,
+    SKILL,
+    load_capabilities,
+)
+from projects_orchestrator.capabilities import (
+    aggregate as aggregate_capabilities,
+)
 from projects_orchestrator.checks import DEFAULT_TASKS, CheckResult, collect_checks
 from projects_orchestrator.controller import ControllerContext, dispatch, parse_command
 from projects_orchestrator.descriptor import ProjectDescriptor
@@ -40,7 +49,7 @@ from projects_orchestrator.history import DEFAULT_TREND_WIDTH as HISTORY_TREND_W
 from projects_orchestrator.history import load_history, project_history, sparkline, transitions
 from projects_orchestrator.history import record as history_record
 from projects_orchestrator.html import render_html
-from projects_orchestrator.memory import load_project_memory, search_memory
+from projects_orchestrator.memory import load_memory, retrieval_mode, search_memory
 from projects_orchestrator.notify import (
     alerts_payload,
     fleet_alerts,
@@ -203,9 +212,19 @@ def _cmd_checks(args: argparse.Namespace) -> int:
 
 
 def _cmd_memory(args: argparse.Namespace) -> int:
-    """Search every project's memory files."""
+    """Search every project's memory, using each project's tier retrieval surface."""
     fleet = _discover(args)
-    memories = [load_project_memory(d) for d in fleet.descriptors]
+    # Degrade-by-tier (ADR-025 §4): grep the memory_path baseline, and add the
+    # graph's facts for tier>=2 children. RAG-tier children are noted so an
+    # operator knows a surface exists that this local-only search does not query.
+    for descriptor in fleet.descriptors:
+        if retrieval_mode(descriptor) == "rag":
+            print(
+                f"note: {descriptor.name} exposes a tier-3 RAG endpoint "
+                f"({descriptor.rag_endpoint}) not queried by local search",
+                file=sys.stderr,
+            )
+    memories = [load_memory(d) for d in fleet.descriptors]
     hits = search_memory(memories, " ".join(args.query))
     if args.json:
         return _emit_json([asdict(h) for h in hits])
@@ -214,6 +233,37 @@ def _cmd_memory(args: argparse.Namespace) -> int:
         print(f"{location} [{hit.file.type}] {hit.file.name} — {hit.line}")
     if not hits:
         print("no matches")
+    return 0
+
+
+def _cmd_capabilities(args: argparse.Namespace) -> int:
+    """Aggregate each project's CAPABILITIES.md — who exposes which skill/MCP."""
+    fleet = _discover(args)
+    selected = list(fleet.descriptors)
+    if args.project:
+        descriptor = fleet.get(args.project)
+        if descriptor is None:
+            print(f"unknown project: {args.project}", file=sys.stderr)
+            return 2
+        selected = [descriptor]
+    inventories = [load_capabilities(d) for d in selected]
+    if args.json:
+        return _emit_json([asdict(inv) for inv in inventories])
+    if args.kind:
+        index = aggregate_capabilities(inventories, args.kind)
+        for name, projects in index.items():
+            print(f"{name}: {', '.join(projects)}")
+        if not index:
+            print(f"no {args.kind} capabilities across the fleet")
+        return 0
+    for inventory in inventories:
+        if not inventory.present:
+            print(f"{inventory.project}: no CAPABILITIES.md")
+            continue
+        print(
+            f"{inventory.project}: {len(inventory.skills)} skill(s), "
+            f"{len(inventory.mcp_servers)} MCP server(s), {len(inventory.hooks)} hook(s)"
+        )
     return 0
 
 
@@ -396,7 +446,11 @@ def _cmd_events(args: argparse.Namespace) -> int:
         for event in filter_since(report.events, since):
             empty = False
             command = f" — {event.command}" if event.command else ""
-            print(f"{event.project} {event.timestamp} [{event.hook}] {event.action}{command}")
+            session = f" ({event.session})" if event.session else ""
+            print(
+                f"{event.project} {event.timestamp} [{event.hook}]"
+                f" {event.action}{session}{command}"
+            )
     if empty:
         print("no events recorded")
     return 0
@@ -618,6 +672,12 @@ def _build_parser() -> argparse.ArgumentParser:
         ("status", "fleet git health (table) or one project", _cmd_status, True),
         ("checks", "run each project's declared gates", _cmd_checks, True),
         ("memory", "search all project memories", _cmd_memory, True),
+        (
+            "capabilities",
+            "aggregate CAPABILITIES.md — who exposes which skill/MCP/hook",
+            _cmd_capabilities,
+            True,
+        ),
         ("drift", "scaffold drift vs the recorded manifest", _cmd_drift, True),
         ("doctor", "diagnose contract-v1 conformance", _cmd_doctor, True),
         (
@@ -662,6 +722,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.choices["status"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["checks"].add_argument("project", nargs="?", help="limit to one project")
+    sub.choices["capabilities"].add_argument("project", nargs="?", help="limit to one project")
+    sub.choices["capabilities"].add_argument(
+        "--kind",
+        choices=(SKILL, MCP, HOOK),
+        help="invert the fleet: list each capability of this kind and who exposes it",
+    )
     sub.choices["drift"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["doctor"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["audit"].add_argument("project", nargs="?", help="limit to one project")

@@ -23,6 +23,14 @@ CONTRACT_V2 = 2
 
 DEPLOY_NONE = "none"
 
+# Memory tier at which each higher-tier retrieval surface first appears
+# (ADR-024 tier model, ADR-025 §4). A child only *emits* the field at/above
+# its tier, so the orchestrator reads it tier-gated: anchors never move, higher
+# tiers only add surfaces, and a tier-0 read stays correct against a tier-3 child.
+TIER_VAULT = 1
+TIER_GRAPH = 2
+TIER_RAG = 3
+
 
 @dataclass(frozen=True)
 class DeployConfig:
@@ -53,7 +61,16 @@ class ProjectDescriptor:
         contract_version: Descriptor-contract schema version (0 when absent).
         project_init_version: Scaffold version the project was rendered with.
         memory_tier: Memory tier (0 auto … 3 obsidian-graphify-rag).
+        memory_stack: Declared memory backend (``auto`` | ``obsidian-only`` |
+            ``obsidian-graphify`` | ``obsidian-graphify-rag``); ``unknown`` when
+            the config omits it.
         memory_path: Absolute path to the project's memory directory.
+        vault_path: Obsidian vault directory; ``None`` below tier 1 or when
+            undeclared (higher-tier retrieval surface, ADR-025 §4).
+        graph_path: Graphify graph file; ``None`` below tier 2 or when
+            undeclared.
+        rag_endpoint: Tier-3 RAG query endpoint (URL or local address); empty
+            below tier 3 or when the child has not run its RAG setup yet.
         tooling: Task name → shell command (lint, format, test, run, …).
         deploy: Contract-v2 deploy block; ``None`` below v2 or when absent.
         observability_path: Contract-v2 usage/guard-log directory; ``None``
@@ -73,7 +90,11 @@ class ProjectDescriptor:
     contract_version: int = 0
     project_init_version: str = "unknown"
     memory_tier: int = 0
+    memory_stack: str = "unknown"
     memory_path: Path | None = None
+    vault_path: Path | None = None
+    graph_path: Path | None = None
+    rag_endpoint: str = ""
     tooling: dict[str, str] = field(default_factory=dict)
     deploy: DeployConfig | None = None
     observability_path: Path | None = None
@@ -151,6 +172,49 @@ def _extract_observability_path(
     return contained
 
 
+@dataclass(frozen=True)
+class _MemorySurface:
+    """The parsed ``memory:`` block plus the context tier-gating needs."""
+
+    block: dict[str, Any]
+    tier: int
+    project_dir: Path
+
+
+def _tier_gated_path(
+    memory: _MemorySurface, key: str, min_tier: int, warnings: list[str]
+) -> Path | None:
+    """Resolve a tier-gated memory path (``vault_path``/``graph_path``).
+
+    Read only at/above ``min_tier`` — a lower-tier child never emits it, and
+    ignoring a stray value keeps the anchors-never-move invariant (a value that
+    only appears with its tier can never shift a lower-tier reader's behaviour).
+    A path escaping the project root is dropped with a warning, exactly as
+    ``memory_path`` is.
+    """
+    if memory.tier < min_tier:
+        return None
+    declared = memory.block.get(key)
+    if not isinstance(declared, str) or not declared.strip():
+        return None
+    contained = _contained_path(memory.project_dir, declared.strip())
+    if contained is None:
+        warnings.append(f"memory.{key} '{declared.strip()}' escapes the project root — ignored")
+    return contained
+
+
+def _tier_gated_endpoint(memory: _MemorySurface) -> str:
+    """Resolve the tier-3 ``rag_endpoint`` string; empty below tier 3/undeclared.
+
+    Unlike the vault/graph *paths*, the endpoint is an opaque address (a URL or
+    ``host:port``), so it is kept as a plain string rather than a contained path.
+    """
+    if memory.tier < TIER_RAG:
+        return ""
+    endpoint = memory.block.get("rag_endpoint")
+    return endpoint.strip() if isinstance(endpoint, str) else ""
+
+
 def _extract_hooks_expected(raw: dict[str, Any]) -> tuple[str, ...]:
     """Parse the v2 ``hooks.expected`` list; empty when undeclared."""
     expected = _as_mapping(raw.get("hooks")).get("expected")
@@ -193,6 +257,8 @@ def parse_config(text: str, project_dir: Path) -> ProjectDescriptor:
         memory_path = project_dir / ".claude/memory"
     contract_version = _as_int(project.get("project_init_contract_version"))
     is_v2 = contract_version >= CONTRACT_V2
+    memory_tier = _as_int(memory.get("tier"))
+    surface = _MemorySurface(block=memory, tier=memory_tier, project_dir=project_dir)
 
     return ProjectDescriptor(
         name=str(project.get("name") or project_dir.name),
@@ -201,8 +267,12 @@ def parse_config(text: str, project_dir: Path) -> ProjectDescriptor:
         delivery=str(raw.get("delivery") or "unknown"),
         contract_version=contract_version,
         project_init_version=str(project.get("project_init_version") or "unknown"),
-        memory_tier=_as_int(memory.get("tier")),
+        memory_tier=memory_tier,
+        memory_stack=str(memory.get("stack") or "unknown"),
         memory_path=memory_path,
+        vault_path=_tier_gated_path(surface, "vault_path", TIER_VAULT, warnings),
+        graph_path=_tier_gated_path(surface, "graph_path", TIER_GRAPH, warnings),
+        rag_endpoint=_tier_gated_endpoint(surface),
         tooling=_extract_tooling(raw),
         deploy=_extract_deploy(raw) if is_v2 else None,
         observability_path=(

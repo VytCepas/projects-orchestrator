@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -126,6 +127,77 @@ def make_project_v2(
     )
 
 
+MEMORY_CONFIG_TEMPLATE = """\
+project:
+  name: "{name}"
+  project_init_version: 0.7.0
+  project_init_contract_version: 1
+
+language: python
+delivery: library
+
+memory:
+  tier: {tier}
+  stack: {stack}
+  memory_path: .claude/memory
+{surfaces}
+
+tooling:
+  lint_command: "true"
+"""
+
+
+def make_memory_project(
+    base: Path,
+    name: str,
+    tier: int,
+    graph_path: str = "",
+    rag_endpoint: str = "",
+) -> Path:
+    """Create a project declaring a memory tier and its retrieval surfaces.
+
+    Args:
+        base: Parent directory to create the project under.
+        name: Project (directory) name.
+        tier: Memory tier written to ``memory.tier``.
+        graph_path: ``memory.graph_path`` value (omitted when empty).
+        rag_endpoint: ``memory.rag_endpoint`` value (omitted when empty).
+
+    Returns:
+        The project root path.
+    """
+    lines = []
+    if graph_path:
+        lines.append(f"  graph_path: {graph_path}")
+    if rag_endpoint:
+        lines.append(f"  rag_endpoint: {rag_endpoint}")
+    stack = "obsidian-graphify-rag" if tier >= 3 else "obsidian-graphify"
+    return make_project(
+        base,
+        name,
+        config_text=MEMORY_CONFIG_TEMPLATE.format(
+            name=name, tier=tier, stack=stack, surfaces="\n".join(lines)
+        ),
+    )
+
+
+def add_graph(project: Path, nodes: list[dict[str, str]], relpath: str = "graphify-out/graph.json") -> Path:
+    """Write a graphify-shaped ``graph.json`` with the given nodes.
+
+    Args:
+        project: Project root to write under.
+        nodes: Node dicts (e.g. ``{"name": ..., "description": ...}``).
+        relpath: Where to write the graph, relative to the project root.
+
+    Returns:
+        The written graph.json path.
+    """
+    path = project / relpath
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"nodes": nodes}), encoding="utf-8")
+    return path
+
+
 def add_memory(project: Path, filename: str, **fields: str) -> Path:
     """Write one schema-conformant memory file (plus MEMORY.md index).
 
@@ -151,6 +223,71 @@ def add_memory(project: Path, filename: str, **fields: str) -> Path:
     )
     index = memory_dir / "MEMORY.md"
     index.write_text(f"- [{meta['name']}]({filename}) — {meta['description']}\n", encoding="utf-8")
+    return path
+
+
+CAPABILITIES_TEMPLATE = """\
+# Capabilities
+
+## Skills ({skill_count})
+
+| Skill | Description |
+|---|---|
+{skills}
+
+## Hooks
+
+| Event | Script |
+|---|---|
+{hooks}
+
+## MCP servers ({mcp_count})
+
+{mcps}
+"""
+
+
+def add_capabilities(
+    project: Path,
+    skills: list[str] | None = None,
+    mcp_servers: list[str] | None = None,
+    hooks: list[tuple[str, str]] | None = None,
+) -> Path:
+    """Write a project-init-shaped ``.claude/CAPABILITIES.md`` inventory.
+
+    Args:
+        project: Project root to write under.
+        skills: Skill names (each gets a placeholder description).
+        mcp_servers: MCP server names (each gets a placeholder invocation).
+        hooks: ``(event, script)`` pairs.
+
+    Returns:
+        The written CAPABILITIES.md path.
+    """
+    skills = skills if skills is not None else ["plan", "status"]
+    mcp_servers = mcp_servers if mcp_servers is not None else []
+    hooks = hooks if hooks is not None else [("PreToolUse", "prod_guard.py")]
+    skill_rows = "\n".join(f"| {name} | does {name} |" for name in skills)
+    hook_rows = "\n".join(f"| {event} | {script} |" for event, script in hooks)
+    if mcp_servers:
+        mcp_rows = "| Server | Invocation |\n|---|---|\n" + "\n".join(
+            f"| {name} | bunx {name} |" for name in mcp_servers
+        )
+    else:
+        mcp_rows = "_None selected._"
+    claude_dir = project / ".claude"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    path = claude_dir / "CAPABILITIES.md"
+    path.write_text(
+        CAPABILITIES_TEMPLATE.format(
+            skill_count=len(skills),
+            skills=skill_rows,
+            hooks=hook_rows,
+            mcp_count=len(mcp_servers),
+            mcps=mcp_rows,
+        ),
+        encoding="utf-8",
+    )
     return path
 
 
