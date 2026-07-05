@@ -23,6 +23,8 @@ classifiers = [
     "Topic :: Software Development :: Build Tools",
     "Environment :: Console",
 ]
+# Runtime is intentionally stdlib-only: the control surface is a CLI an agent
+# drives over Bash, and the dashboard is served from http.server (ADR-004).
 dependencies = []
 
 [project.scripts]
