@@ -16,6 +16,7 @@ from projects_orchestrator.cache import load_results
 from projects_orchestrator.checks import CheckResult
 from projects_orchestrator.descriptor import ProjectDescriptor, parse_scaffold_version
 from projects_orchestrator.drift import DriftReport, compute_drift, hook_health
+from projects_orchestrator.history import load_history, primary_trend
 from projects_orchestrator.memory import ProjectMemory, load_project_memory
 from projects_orchestrator.pool import map_ordered
 from projects_orchestrator.registry import Fleet
@@ -41,6 +42,7 @@ COLUMNS = (
     "Running",
     "Memory",
     "Checked",
+    "Trend",
 )
 
 
@@ -56,6 +58,7 @@ class ProjectSnapshot:
         drift: Divergence from the recorded scaffold manifest.
         hooks: Git-hook installation health (``ok``/``partial``/``missing``/``-``).
         run_state: Live supervised-process state, or ``None`` when not running.
+        trend: Primary-gate history sparkline (``++x+``); empty when no history.
     """
 
     descriptor: ProjectDescriptor
@@ -65,16 +68,22 @@ class ProjectSnapshot:
     drift: DriftReport
     hooks: str
     run_state: RunState | None = None
+    trend: str = ""
 
 
 def collect_snapshot(
-    descriptor: ProjectDescriptor, cached: dict[str, CheckResult] | None = None
+    descriptor: ProjectDescriptor,
+    cached: dict[str, CheckResult] | None = None,
+    trend: str = "",
 ) -> ProjectSnapshot:
     """Join all knowledge for one project; never raises.
 
     Args:
         descriptor: The project to snapshot.
         cached: Last-known check results for the project, if any.
+        trend: Pre-computed primary-gate history sparkline (the history log is
+            read once per fleet render, not once per project — see
+            :func:`fleet_snapshots`).
 
     Returns:
         The joined snapshot.
@@ -87,6 +96,7 @@ def collect_snapshot(
         drift=compute_drift(descriptor),
         hooks=hook_health(descriptor),
         run_state=running_state(descriptor),
+        trend=trend,
     )
 
 
@@ -104,7 +114,11 @@ def fleet_snapshots(fleet: Fleet, cache_file: Path | None = None) -> list[Projec
         One snapshot per project, in fleet (name) order.
     """
     cache = load_results(cache_file)
-    return map_ordered(lambda d: collect_snapshot(d, cache.get(d.name)), fleet.descriptors)
+    history = load_history()  # read once per fleet render, sliced per project below
+    return map_ordered(
+        lambda d: collect_snapshot(d, cache.get(d.name), primary_trend(history, d.name)),
+        fleet.descriptors,
+    )
 
 
 def humanize_age(iso_timestamp: str, now: _dt.datetime | None = None) -> str:
@@ -260,6 +274,7 @@ def snapshot_row(
         "Running": _running_cell(snapshot),
         "Memory": f"{memory_files} fact{'s' if memory_files != 1 else ''}",
         "Checked": _checked_cell(snapshot),
+        "Trend": snapshot.trend or "-",
     }
 
 

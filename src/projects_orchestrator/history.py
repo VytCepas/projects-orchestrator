@@ -121,6 +121,24 @@ def sparkline(entries: list[HistoryEntry], width: int = DEFAULT_TREND_WIDTH) -> 
     return "".join(_SPARK.get(entry.status, "?") for entry in recent)
 
 
+# The gate whose trend represents the project in the fleet table, most-preferred
+# first; falls back to any recorded task.
+_PRIMARY_TASKS = ("test", "lint")
+
+
+def primary_trend(entries: list[HistoryEntry], project: str, width: int = DEFAULT_TREND_WIDTH) -> str:
+    """The sparkline for a project's primary gate; ``""`` when it has no history.
+
+    Prefers ``test`` then ``lint``, else the first recorded task — one compact
+    trend to stand in for the project in the fleet overview.
+    """
+    grouped = project_history(entries, project)
+    for task in (*_PRIMARY_TASKS, *sorted(grouped)):
+        if task in grouped:
+            return sparkline(grouped[task], width)
+    return ""
+
+
 def transitions(entries: list[HistoryEntry]) -> list[HistoryEntry]:
     """Return the entries where status changed from the previous run (pure)."""
     changes: list[HistoryEntry] = []
