@@ -29,6 +29,12 @@ from projects_orchestrator.drift import compute_drift
 from projects_orchestrator.fleet import fleet_rows, fleet_snapshots, render_table
 from projects_orchestrator.html import render_html
 from projects_orchestrator.memory import load_project_memory, search_memory
+from projects_orchestrator.notify import (
+    alerts_payload,
+    fleet_alerts,
+    post_webhook,
+    render_alerts,
+)
 from projects_orchestrator.observability import filter_since, load_events
 from projects_orchestrator.pool import map_ordered
 from projects_orchestrator.registry import (
@@ -456,6 +462,28 @@ def _cmd_snapshot(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_notify(args: argparse.Namespace) -> int:
+    """Compute threshold alerts and optionally push them to a webhook."""
+    fleet = _discover(args)
+    selected = list(fleet.descriptors)
+    if args.project:
+        descriptor = fleet.get(args.project)
+        if descriptor is None:
+            print(f"unknown project: {args.project}", file=sys.stderr)
+            return 2
+        selected = [descriptor]
+    snapshots = [s for s in fleet_snapshots(fleet) if s.descriptor in selected]
+    alerts = fleet_alerts(snapshots)
+    if args.json:
+        _emit_json(alerts_payload(alerts))
+    else:
+        print(render_alerts(alerts))
+    if args.webhook and alerts:
+        ok = post_webhook(args.webhook, alerts)
+        print(f"webhook: {'delivered' if ok else 'delivery failed'}", file=sys.stderr)
+    return 1 if alerts else 0
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     """Serve the live fleet dashboard over HTTP until interrupted."""
     serve(_fleet_config(args), host=args.host, port=args.port)
@@ -532,6 +560,12 @@ def _build_parser() -> argparse.ArgumentParser:
             True,
         ),
         ("events", "guard/usage events from the fleet's observability logs", _cmd_events, True),
+        (
+            "notify",
+            "threshold alerts (CI red, drift, hooks, cloud) — optionally to a webhook",
+            _cmd_notify,
+            True,
+        ),
         ("start", "launch a project's run_command (detached, logged)", _cmd_start, False),
         ("stop", "terminate a project's supervised process", _cmd_stop, False),
         ("logs", "tail a project's captured run output", _cmd_logs, False),
@@ -564,6 +598,10 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.choices["events"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["events"].add_argument(
         "--since", help="only events at/after this ISO-8601 instant"
+    )
+    sub.choices["notify"].add_argument("project", nargs="?", help="limit to one project")
+    sub.choices["notify"].add_argument(
+        "--webhook", help="POST alerts as JSON to this URL (Slack-compatible)"
     )
     for name in ("start", "stop", "logs"):
         sub.choices[name].add_argument("project", help="project to act on")

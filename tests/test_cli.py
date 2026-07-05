@@ -188,6 +188,21 @@ def test_start_no_run_command_exits_nonzero(fleet_dir: Path) -> None:
     assert main(["start", "restarted", "--root", str(fleet_dir)]) == 1
 
 
+def test_notify_clean_fleet_exits_zero(fleet_dir: Path, capsys) -> None:
+    make_project(fleet_dir, "alpha", tooling={"test": "true"})
+    assert main(["notify", "--root", str(fleet_dir)]) == 0
+    assert "no alerts" in capsys.readouterr().out
+
+
+def test_notify_with_alerts_exits_one(fleet_dir: Path) -> None:
+    # A project shipping git hooks that aren't installed trips a hooks alert.
+    project = make_project(fleet_dir, "alpha")
+    source = project / ".github" / "hooks"
+    source.mkdir(parents=True)
+    (source / "pre-commit").write_text("#!/bin/sh\n", encoding="utf-8")
+    assert main(["notify", "--root", str(fleet_dir)]) == 1
+
+
 def test_serve_command_dispatches_to_server(fleet_dir: Path, monkeypatch) -> None:
     # serve() blocks, so verify wiring by capturing the call instead of running it.
     import projects_orchestrator.__main__ as cli
