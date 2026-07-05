@@ -16,6 +16,7 @@ config in its own directory (`.codex/`, `.agents/`, `.cursor/`, `.amp/`,
 Code's own hook configuration is Claude-specific (see "Claude Code specifics"
 below); everything else is reusable by any agent.
 
+- [`docs/explanation/overview.md`](docs/explanation/overview.md) — the whole system on one page: capabilities, the read-only project-init contract boundary, and the architecture (read this for the mental model)
 - [`.claude/project-init.md`](.claude/project-init.md) — workflow, conventions, task tracking
 - [`.claude/memory/MEMORY.md`](.claude/memory/MEMORY.md) — memory index (read first for context)
 - [`.claude/docs/`](.claude/docs/) — system of record: ADRs and development guides
