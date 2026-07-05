@@ -7,5 +7,6 @@
 -->
 
 - [Project context](project_context.md) — goals, constraints, key decisions
+- [Roadmap and interface direction](project_roadmap.md) — four-direction plan status and follow-up decisions
 - [User role](user_role.md) — developer background and preferences
 - [Conventions](feedback_conventions.md) — agent behavior rules for this project
