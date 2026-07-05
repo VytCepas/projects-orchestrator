@@ -1,0 +1,1 @@
+{"target": "/path/to/scaffolded/project", "preset": "auto", "contract_version": "1", "memory": {"tier": "0", "stack": "auto", "memory_path": ".claude/memory"}, "config": ".claude/config.yaml", "files_created": 103, "conflicts": []}

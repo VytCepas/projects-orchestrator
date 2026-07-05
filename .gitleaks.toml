@@ -14,4 +14,9 @@ useDefault = true
 description = "project-init scaffold record (content hashes, not secrets)."
 paths = [
   '''\.claude/config\.yaml''',
+  # Vendored project-init golden fixtures carry the same scaffold record
+  # (relpath → sha256 manifest) that the contract test parses
+  # (tests/test_contract.py); the hash next to a "secrets.md" key trips the
+  # same generic-api-key false positive as a live scaffold config.
+  '''tests/fixtures/project_init/.*\.yaml''',
 ]
