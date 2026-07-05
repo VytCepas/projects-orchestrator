@@ -68,6 +68,7 @@ def test_snapshot_row_has_all_columns(fleet_dir: Path) -> None:
         "Running",
         "Memory",
         "Checked",
+        "Trend",
     }
 
 
@@ -205,3 +206,33 @@ def test_cloud_column_defaults_to_question_mark(fleet_dir: Path) -> None:
     fleet = discover(FleetConfig(roots=(fleet_dir,)))
     rows = fleet_rows(fleet_snapshots(fleet, fleet_dir / "no-cache.json"))
     assert rows[0]["Cloud"] == "?"
+
+
+def test_snapshot_row_trend_from_snapshot(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")
+    snapshot = collect_snapshot(load_descriptor(fleet_dir / "alpha"), None, trend="++x")
+    assert snapshot_row(snapshot)["Trend"] == "++x"
+
+
+def test_snapshot_row_trend_dash_when_empty(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")
+    assert snapshot_row(_snapshot(fleet_dir))["Trend"] == "-"
+
+
+def test_fleet_snapshots_reads_history_once(fleet_dir: Path, monkeypatch) -> None:
+    # The history log is read once per fleet render, not once per project (no N+1).
+    import projects_orchestrator.fleet as fleet_mod
+
+    make_project(fleet_dir, "alpha")
+    make_project(fleet_dir, "beta")
+    make_project(fleet_dir, "gamma")
+    calls = {"n": 0}
+
+    def counting_load_history():
+        calls["n"] += 1
+        return []
+
+    monkeypatch.setattr(fleet_mod, "load_history", counting_load_history)
+    fleet = discover(FleetConfig(roots=(fleet_dir,)))
+    fleet_snapshots(fleet, fleet_dir / "no-cache.json")
+    assert calls["n"] == 1

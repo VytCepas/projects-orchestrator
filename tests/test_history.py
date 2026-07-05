@@ -10,6 +10,7 @@ from projects_orchestrator.history import (
     HistoryEntry,
     history_path,
     load_history,
+    primary_trend,
     project_history,
     record,
     sparkline,
@@ -85,6 +86,20 @@ def test_sparkline_truncates_to_width() -> None:
 def test_transitions_only_reports_status_changes() -> None:
     entries = [_entry("pass"), _entry("pass"), _entry("fail"), _entry("fail"), _entry("pass")]
     assert [e.status for e in transitions(entries)] == ["pass", "fail", "pass"]
+
+
+def test_primary_trend_prefers_test_gate() -> None:
+    entries = [_entry("pass", task="lint"), _entry("fail", task="test"), _entry("pass", task="test")]
+    assert primary_trend(entries, "alpha") == "x+"
+
+
+def test_primary_trend_falls_back_to_lint() -> None:
+    entries = [_entry("pass", task="lint"), _entry("fail", task="lint")]
+    assert primary_trend(entries, "alpha") == "+x"
+
+
+def test_primary_trend_empty_without_history() -> None:
+    assert primary_trend([], "alpha") == ""
 
 
 def test_history_path_honors_xdg_state_home(tmp_path: Path, monkeypatch) -> None:
