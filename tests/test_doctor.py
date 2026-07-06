@@ -170,6 +170,13 @@ def test_diagnose_cloud_warns_for_cloud_run_missing_region(fleet_dir: Path) -> N
     assert "app and region" in finding.detail
 
 
+def test_diagnose_cloud_warns_for_unsupported_deploy_target(fleet_dir: Path) -> None:
+    make_project_v2(fleet_dir, "alpha", deploy_target="k8s")
+    finding = _finding(_report(fleet_dir), "cloud")
+    assert finding.status == "warn"
+    assert "not supported by cloud-status" in finding.detail
+
+
 def test_diagnose_cloud_ok_for_v2_service_with_deploy_metadata(fleet_dir: Path) -> None:
     make_project_v2(fleet_dir, "alpha", deploy_target="cloud-run")
     finding = _finding(_report(fleet_dir), "cloud")

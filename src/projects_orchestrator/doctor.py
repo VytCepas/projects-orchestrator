@@ -38,6 +38,7 @@ FAIL = "fail"
 # Lowest and highest contract versions this orchestrator actually understands.
 CONTRACT_VERSION = 1
 CONTRACT_VERSION_MAX = CONTRACT_V2
+SUPPORTED_CLOUD_TARGETS = frozenset({"cloud-run", "fly"})
 
 
 @dataclass(frozen=True)
@@ -171,6 +172,12 @@ def _check_cloud(descriptor: ProjectDescriptor) -> Finding:
             "cloud",
             WARN,
             "cloud-run deploy metadata needs app and region for cloud-status",
+        )
+    if deploy.target not in SUPPORTED_CLOUD_TARGETS:
+        return Finding(
+            "cloud",
+            WARN,
+            f"deploy target {deploy.target} is not supported by cloud-status",
         )
     return Finding("cloud", OK, f"{deploy.target} deploy metadata present")
 
