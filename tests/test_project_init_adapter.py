@@ -18,6 +18,7 @@ from projects_orchestrator.adapters.project_init import (
     upgrade_workflow_relpath,
 )
 from projects_orchestrator.descriptor import load_descriptor
+from projects_orchestrator.runner import RunResult
 
 _SCAFFOLD_JSON = json.dumps(
     {
@@ -60,7 +61,21 @@ def test_parse_release_tag_garbage_is_none() -> None:
 
 
 def test_latest_upstream_version_degrades_offline(tmp_path: Path) -> None:
-    assert latest_upstream_version(tmp_path, timeout=10.0) is None
+    def offline_runner(command: str, cwd: Path, timeout: float) -> RunResult:
+        assert cwd == tmp_path
+        assert timeout == 10.0
+        return RunResult(command=command, returncode=1, stderr="offline")
+
+    assert latest_upstream_version(tmp_path, timeout=10.0, run=offline_runner) is None
+
+
+def test_latest_upstream_version_reads_injected_release(tmp_path: Path) -> None:
+    def release_runner(command: str, cwd: Path, timeout: float) -> RunResult:
+        assert cwd == tmp_path
+        assert timeout == 10.0
+        return RunResult(command=command, returncode=0, stdout='{"tagName":"v1.2.3"}')
+
+    assert latest_upstream_version(tmp_path, timeout=10.0, run=release_runner) == (1, 2, 3)
 
 
 def test_trigger_upgrade_without_workflow_reports_reason(fleet_dir: Path) -> None:
