@@ -220,6 +220,23 @@ def test_audit_json_reports_findings(fleet_dir: Path, capsys) -> None:
     assert "freshness" in categories
 
 
+def test_hardening_with_gaps_exits_one_and_groups_actions(fleet_dir: Path, capsys) -> None:
+    make_project(fleet_dir, "alpha")
+    assert main(["hardening", "--root", str(fleet_dir)]) == 1
+    out = capsys.readouterr().out
+    assert "alpha:" in out
+    assert "checks:" in out
+    assert "memory:" in out
+
+
+def test_hardening_json_is_parseable(fleet_dir: Path, capsys) -> None:
+    make_project(fleet_dir, "alpha")
+    main(["hardening", "--root", str(fleet_dir), "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert payload[0]["project"] == "alpha"
+    assert {"checks", "memory"} <= {item["category"] for item in payload[0]["items"]}
+
+
 def test_audit_markdown_renders_heading(fleet_dir: Path, capsys) -> None:
     make_project(fleet_dir, "alpha")
     main(["audit", "--root", str(fleet_dir), "--markdown"])

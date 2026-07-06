@@ -49,6 +49,8 @@ from projects_orchestrator.digest import (
 from projects_orchestrator.doctor import diagnose
 from projects_orchestrator.drift import compute_drift
 from projects_orchestrator.fleet import fleet_rows, fleet_snapshots, render_table
+from projects_orchestrator.hardening import checklist as hardening_checklist
+from projects_orchestrator.hardening import render_text as render_hardening
 from projects_orchestrator.history import DEFAULT_TREND_WIDTH as HISTORY_TREND_WIDTH
 from projects_orchestrator.history import load_history, project_history, sparkline, transitions
 from projects_orchestrator.history import record as history_record
@@ -344,6 +346,23 @@ def _cmd_audit(args: argparse.Namespace) -> int:
             for finding in report.findings:
                 print(f"  [{finding.severity}] {finding.category}: {finding.message}")
     return 1 if any(r.needs_attention for r in reports) else 0
+
+
+def _cmd_hardening(args: argparse.Namespace) -> int:
+    """Show setup-readiness gaps with concrete next actions."""
+    fleet = _discover(args)
+    selected = list(fleet.descriptors)
+    if args.project:
+        descriptor = fleet.get(args.project)
+        if descriptor is None:
+            print(f"unknown project: {args.project}", file=sys.stderr)
+            return 2
+        selected = [descriptor]
+    reports = hardening_checklist(selected, cache.load_results())
+    if args.json:
+        return _emit_json([asdict(report) for report in reports])
+    print(render_hardening(reports))
+    return 1 if any(report.needs_attention for report in reports) else 0
 
 
 def _cmd_ci(args: argparse.Namespace) -> int:
@@ -741,6 +760,12 @@ def _build_parser() -> argparse.ArgumentParser:
             _cmd_audit,
             True,
         ),
+        (
+            "hardening",
+            "setup-readiness checklist with concrete next actions",
+            _cmd_hardening,
+            True,
+        ),
         ("ci", "latest CI conclusion + open-PR count per project (via gh)", _cmd_ci, True),
         (
             "cloud-status",
@@ -792,6 +817,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.choices["drift"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["doctor"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["audit"].add_argument("project", nargs="?", help="limit to one project")
+    sub.choices["hardening"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["audit"].add_argument(
         "--markdown", action="store_true", help="render the report as Markdown"
     )
