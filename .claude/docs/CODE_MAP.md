@@ -31,6 +31,12 @@ Per-project deploy/runtime status, driven by the contract-v2 deploy block.
 - `def collect_cloud` — Probe one project's deploy state and health; never raises.
 - `def as_check_results` — Adapt a :class:`CloudStatus` into one cacheable ``cloud`` check result.
 
+### `projects_orchestrator/adapters/generic.py`
+
+Infer a minimal descriptor for plain git repos — no contract required.
+
+- `def infer_descriptor` — Infer a minimal descriptor for a plain git repo; never raises.
+
 ### `projects_orchestrator/adapters/github.py`
 
 Per-project GitHub state via ``gh`` — latest CI conclusion and open-PR count.
@@ -41,13 +47,28 @@ Per-project GitHub state via ``gh`` — latest CI conclusion and open-PR count.
 - `def collect_github` — Probe one project's CI conclusion and open-PR count; never raises.
 - `def as_check_results` — Adapt a :class:`GithubStatus` into cacheable check results.
 
+### `projects_orchestrator/adapters/gitlab.py`
+
+Per-project GitLab state via ``glab`` — latest pipeline status and open MRs.
+
+- `def provider_is_gitlab` — Whether this project's CI should be probed via ``glab`` rather than ``gh``.
+- `class GitlabStatus` — One project's GitLab state.
+- `def parse_pipeline_status` — Map ``glab ci list -F json`` output to a CI state (pure).
+- `def parse_mr_count` — Count open merge requests from ``glab mr list --output json`` (pure).
+- `def collect_gitlab` — Probe one project's pipeline status and open-MR count; never raises.
+- `def as_check_results` — Adapt a :class:`GitlabStatus` into cacheable check results.
+
 ### `projects_orchestrator/adapters/project_init.py`
 
 Upstream project-init state via ``gh`` — latest release, upgrade dispatch.
 
+- `class ScaffoldResult` — The machine-readable result of ``project-init scaffold --json`` (#510).
+- `def parse_scaffold_result` — Parse ``scaffold --json`` stdout into a :class:`ScaffoldResult` (pure).
 - `def parse_release_tag` — Parse ``gh release view --json tagName`` output to a version tuple (pure).
 - `def latest_upstream_version` — Fetch the newest upstream project-init release; never raises.
-- `def trigger_upgrade` — Dispatch a child's ``project-init-upgrade.yml`` workflow; never raises.
+- `def upgrade_workflow_relpath` — Return where this child's upgrade workflow lives, by forge (pure).
+- `def has_upgrade_workflow` — Whether the child ships a reachable upgrade workflow for its forge.
+- `def trigger_upgrade` — Dispatch a child's forge-appropriate upgrade workflow; never raises.
 
 ### `projects_orchestrator/ask.py`
 
@@ -74,6 +95,16 @@ Persistent memory of the last known check results.
 - `def cache_path` — Return the checks-cache file path, honoring ``$XDG_CACHE_HOME``.
 - `def load_results` — Load cached check results; never raises.
 - `def save_results` — Merge new results into the cache and write it back; never raises.
+
+### `projects_orchestrator/capabilities.py`
+
+Read each project's capability inventory — the "who exposes what" layer.
+
+- `class Capability` — One inventoried capability from one project.
+- `class ProjectCapabilities` — One project's parsed capability inventory.
+- `def parse_capabilities` — Parse a ``CAPABILITIES.md`` document into a typed inventory (pure).
+- `def load_capabilities` — Read one project's ``CAPABILITIES.md``; never raises.
+- `def aggregate` — Invert the fleet's inventories into ``capability name → projects``.
 
 ### `projects_orchestrator/checks.py`
 
@@ -111,9 +142,21 @@ Per-project drill-in: one project's depth without leaving the app.
 - `def build_detail` — Join one project's descriptor, checks, commits, and memory.
 - `def render_detail` — Flatten a detail payload into display lines (pure).
 
+### `projects_orchestrator/digest.py`
+
+Audit digest — what changed since the last audit run.
+
+- `def digest_path` — Return the audit-digest state file path, honoring ``$XDG_STATE_HOME``.
+- `class AuditDigest` — The delta between two audit runs.
+- `def compute_digest` — Diff this run's issues against the prior run's (pure).
+- `def render_digest` — Render a digest as text lines (pure).
+- `def digest_payload` — Build the JSON payload for a digest.
+- `def load_prior` — Load the previous run's attention-worthy findings; ``[]`` on any problem.
+- `def save_current` — Persist this run's attention-worthy findings for the next diff; never raises.
+
 ### `projects_orchestrator/doctor.py`
 
-Diagnose each child's conformance to descriptor contract v1.
+Diagnose each child's conformance to the descriptor contract.
 
 - `class Finding` — One conformance check outcome for one project.
 - `class DoctorReport` — Every conformance finding for one project.
@@ -138,7 +181,37 @@ Aggregate everything the engine knows into one fleet view.
 - `def newest_scaffold_version` — Return the newest comparable scaffold version across the fleet.
 - `def snapshot_row` — Build one table row from a snapshot (pure).
 - `def fleet_rows` — Build all table rows (pure); resolves scaffold freshness fleet-wide.
+- `def cell_status` — Classify a cell's text as ``good``/``bad``/``warn``/neutral (pure).
 - `def render_table` — Render rows as a plain aligned text table (no dependencies).
+
+### `projects_orchestrator/hardening.py`
+
+Fleet setup-readiness checklist with concrete next actions.
+
+- `class HardeningItem` — One setup gap and its suggested next action.
+- `class HardeningReport` — Hardening checklist for one project.
+- `def project_checklist` — Build the hardening checklist for one project.
+- `def checklist` — Build hardening checklists for the fleet.
+- `def render_text` — Render reports as grouped text with concrete next actions.
+
+### `projects_orchestrator/history.py`
+
+Append-only check history — trends the last-known cache can't show.
+
+- `class HistoryEntry` — One recorded check outcome at a point in time.
+- `def history_path` — Return the history log path, honoring ``$XDG_STATE_HOME``.
+- `def record` — Append trend-worthy results to the bounded history log; never raises.
+- `def load_history` — Read the history log (chronological); ``[]`` on any problem, bad lines skipped.
+- `def project_history` — Group one project's entries by task, preserving chronological order (pure).
+- `def sparkline` — Render the last ``width`` outcomes as a compact trend, newest on the right.
+- `def primary_trend` — The sparkline for a project's primary gate; ``""`` when it has no history.
+- `def transitions` — Return the entries where status changed from the previous run (pure).
+
+### `projects_orchestrator/html.py`
+
+Render the fleet view as one self-contained HTML page.
+
+- `def render_html` — Render fleet rows as a complete standalone HTML document (pure).
 
 ### `projects_orchestrator/memory.py`
 
@@ -148,7 +221,21 @@ Read and search the fleet's memory — the "all-knowing" layer.
 - `class ProjectMemory` — Everything one project remembers.
 - `class MemoryHit` — One search match.
 - `def load_project_memory` — Read one project's memory directory; never raises.
+- `def retrieval_mode` — Pick a project's memory retrieval surface from its tier (pure).
+- `def load_graph_facts` — Read a graphify graph's nodes as memory facts; never raises.
+- `def load_memory` — Load one project's memory via its tier's retrieval surface; never raises.
 - `def search_memory` — Search all loaded memories for a case-insensitive substring.
+
+### `projects_orchestrator/notify.py`
+
+Threshold alerts and a notifications sink — governance that reaches out.
+
+- `class Alert` — One threshold crossing worth pushing.
+- `def snapshot_alerts` — Derive the alerts for one project snapshot (pure).
+- `def fleet_alerts` — Collect every project's alerts, most severe first (pure).
+- `def render_alerts` — Render alerts as text lines, or a friendly all-clear (pure).
+- `def alerts_payload` — Build the JSON/webhook payload (Slack-compatible ``text`` + details).
+- `def post_webhook` — Deliver alerts to a webhook; return whether it was accepted (never raises).
 
 ### `projects_orchestrator/observability.py`
 
@@ -160,6 +247,14 @@ Read guard/usage events across the fleet — the observability layer.
 - `def parse_event` — Normalize one JSONL line into a :class:`GuardEvent` (pure).
 - `def load_events` — Read one project's usage log; never raises.
 - `def filter_since` — Keep events at or after an ISO-8601 instant (pure).
+- `def count_unparseable_timestamps` — Count events carrying a non-empty timestamp that does not parse (pure).
+
+### `projects_orchestrator/pool.py`
+
+Bounded thread-pool fan-out for per-project engine work.
+
+- `def default_jobs` — Return the default worker count: ``min(8, cpu count)``, at least 1.
+- `def map_ordered` — Apply ``fn`` to every item concurrently, preserving input order.
 
 ### `projects_orchestrator/registry.py`
 
@@ -170,6 +265,8 @@ Discover the fleet: which projects the orchestrator governs.
 - `def load_fleet_config` — Parse a fleet file; never raises.
 - `def default_fleet_config` — Build the config used when no fleet file exists.
 - `def discover` — Discover every project the config points at; never raises.
+- `class RegisterOutcome` — The result of registering a project path into a fleet file.
+- `def register_project` — Add a project path to a fleet file's ``projects:`` list; never raises.
 
 ### `projects_orchestrator/runner.py`
 
@@ -178,12 +275,34 @@ Bounded subprocess execution shared by every engine module.
 - `class RunResult` — Outcome of one shell command.
 - `def run_command` — Run a shell command with a hard timeout; never raises.
 
+### `projects_orchestrator/server.py`
+
+Live fleet dashboard — a read-only HTTP view that refreshes itself.
+
+- `def snapshot_payload` — Build the fleet-overview JSON payload (pure w.r.t. ``generated_at``).
+- `def project_payload` — Build one project's drill-in payload; ``None`` when it is unknown.
+- `def render_page` — Render the self-contained dashboard shell (pure).
+- `def make_server` — Build (but do not serve) the dashboard HTTP server bound to host:port.
+- `def serve` — Serve the live dashboard until interrupted (blocks).
+
 ### `projects_orchestrator/status.py`
 
 Per-project git health, degraded gracefully to ``unknown``.
 
 - `class ProjectStatus` — Git health of one project.
 - `def collect_status` — Collect git health for one project; never raises.
+- `def clean_worktree_head` — Return the HEAD commit SHA when the worktree is clean; else empty.
+
+### `projects_orchestrator/supervisor.py`
+
+Start, stop, and watch long-running project processes.
+
+- `class RunState` — One supervised process, as recorded at start time.
+- `def state_dir` — Return the supervisor state directory, honoring ``$XDG_STATE_HOME``.
+- `def running_state` — Return the live run state for a project, cleaning up stale records.
+- `def start` — Launch a project's declared ``run_command`` detached; never raises.
+- `def stop` — Terminate a project's supervised process; never raises.
+- `def logs` — Return the tail of a project's captured run output; never raises.
 
 ### `projects_orchestrator/tui.py`
 
