@@ -25,6 +25,7 @@ from projects_orchestrator.adapters.project_init import (
 )
 from projects_orchestrator.descriptor import (
     CONTRACT_V2,
+    DEPLOY_NONE,
     ProjectDescriptor,
     parse_scaffold_version,
 )
@@ -37,6 +38,7 @@ FAIL = "fail"
 # Lowest and highest contract versions this orchestrator actually understands.
 CONTRACT_VERSION = 1
 CONTRACT_VERSION_MAX = CONTRACT_V2
+SUPPORTED_CLOUD_TARGETS = frozenset({"cloud-run", "fly"})
 
 
 @dataclass(frozen=True)
@@ -148,6 +150,38 @@ def _check_upgrade(descriptor: ProjectDescriptor) -> Finding:
     return Finding("upgrade", WARN, f"no {relpath} — upgrade-plan --apply cannot dispatch")
 
 
+def _check_cloud(descriptor: ProjectDescriptor) -> Finding:
+    """Service projects declare enough deploy metadata for cloud-status to probe."""
+    if descriptor.delivery != "service":
+        return Finding("cloud", OK, f"{descriptor.delivery} delivery — no runtime probe expected")
+    deploy = descriptor.deploy
+    if deploy is None:
+        return Finding(
+            "cloud",
+            WARN,
+            "service project has no deploy metadata — add a contract-v2 deploy block",
+        )
+    if deploy.target == DEPLOY_NONE:
+        return Finding(
+            "cloud",
+            WARN,
+            "service project deploy target is none — cloud-status cannot probe it",
+        )
+    if deploy.target == "cloud-run" and (not deploy.app or not deploy.region):
+        return Finding(
+            "cloud",
+            WARN,
+            "cloud-run deploy metadata needs app and region for cloud-status",
+        )
+    if deploy.target not in SUPPORTED_CLOUD_TARGETS:
+        return Finding(
+            "cloud",
+            WARN,
+            f"deploy target {deploy.target} is not supported by cloud-status",
+        )
+    return Finding("cloud", OK, f"{deploy.target} deploy metadata present")
+
+
 _CHECKS = (
     _check_config,
     _check_contract,
@@ -156,6 +190,7 @@ _CHECKS = (
     _check_hooks,
     _check_tooling,
     _check_upgrade,
+    _check_cloud,
 )
 
 

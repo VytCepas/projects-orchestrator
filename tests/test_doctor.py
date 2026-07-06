@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from conftest import make_project
+from conftest import make_project, make_project_v2
 
 from projects_orchestrator.descriptor import load_descriptor
 from projects_orchestrator.doctor import Finding, diagnose
@@ -99,6 +99,89 @@ def test_diagnose_upgrade_ok_with_workflow(fleet_dir: Path) -> None:
     workflow.parent.mkdir(parents=True)
     workflow.write_text("name: upgrade\n", encoding="utf-8")
     assert _finding(_report(fleet_dir), "upgrade").status == "ok"
+
+
+def test_diagnose_cloud_ok_for_library_project(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")
+    finding = _finding(_report(fleet_dir), "cloud")
+    assert finding.status == "ok"
+    assert "no runtime probe expected" in finding.detail
+
+
+def test_diagnose_cloud_ok_for_prototype_project(fleet_dir: Path) -> None:
+    config = (
+        "project:\n  name: alpha\n  project_init_contract_version: 1\n"
+        "language: python\n"
+        "delivery: prototype\n"
+    )
+    make_project(fleet_dir, "alpha", config_text=config)
+    finding = _finding(_report(fleet_dir), "cloud")
+    assert finding.status == "ok"
+    assert "no runtime probe expected" in finding.detail
+
+
+def test_diagnose_cloud_warns_for_v1_service_without_deploy_metadata(
+    fleet_dir: Path,
+) -> None:
+    config = (
+        "project:\n  name: alpha\n  project_init_contract_version: 1\n"
+        "language: python\n"
+        "delivery: service\n"
+    )
+    make_project(fleet_dir, "alpha", config_text=config)
+    finding = _finding(_report(fleet_dir), "cloud")
+    assert finding.status == "warn"
+    assert "no deploy metadata" in finding.detail
+
+
+def test_diagnose_cloud_warns_for_v2_service_without_deploy_block(
+    fleet_dir: Path,
+) -> None:
+    config = (
+        "project:\n  name: alpha\n  project_init_contract_version: 2\n"
+        "language: python\n"
+        "delivery: service\n"
+    )
+    make_project(fleet_dir, "alpha", config_text=config)
+    finding = _finding(_report(fleet_dir), "cloud")
+    assert finding.status == "warn"
+    assert "contract-v2 deploy block" in finding.detail
+
+
+def test_diagnose_cloud_warns_for_v2_service_with_none_target(fleet_dir: Path) -> None:
+    make_project_v2(fleet_dir, "alpha", deploy_target="none")
+    finding = _finding(_report(fleet_dir), "cloud")
+    assert finding.status == "warn"
+    assert "cloud-status cannot probe" in finding.detail
+
+
+def test_diagnose_cloud_warns_for_cloud_run_missing_region(fleet_dir: Path) -> None:
+    config = (
+        "project:\n  name: alpha\n  project_init_contract_version: 2\n"
+        "language: python\n"
+        "delivery: service\n"
+        "deploy:\n"
+        "  target: cloud-run\n"
+        "  app: alpha-svc\n"
+    )
+    make_project(fleet_dir, "alpha", config_text=config)
+    finding = _finding(_report(fleet_dir), "cloud")
+    assert finding.status == "warn"
+    assert "app and region" in finding.detail
+
+
+def test_diagnose_cloud_warns_for_unsupported_deploy_target(fleet_dir: Path) -> None:
+    make_project_v2(fleet_dir, "alpha", deploy_target="k8s")
+    finding = _finding(_report(fleet_dir), "cloud")
+    assert finding.status == "warn"
+    assert "not supported by cloud-status" in finding.detail
+
+
+def test_diagnose_cloud_ok_for_v2_service_with_deploy_metadata(fleet_dir: Path) -> None:
+    make_project_v2(fleet_dir, "alpha", deploy_target="cloud-run")
+    finding = _finding(_report(fleet_dir), "cloud")
+    assert finding.status == "ok"
+    assert "cloud-run deploy metadata present" in finding.detail
 
 
 def test_report_status_is_fail_when_any_finding_fails(fleet_dir: Path) -> None:
