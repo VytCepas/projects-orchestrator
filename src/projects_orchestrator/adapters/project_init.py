@@ -14,13 +14,14 @@ the child's own reviewed-PR upgrade workflow, which stays the sole write path
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from projects_orchestrator.adapters.gitlab import provider_is_gitlab
 from projects_orchestrator.descriptor import ProjectDescriptor, parse_scaffold_version
-from projects_orchestrator.runner import run_command
+from projects_orchestrator.runner import RunResult, run_command
 
 UPSTREAM_REPO = "VytCepas/project-init"
 UPGRADE_WORKFLOW = "project-init-upgrade.yml"
@@ -148,19 +149,26 @@ def parse_release_tag(stdout: str) -> tuple[int, int, int] | None:
     return parse_scaffold_version(tag.removeprefix("v"))
 
 
-def latest_upstream_version(cwd: Path, timeout: float = _GH_TIMEOUT) -> tuple[int, int, int] | None:
+Runner = Callable[[str, Path, float], RunResult]
+
+
+def latest_upstream_version(
+    cwd: Path, timeout: float = _GH_TIMEOUT, run: Runner = run_command
+) -> tuple[int, int, int] | None:
     """Fetch the newest upstream project-init release; never raises.
 
     Args:
         cwd: Directory to run ``gh`` in (the command is repo-explicit via
             ``--repo``, so any valid directory works).
         timeout: Command timeout in seconds.
+        run: Command runner; tests inject a fake so offline behavior never
+            depends on the developer machine's live ``gh`` state.
 
     Returns:
         The latest release version, or ``None`` when ``gh`` is unavailable,
         unauthenticated, offline, or returns an unparseable tag.
     """
-    result = run_command(_LATEST_COMMAND, cwd=cwd, timeout=timeout)
+    result = run(_LATEST_COMMAND, cwd, timeout)
     if not result.ok:
         return None
     return parse_release_tag(result.stdout)

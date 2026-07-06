@@ -15,6 +15,7 @@ from conftest import (
     make_project,
 )
 
+import projects_orchestrator.__main__ as cli
 from projects_orchestrator import __version__
 from projects_orchestrator.__main__ import main
 
@@ -265,16 +266,27 @@ def test_ci_gitlab_host_reports_merge_requests(fleet_dir: Path, capsys) -> None:
     assert "open MR(s)" in capsys.readouterr().out
 
 
-def test_upgrade_plan_offline_renders(fleet_dir: Path, capsys) -> None:
+def test_upgrade_plan_offline_renders(fleet_dir: Path, capsys, monkeypatch) -> None:
     make_project(fleet_dir, "alpha")
+    monkeypatch.setattr(cli, "latest_upstream_version", lambda _cwd: None)
     main(["upgrade-plan", "--root", str(fleet_dir)])
     assert "alpha: unknown" in capsys.readouterr().out
 
 
-def test_upgrade_plan_json_has_status(fleet_dir: Path, capsys) -> None:
+def test_upgrade_plan_json_has_status(fleet_dir: Path, capsys, monkeypatch) -> None:
     make_project(fleet_dir, "alpha")
+    monkeypatch.setattr(cli, "latest_upstream_version", lambda _cwd: None)
     main(["upgrade-plan", "--root", str(fleet_dir), "--json"])
     assert json.loads(capsys.readouterr().out)[0]["status"] == "unknown"
+
+
+def test_upgrade_plan_renders_outdated_when_upstream_available(
+    fleet_dir: Path, capsys, monkeypatch
+) -> None:
+    make_project(fleet_dir, "alpha")
+    monkeypatch.setattr(cli, "latest_upstream_version", lambda _cwd: (0, 6, 0))
+    main(["upgrade-plan", "--root", str(fleet_dir)])
+    assert "alpha: outdated" in capsys.readouterr().out
 
 
 def test_snapshot_json_has_descriptor(fleet_dir: Path, capsys) -> None:
