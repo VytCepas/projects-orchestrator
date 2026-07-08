@@ -11,6 +11,7 @@ from projects_orchestrator.registry import (
     default_fleet_config,
     discover,
     load_fleet_config,
+    register_project,
 )
 
 
@@ -109,3 +110,36 @@ def test_default_fleet_config_falls_back_to_parent_scan(tmp_path: Path) -> None:
     cwd = tmp_path / "orchestrator"
     cwd.mkdir()
     assert default_fleet_config(cwd).roots == (tmp_path,)
+
+
+def test_register_project_creates_fleet_file(tmp_path: Path) -> None:
+    fleet_file = tmp_path / "fleet.yaml"
+    project = make_project(tmp_path, "alpha")
+    register_project(fleet_file, project)
+    assert fleet_file.is_file()
+
+
+def test_register_project_reports_added(tmp_path: Path) -> None:
+    project = make_project(tmp_path, "alpha")
+    assert register_project(tmp_path / "fleet.yaml", project).added is True
+
+
+def test_register_project_makes_project_discoverable(tmp_path: Path) -> None:
+    fleet_file = tmp_path / "fleet.yaml"
+    project = make_project(tmp_path, "alpha")
+    register_project(fleet_file, project)
+    assert "alpha" in discover(load_fleet_config(fleet_file)).names
+
+
+def test_register_project_is_idempotent(tmp_path: Path) -> None:
+    fleet_file = tmp_path / "fleet.yaml"
+    project = make_project(tmp_path, "alpha")
+    register_project(fleet_file, project)
+    assert register_project(fleet_file, project).added is False
+
+
+def test_register_project_preserves_existing_entries(tmp_path: Path) -> None:
+    fleet_file = tmp_path / "fleet.yaml"
+    register_project(fleet_file, make_project(tmp_path, "alpha"))
+    register_project(fleet_file, make_project(tmp_path, "beta"))
+    assert set(discover(load_fleet_config(fleet_file)).names) == {"alpha", "beta"}

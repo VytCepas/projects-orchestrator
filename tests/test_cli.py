@@ -6,8 +6,17 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import add_memory, git_init, make_project, make_project_v2
+from conftest import (
+    add_capabilities,
+    add_graph,
+    add_memory,
+    git_init,
+    make_memory_project,
+    make_project,
+    make_project_v2,
+)
 
+import projects_orchestrator.__main__ as cli
 from projects_orchestrator import __version__
 from projects_orchestrator.__main__ import main
 
@@ -115,6 +124,80 @@ def test_memory_search_json(fleet_dir: Path, capsys) -> None:
     assert json.loads(capsys.readouterr().out)[0]["file"]["project"] == "alpha"
 
 
+def test_capabilities_summarizes_each_project(fleet_dir: Path, capsys) -> None:
+    add_capabilities(make_project(fleet_dir, "alpha"), skills=["plan", "status"])
+    main(["capabilities", "--root", str(fleet_dir)])
+    assert "2 skill(s)" in capsys.readouterr().out
+
+
+def test_capabilities_kind_inverts_to_projects(fleet_dir: Path, capsys) -> None:
+    add_capabilities(make_project(fleet_dir, "alpha"), mcp_servers=["context7"])
+    add_capabilities(make_project(fleet_dir, "beta"), mcp_servers=["context7"])
+    main(["capabilities", "--root", str(fleet_dir), "--kind", "mcp"])
+    assert "context7: alpha, beta" in capsys.readouterr().out
+
+
+def test_capabilities_missing_inventory_is_reported(fleet_dir: Path, capsys) -> None:
+    make_project(fleet_dir, "alpha")
+    main(["capabilities", "--root", str(fleet_dir)])
+    assert "no CAPABILITIES.md" in capsys.readouterr().out
+
+
+def test_capabilities_json_is_parseable(fleet_dir: Path, capsys) -> None:
+    add_capabilities(make_project(fleet_dir, "alpha"), skills=["plan"])
+    main(["capabilities", "--root", str(fleet_dir), "--json"])
+    assert json.loads(capsys.readouterr().out)[0]["skills"][0]["name"] == "plan"
+
+
+def test_memory_search_reads_graph_surface(fleet_dir: Path, capsys) -> None:
+    project = make_memory_project(fleet_dir, "alpha", tier=2, graph_path="graphify-out/graph.json")
+    add_graph(project, [{"name": "AuthService", "description": "handles oauth login"}])
+    main(["memory", "oauth", "--root", str(fleet_dir)])
+    assert "oauth" in capsys.readouterr().out
+
+
+def test_memory_notes_unqueried_rag_endpoint(fleet_dir: Path, capsys) -> None:
+    make_memory_project(
+        fleet_dir, "alpha", tier=3, graph_path="graphify-out/graph.json",
+        rag_endpoint="http://127.0.0.1:8099",
+    )
+    main(["memory", "anything", "--root", str(fleet_dir)])
+    assert "RAG endpoint" in capsys.readouterr().err
+
+
+def test_register_adds_scaffolded_project(tmp_path: Path, capsys) -> None:
+    project = make_project(tmp_path, "alpha")
+    result = tmp_path / "scaffold.json"
+    result.write_text(
+        json.dumps({"target": str(project), "contract_version": "1", "files_created": 42}),
+        encoding="utf-8",
+    )
+    fleet_file = tmp_path / "fleet.yaml"
+    assert main(["register", str(result), "--fleet", str(fleet_file)]) == 0
+    assert "registered" in capsys.readouterr().out
+
+
+def test_register_makes_project_discoverable(tmp_path: Path, capsys) -> None:
+    project = make_project(tmp_path, "alpha")
+    result = tmp_path / "scaffold.json"
+    result.write_text(json.dumps({"target": str(project)}), encoding="utf-8")
+    fleet_file = tmp_path / "fleet.yaml"
+    main(["register", str(result), "--fleet", str(fleet_file)])
+    capsys.readouterr()
+    main(["projects", "--fleet", str(fleet_file)])
+    assert "alpha" in capsys.readouterr().out
+
+
+def test_register_invalid_result_exits_one(tmp_path: Path) -> None:
+    result = tmp_path / "scaffold.json"
+    result.write_text(json.dumps({"preset": "auto"}), encoding="utf-8")
+    assert main(["register", str(result), "--fleet", str(tmp_path / "fleet.yaml")]) == 1
+
+
+def test_register_missing_file_exits_two(tmp_path: Path) -> None:
+    assert main(["register", str(tmp_path / "absent.json"), "--fleet", str(tmp_path / "f.yaml")]) == 2
+
+
 def test_drift_no_manifest_exits_zero(fleet_dir: Path) -> None:
     make_project(fleet_dir, "alpha")
     assert main(["drift", "--root", str(fleet_dir)]) == 0
@@ -152,6 +235,23 @@ def test_audit_json_reports_findings(fleet_dir: Path, capsys) -> None:
     main(["audit", "--root", str(fleet_dir), "--json"])
     categories = {f["category"] for f in json.loads(capsys.readouterr().out)[0]["findings"]}
     assert "freshness" in categories
+
+
+def test_hardening_with_gaps_exits_one_and_groups_actions(fleet_dir: Path, capsys) -> None:
+    make_project(fleet_dir, "alpha")
+    assert main(["hardening", "--root", str(fleet_dir)]) == 1
+    out = capsys.readouterr().out
+    assert "alpha:" in out
+    assert "checks:" in out
+    assert "memory:" in out
+
+
+def test_hardening_json_is_parseable(fleet_dir: Path, capsys) -> None:
+    make_project(fleet_dir, "alpha")
+    main(["hardening", "--root", str(fleet_dir), "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert payload[0]["project"] == "alpha"
+    assert {"checks", "memory"} <= {item["category"] for item in payload[0]["items"]}
 
 
 def test_audit_markdown_renders_heading(fleet_dir: Path, capsys) -> None:
@@ -200,16 +300,27 @@ def test_ci_gitlab_host_reports_merge_requests(fleet_dir: Path, capsys) -> None:
     assert "open MR(s)" in capsys.readouterr().out
 
 
-def test_upgrade_plan_offline_renders(fleet_dir: Path, capsys) -> None:
+def test_upgrade_plan_offline_renders(fleet_dir: Path, capsys, monkeypatch) -> None:
     make_project(fleet_dir, "alpha")
+    monkeypatch.setattr(cli, "latest_upstream_version", lambda _cwd: None)
     main(["upgrade-plan", "--root", str(fleet_dir)])
     assert "alpha: unknown" in capsys.readouterr().out
 
 
-def test_upgrade_plan_json_has_status(fleet_dir: Path, capsys) -> None:
+def test_upgrade_plan_json_has_status(fleet_dir: Path, capsys, monkeypatch) -> None:
     make_project(fleet_dir, "alpha")
+    monkeypatch.setattr(cli, "latest_upstream_version", lambda _cwd: None)
     main(["upgrade-plan", "--root", str(fleet_dir), "--json"])
     assert json.loads(capsys.readouterr().out)[0]["status"] == "unknown"
+
+
+def test_upgrade_plan_renders_outdated_when_upstream_available(
+    fleet_dir: Path, capsys, monkeypatch
+) -> None:
+    make_project(fleet_dir, "alpha")
+    monkeypatch.setattr(cli, "latest_upstream_version", lambda _cwd: (0, 6, 0))
+    main(["upgrade-plan", "--root", str(fleet_dir)])
+    assert "alpha: outdated" in capsys.readouterr().out
 
 
 def test_snapshot_json_has_descriptor(fleet_dir: Path, capsys) -> None:

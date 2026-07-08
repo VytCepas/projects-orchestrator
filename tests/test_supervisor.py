@@ -199,3 +199,52 @@ def test_cli_logs_tails_output(fleet_dir: Path, capsys) -> None:
 def test_cli_unknown_project_exits_2(fleet_dir: Path) -> None:
     make_project(fleet_dir, "alpha", tooling={"run": "sleep 1"})
     assert main(["start", "nope", "--root", str(fleet_dir)]) == 2
+
+
+def test_mem_available_bytes_parses_meminfo(tmp_path: Path) -> None:
+    from projects_orchestrator.supervisor import _mem_available_bytes
+
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text("MemTotal: 100 kB\nMemAvailable: 2048 kB\n", encoding="utf-8")
+    assert _mem_available_bytes(meminfo) == 2048 * 1024
+
+
+def test_mem_available_bytes_off_linux_is_none(tmp_path: Path) -> None:
+    from projects_orchestrator.supervisor import _mem_available_bytes
+
+    assert _mem_available_bytes(tmp_path / "absent") is None
+
+
+def test_start_refuses_below_memory_floor(fleet_dir: Path, monkeypatch) -> None:
+    import projects_orchestrator.supervisor as sup
+
+    monkeypatch.setattr(sup, "_mem_available_bytes", lambda: 1)
+    assert "refusing to start" in start(_runnable(fleet_dir))
+
+
+def test_start_below_floor_spawns_nothing(fleet_dir: Path, monkeypatch) -> None:
+    import projects_orchestrator.supervisor as sup
+
+    monkeypatch.setattr(sup, "_mem_available_bytes", lambda: 1)
+    descriptor = _runnable(fleet_dir)
+    start(descriptor)
+    assert running_state(descriptor) is None
+
+
+def test_start_proceeds_when_memory_unknown(fleet_dir: Path, monkeypatch) -> None:
+    import projects_orchestrator.supervisor as sup
+
+    monkeypatch.setattr(sup, "_mem_available_bytes", lambda: None)
+    descriptor = _runnable(fleet_dir)
+    try:
+        assert "(pid " in start(descriptor)
+    finally:
+        stop(descriptor)
+
+
+def test_cli_start_refused_exits_1(fleet_dir: Path, monkeypatch) -> None:
+    import projects_orchestrator.supervisor as sup
+
+    monkeypatch.setattr(sup, "_mem_available_bytes", lambda: 1)
+    make_project(fleet_dir, "alpha", tooling={"run": "sleep 30"})
+    assert main(["start", "alpha", "--root", str(fleet_dir)]) == 1

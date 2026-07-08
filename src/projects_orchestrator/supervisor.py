@@ -37,6 +37,13 @@ _STOP_GRACE_SECONDS = 5.0
 
 DEFAULT_LOG_LINES = 40
 
+# Refuse to launch a new supervised process when free memory is below this.
+# The engine bounds worker *count* (pool.py) but not memory, so a fleet of
+# heavy dev servers can still exhaust the host — on WSL the OOM killer then
+# takes the systemd user session. Enforced only where MemAvailable is readable
+# (Linux); elsewhere launches proceed, like the other /proc-based probes.
+MIN_FREE_MB = 1024
+
 
 @dataclass(frozen=True)
 class RunState:
@@ -89,6 +96,25 @@ def _proc_start_ticks(pid: int) -> int | None:
         return int(after_comm[19])
     except (IndexError, ValueError):
         return None
+
+
+def _mem_available_bytes(meminfo: Path = Path("/proc/meminfo")) -> int | None:
+    """Read ``MemAvailable`` (bytes) from ``/proc/meminfo``.
+
+    Returns ``None`` when the file or field is unreadable (non-Linux), in which
+    case the launch memory floor is not enforced — the same degrade-off-Linux
+    contract as :func:`_proc_start_ticks`.
+    """
+    try:
+        text = meminfo.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        if line.startswith("MemAvailable:"):
+            fields = line.split()
+            if len(fields) >= 2 and fields[1].isdigit():
+                return int(fields[1]) * 1024  # meminfo reports kibibytes
+    return None
 
 
 def _pid_alive(pid: int) -> bool:
@@ -186,6 +212,10 @@ def start(descriptor: ProjectDescriptor) -> str:
     existing = running_state(descriptor)
     if existing is not None:
         return f"{descriptor.name}: already running (pid {existing.pid})"
+
+    free = _mem_available_bytes()
+    if free is not None and free < MIN_FREE_MB * 1024 * 1024:
+        return f"{descriptor.name}: refusing to start — {free // (1024 * 1024)} MiB free, need {MIN_FREE_MB} MiB"
 
     directory = state_dir()
     log_path = directory / f"{descriptor.name}.log"

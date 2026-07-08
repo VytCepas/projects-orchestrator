@@ -10,16 +10,33 @@ files degrade to untyped entries.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import yaml
 
-from projects_orchestrator.descriptor import ProjectDescriptor
+from projects_orchestrator.descriptor import TIER_GRAPH, TIER_RAG, ProjectDescriptor
 
 _INDEX_FILES = {"MEMORY.md", "SCHEMA.md", "README.md"}
 
 _MAX_FILE_BYTES = 262_144
+
+_MAX_GRAPH_BYTES = 4_194_304
+
+# Retrieval surfaces, in the degrade-by-tier order of ADR-025 §4: a reader picks
+# the richest surface its tier provides and degrades to the grep baseline, whose
+# anchors never move — so a tier-0 read stays correct against a tier-3 child.
+MODE_RAG = "rag"
+MODE_GRAPH = "graph"
+MODE_GREP = "grep"
+
+# Node keys a graphify export may use for a fact's title / prose. The graph is
+# produced by an external tool whose schema is not part of the frozen contract,
+# so the reader is deliberately tolerant: it takes the first key it finds and
+# degrades to the grep baseline on anything it cannot read.
+_GRAPH_NAME_KEYS = ("name", "label", "title", "id")
+_GRAPH_TEXT_KEYS = ("description", "summary", "text", "body", "content")
 
 
 @dataclass(frozen=True)
@@ -150,6 +167,93 @@ def load_project_memory(descriptor: ProjectDescriptor) -> ProjectMemory:
         index_present=(memory_path / "MEMORY.md").is_file(),
         warnings=tuple(warnings),
     )
+
+
+def retrieval_mode(descriptor: ProjectDescriptor) -> str:
+    """Pick a project's memory retrieval surface from its tier (pure).
+
+    The ADR-025 §4 reader rule: ``tier ≥ 3`` with an endpoint queries RAG;
+    ``tier ≥ 2`` with a graph reads the graph; everything else greps the
+    ``memory_path`` baseline. A higher tier only *offers* a richer surface —
+    when the surface is undeclared (a tier-3 child that has not run its RAG
+    setup, say) the mode degrades to the next one down.
+
+    Args:
+        descriptor: The project to choose a retrieval surface for.
+
+    Returns:
+        One of :data:`MODE_RAG`, :data:`MODE_GRAPH`, :data:`MODE_GREP`.
+    """
+    if descriptor.memory_tier >= TIER_RAG and descriptor.rag_endpoint:
+        return MODE_RAG
+    if descriptor.memory_tier >= TIER_GRAPH and descriptor.graph_path is not None:
+        return MODE_GRAPH
+    return MODE_GREP
+
+
+def _first_str(node: dict[str, object], keys: tuple[str, ...]) -> str:
+    """Return the first non-empty string value among ``keys`` (pure)."""
+    for key in keys:
+        value = node.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def load_graph_facts(descriptor: ProjectDescriptor) -> tuple[MemoryFile, ...]:
+    """Read a graphify graph's nodes as memory facts; never raises.
+
+    Best-effort against the external graph schema: accepts a top-level list of
+    nodes or a ``{"nodes": [...]}`` object, reads a name and prose from the
+    common node keys, and returns nothing for an unreadable, oversized, or
+    unrecognized graph (the caller keeps the grep baseline).
+    """
+    path = descriptor.graph_path
+    if path is None:
+        return ()
+    try:
+        if path.stat().st_size > _MAX_GRAPH_BYTES:
+            return ()
+        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError):
+        return ()
+    nodes = data.get("nodes") if isinstance(data, dict) else data
+    if not isinstance(nodes, list):
+        return ()
+    facts: list[MemoryFile] = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        name = _first_str(node, _GRAPH_NAME_KEYS)
+        if not name:
+            continue
+        description = _first_str(node, _GRAPH_TEXT_KEYS)
+        facts.append(
+            MemoryFile(
+                project=descriptor.name,
+                path=path,
+                name=name,
+                description=description,
+                type="graph",
+                body=description,
+            )
+        )
+    return tuple(facts)
+
+
+def load_memory(descriptor: ProjectDescriptor) -> ProjectMemory:
+    """Load one project's memory via its tier's retrieval surface; never raises.
+
+    The grep baseline (``memory_path`` files) is always read — it is the
+    anchor that never moves. At ``tier ≥ 2`` the graph's facts are *added* to
+    it, so a query still finds everything grep would plus what only the graph
+    knows. (RAG, :data:`MODE_RAG`, is a live query handled by the caller; this
+    loader returns the local surfaces it can read without a network call.)
+    """
+    base = load_project_memory(descriptor)
+    if descriptor.memory_tier >= TIER_GRAPH and descriptor.graph_path is not None:
+        return replace(base, files=base.files + load_graph_facts(descriptor))
+    return base
 
 
 def _score_metadata(memory_file: MemoryFile, needle: str) -> MemoryHit | None:

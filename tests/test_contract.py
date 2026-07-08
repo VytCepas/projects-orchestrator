@@ -18,12 +18,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from projects_orchestrator.adapters.project_init import parse_scaffold_result
+from projects_orchestrator.capabilities import MCP, SKILL, parse_capabilities
 from projects_orchestrator.descriptor import parse_config
 from projects_orchestrator.drift import _load_manifest
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "project_init"
 _CONFIG_V1 = _FIXTURES / "config.v1.yaml"
 _SCAFFOLD_RESULT_V1 = _FIXTURES / "scaffold_result.v1.json"
+_CAPABILITIES_V1 = _FIXTURES / "capabilities.v1.md"
 
 
 def _descriptor(tmp_path: Path):
@@ -65,6 +68,24 @@ def test_real_config_carries_a_hashable_scaffold_manifest(tmp_path: Path) -> Non
     assert all(len(sha) == 64 for sha in manifest.values())  # sha256 hex
 
 
+def test_real_capabilities_md_exposes_the_skill_inventory() -> None:
+    # CAPABILITIES.md is the ADR-025 §3 capability inventory the fleet aggregates.
+    # A real github-lifecycle scaffold ships a non-empty skill set the parser reads.
+    inventory = parse_capabilities(
+        _CAPABILITIES_V1.read_text(encoding="utf-8"), "demo-service", _CAPABILITIES_V1
+    )
+    assert inventory.of_kind(SKILL), "the capability inventory must expose skills"
+
+
+def test_real_capabilities_md_v1_ships_no_mcp_servers() -> None:
+    # demo-service scaffolds with installed_mcps: none; when project-init emits a
+    # scaffold that wires MCP servers this fixture refresh flips deliberately.
+    inventory = parse_capabilities(
+        _CAPABILITIES_V1.read_text(encoding="utf-8"), "demo-service", _CAPABILITIES_V1
+    )
+    assert inventory.of_kind(MCP) == ()
+
+
 def test_scaffold_result_json_carries_the_registration_seam() -> None:
     # The --json seam (#510) is what an orchestrator reads to register a freshly
     # scaffolded project without a second config read. Pin its shape.
@@ -73,6 +94,14 @@ def test_scaffold_result_json_carries_the_registration_seam() -> None:
     assert result["config"] == ".claude/config.yaml"
     assert set(result["memory"]) >= {"tier", "stack", "memory_path"}
     assert isinstance(result["files_created"], int)
+
+
+def test_scaffold_result_parses_through_the_consumer() -> None:
+    # The real --json fixture must parse through the seam the `register` command
+    # uses, so an upstream shape change fails here rather than at register time.
+    parsed = parse_scaffold_result(_SCAFFOLD_RESULT_V1.read_text(encoding="utf-8"))
+    assert parsed is not None
+    assert parsed.contract_version == 1  # string "1" upstream → int for the reader
 
 
 # --- Known contract state: v2 surfaces are NOT yet emitted (epic #68) ---

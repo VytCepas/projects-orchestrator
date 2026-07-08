@@ -64,9 +64,13 @@ Per-project GitLab state via ``glab`` — latest pipeline status and open MRs.
 
 Upstream project-init state via ``gh`` — latest release, upgrade dispatch.
 
+- `class ScaffoldResult` — The machine-readable result of ``project-init scaffold --json`` (#510).
+- `def parse_scaffold_result` — Parse ``scaffold --json`` stdout into a :class:`ScaffoldResult` (pure).
 - `def parse_release_tag` — Parse ``gh release view --json tagName`` output to a version tuple (pure).
 - `def latest_upstream_version` — Fetch the newest upstream project-init release; never raises.
-- `def trigger_upgrade` — Dispatch a child's ``project-init-upgrade.yml`` workflow; never raises.
+- `def upgrade_workflow_relpath` — Return where this child's upgrade workflow lives, by forge (pure).
+- `def has_upgrade_workflow` — Whether the child ships a reachable upgrade workflow for its forge.
+- `def trigger_upgrade` — Dispatch a child's forge-appropriate upgrade workflow; never raises.
 
 ### `projects_orchestrator/ask.py`
 
@@ -93,6 +97,16 @@ Persistent memory of the last known check results.
 - `def cache_path` — Return the checks-cache file path, honoring ``$XDG_CACHE_HOME``.
 - `def load_results` — Load cached check results; never raises.
 - `def save_results` — Merge new results into the cache and write it back; never raises.
+
+### `projects_orchestrator/capabilities.py`
+
+Read each project's capability inventory — the "who exposes what" layer.
+
+- `class Capability` — One inventoried capability from one project.
+- `class ProjectCapabilities` — One project's parsed capability inventory.
+- `def parse_capabilities` — Parse a ``CAPABILITIES.md`` document into a typed inventory (pure).
+- `def load_capabilities` — Read one project's ``CAPABILITIES.md``; never raises.
+- `def aggregate` — Invert the fleet's inventories into ``capability name → projects``.
 
 ### `projects_orchestrator/checks.py`
 
@@ -172,6 +186,16 @@ Aggregate everything the engine knows into one fleet view.
 - `def cell_status` — Classify a cell's text as ``good``/``bad``/``warn``/neutral (pure).
 - `def render_table` — Render rows as a plain aligned text table (no dependencies).
 
+### `projects_orchestrator/hardening.py`
+
+Fleet setup-readiness checklist with concrete next actions.
+
+- `class HardeningItem` — One setup gap and its suggested next action.
+- `class HardeningReport` — Hardening checklist for one project.
+- `def project_checklist` — Build the hardening checklist for one project.
+- `def checklist` — Build hardening checklists for the fleet.
+- `def render_text` — Render reports as grouped text with concrete next actions.
+
 ### `projects_orchestrator/history.py`
 
 Append-only check history — trends the last-known cache can't show.
@@ -199,6 +223,9 @@ Read and search the fleet's memory — the "all-knowing" layer.
 - `class ProjectMemory` — Everything one project remembers.
 - `class MemoryHit` — One search match.
 - `def load_project_memory` — Read one project's memory directory; never raises.
+- `def retrieval_mode` — Pick a project's memory retrieval surface from its tier (pure).
+- `def load_graph_facts` — Read a graphify graph's nodes as memory facts; never raises.
+- `def load_memory` — Load one project's memory via its tier's retrieval surface; never raises.
 - `def search_memory` — Search all loaded memories for a case-insensitive substring.
 
 ### `projects_orchestrator/notify.py`
@@ -240,6 +267,8 @@ Discover the fleet: which projects the orchestrator governs.
 - `def load_fleet_config` — Parse a fleet file; never raises.
 - `def default_fleet_config` — Build the config used when no fleet file exists.
 - `def discover` — Discover every project the config points at; never raises.
+- `class RegisterOutcome` — The result of registering a project path into a fleet file.
+- `def register_project` — Add a project path to a fleet file's ``projects:`` list; never raises.
 
 ### `projects_orchestrator/runner.py`
 

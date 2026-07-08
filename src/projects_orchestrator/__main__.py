@@ -21,8 +21,21 @@ from projects_orchestrator.adapters.cloud import as_check_results as cloud_check
 from projects_orchestrator.adapters.github import as_check_results, collect_github
 from projects_orchestrator.adapters.gitlab import as_check_results as gitlab_check_results
 from projects_orchestrator.adapters.gitlab import collect_gitlab, provider_is_gitlab
-from projects_orchestrator.adapters.project_init import latest_upstream_version, trigger_upgrade
+from projects_orchestrator.adapters.project_init import (
+    latest_upstream_version,
+    parse_scaffold_result,
+    trigger_upgrade,
+)
 from projects_orchestrator.audit import audit_project, render_markdown
+from projects_orchestrator.capabilities import (
+    HOOK,
+    MCP,
+    SKILL,
+    load_capabilities,
+)
+from projects_orchestrator.capabilities import (
+    aggregate as aggregate_capabilities,
+)
 from projects_orchestrator.checks import DEFAULT_TASKS, CheckResult, collect_checks
 from projects_orchestrator.controller import ControllerContext, dispatch, parse_command
 from projects_orchestrator.descriptor import ProjectDescriptor
@@ -36,11 +49,13 @@ from projects_orchestrator.digest import (
 from projects_orchestrator.doctor import diagnose
 from projects_orchestrator.drift import compute_drift
 from projects_orchestrator.fleet import fleet_rows, fleet_snapshots, render_table
+from projects_orchestrator.hardening import checklist as hardening_checklist
+from projects_orchestrator.hardening import render_text as render_hardening
 from projects_orchestrator.history import DEFAULT_TREND_WIDTH as HISTORY_TREND_WIDTH
 from projects_orchestrator.history import load_history, project_history, sparkline, transitions
 from projects_orchestrator.history import record as history_record
 from projects_orchestrator.html import render_html
-from projects_orchestrator.memory import load_project_memory, search_memory
+from projects_orchestrator.memory import load_memory, retrieval_mode, search_memory
 from projects_orchestrator.notify import (
     alerts_payload,
     fleet_alerts,
@@ -50,11 +65,13 @@ from projects_orchestrator.notify import (
 from projects_orchestrator.observability import filter_since, load_events
 from projects_orchestrator.pool import map_ordered
 from projects_orchestrator.registry import (
+    FLEET_FILENAME,
     Fleet,
     FleetConfig,
     default_fleet_config,
     discover,
     load_fleet_config,
+    register_project,
 )
 from projects_orchestrator.server import DEFAULT_HOST, DEFAULT_PORT, serve
 from projects_orchestrator.status import clean_worktree_head, collect_status
@@ -201,9 +218,19 @@ def _cmd_checks(args: argparse.Namespace) -> int:
 
 
 def _cmd_memory(args: argparse.Namespace) -> int:
-    """Search every project's memory files."""
+    """Search every project's memory, using each project's tier retrieval surface."""
     fleet = _discover(args)
-    memories = [load_project_memory(d) for d in fleet.descriptors]
+    # Degrade-by-tier (ADR-025 §4): grep the memory_path baseline, and add the
+    # graph's facts for tier>=2 children. RAG-tier children are noted so an
+    # operator knows a surface exists that this local-only search does not query.
+    for descriptor in fleet.descriptors:
+        if retrieval_mode(descriptor) == "rag":
+            print(
+                f"note: {descriptor.name} exposes a tier-3 RAG endpoint "
+                f"({descriptor.rag_endpoint}) not queried by local search",
+                file=sys.stderr,
+            )
+    memories = [load_memory(d) for d in fleet.descriptors]
     hits = search_memory(memories, " ".join(args.query))
     if args.json:
         return _emit_json([asdict(h) for h in hits])
@@ -212,6 +239,37 @@ def _cmd_memory(args: argparse.Namespace) -> int:
         print(f"{location} [{hit.file.type}] {hit.file.name} — {hit.line}")
     if not hits:
         print("no matches")
+    return 0
+
+
+def _cmd_capabilities(args: argparse.Namespace) -> int:
+    """Aggregate each project's CAPABILITIES.md — who exposes which skill/MCP."""
+    fleet = _discover(args)
+    selected = list(fleet.descriptors)
+    if args.project:
+        descriptor = fleet.get(args.project)
+        if descriptor is None:
+            print(f"unknown project: {args.project}", file=sys.stderr)
+            return 2
+        selected = [descriptor]
+    inventories = [load_capabilities(d) for d in selected]
+    if args.json:
+        return _emit_json([asdict(inv) for inv in inventories])
+    if args.kind:
+        index = aggregate_capabilities(inventories, args.kind)
+        for name, projects in index.items():
+            print(f"{name}: {', '.join(projects)}")
+        if not index:
+            print(f"no {args.kind} capabilities across the fleet")
+        return 0
+    for inventory in inventories:
+        if not inventory.present:
+            print(f"{inventory.project}: no CAPABILITIES.md")
+            continue
+        print(
+            f"{inventory.project}: {len(inventory.skills)} skill(s), "
+            f"{len(inventory.mcp_servers)} MCP server(s), {len(inventory.hooks)} hook(s)"
+        )
     return 0
 
 
@@ -286,6 +344,23 @@ def _cmd_audit(args: argparse.Namespace) -> int:
             for finding in report.findings:
                 print(f"  [{finding.severity}] {finding.category}: {finding.message}")
     return 1 if any(r.needs_attention for r in reports) else 0
+
+
+def _cmd_hardening(args: argparse.Namespace) -> int:
+    """Show setup-readiness gaps with concrete next actions."""
+    fleet = _discover(args)
+    selected = list(fleet.descriptors)
+    if args.project:
+        descriptor = fleet.get(args.project)
+        if descriptor is None:
+            print(f"unknown project: {args.project}", file=sys.stderr)
+            return 2
+        selected = [descriptor]
+    reports = hardening_checklist(selected, cache.load_results())
+    if args.json:
+        return _emit_json([asdict(report) for report in reports])
+    print(render_hardening(reports))
+    return 1 if any(report.needs_attention for report in reports) else 0
 
 
 def _cmd_ci(args: argparse.Namespace) -> int:
@@ -394,7 +469,11 @@ def _cmd_events(args: argparse.Namespace) -> int:
         for event in filter_since(report.events, since):
             empty = False
             command = f" — {event.command}" if event.command else ""
-            print(f"{event.project} {event.timestamp} [{event.hook}] {event.action}{command}")
+            session = f" ({event.session})" if event.session else ""
+            print(
+                f"{event.project} {event.timestamp} [{event.hook}]"
+                f" {event.action}{session}{command}"
+            )
     if empty:
         print("no events recorded")
     return 0
@@ -435,6 +514,55 @@ def _cmd_upgrade_plan(args: argparse.Namespace) -> int:
             line += f" — upgrade {applied[row.project]}"
         print(line)
     return 1 if any(r.status == "outdated" for r in rows) else 0
+
+
+def _cmd_register(args: argparse.Namespace) -> int:
+    """Register a freshly-scaffolded project from `scaffold --json` output.
+
+    Consumes the project-init ``--json`` seam (#510): reads a scaffold-result
+    document (a file path, or ``-`` for stdin) and adds the new project to the
+    fleet file so the next command governs it — no manual edit, no second read.
+    """
+    raw = sys.stdin.read() if args.result == "-" else _read_text_or_none(args.result)
+    if raw is None:
+        print(f"cannot read scaffold result: {args.result}", file=sys.stderr)
+        return 2
+    result = parse_scaffold_result(raw)
+    if result is None:
+        print("not a project-init scaffold result (no 'target')", file=sys.stderr)
+        return 1
+    fleet_file = Path(args.fleet) if args.fleet else Path.cwd() / FLEET_FILENAME
+    outcome = register_project(fleet_file, result.target)
+    for warning in outcome.warnings:
+        print(f"warning: {warning}", file=sys.stderr)
+    if args.json:
+        return _emit_json(
+            {
+                "target": str(outcome.project),
+                "fleet_file": str(outcome.fleet_file),
+                "added": outcome.added,
+                "contract_version": result.contract_version,
+                "files_created": result.files_created,
+                "conflicts": list(result.conflicts),
+            }
+        )
+    verb = "registered" if outcome.added else "already registered"
+    print(
+        f"{verb} {outcome.project} in {outcome.fleet_file} "
+        f"(contract v{result.contract_version}, {result.files_created} files)"
+    )
+    for conflict in result.conflicts:
+        print(f"  scaffold conflict (left unwritten): {conflict}", file=sys.stderr)
+    # A write failure surfaces as a warning with added=False; treat as an error.
+    return 0 if outcome.added or not outcome.warnings else 1
+
+
+def _read_text_or_none(path: str) -> str | None:
+    """Read a file's text, or ``None`` when it is unreadable."""
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return None
 
 
 def _resolve_project(args: argparse.Namespace) -> ProjectDescriptor | None:
@@ -636,12 +764,24 @@ def _build_parser() -> argparse.ArgumentParser:
         ("status", "fleet git health (table) or one project", _cmd_status, True),
         ("checks", "run each project's declared gates", _cmd_checks, True),
         ("memory", "search all project memories", _cmd_memory, True),
+        (
+            "capabilities",
+            "aggregate CAPABILITIES.md — who exposes which skill/MCP/hook",
+            _cmd_capabilities,
+            True,
+        ),
         ("drift", "scaffold drift vs the recorded manifest", _cmd_drift, True),
         ("doctor", "diagnose contract-v1 conformance", _cmd_doctor, True),
         (
             "audit",
             "composed governance report (conformance + drift + memory + freshness)",
             _cmd_audit,
+            True,
+        ),
+        (
+            "hardening",
+            "setup-readiness checklist with concrete next actions",
+            _cmd_hardening,
             True,
         ),
         ("ci", "latest CI conclusion + open-PR count per project (via gh)", _cmd_ci, True),
@@ -674,6 +814,12 @@ def _build_parser() -> argparse.ArgumentParser:
             _cmd_upgrade_plan,
             True,
         ),
+        (
+            "register",
+            "register a scaffolded project from `project-init scaffold --json` output",
+            _cmd_register,
+            True,
+        ),
         ("snapshot", "full joined fleet view", _cmd_snapshot, True),
         ("serve", "serve the live fleet dashboard over HTTP", _cmd_serve, False),
         ("controller", "interactive deterministic command REPL", _cmd_controller, False),
@@ -686,9 +832,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.choices["status"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["checks"].add_argument("project", nargs="?", help="limit to one project")
+    sub.choices["capabilities"].add_argument("project", nargs="?", help="limit to one project")
+    sub.choices["capabilities"].add_argument(
+        "--kind",
+        choices=(SKILL, MCP, HOOK),
+        help="invert the fleet: list each capability of this kind and who exposes it",
+    )
     sub.choices["drift"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["doctor"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["audit"].add_argument("project", nargs="?", help="limit to one project")
+    sub.choices["hardening"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["audit"].add_argument(
         "--markdown", action="store_true", help="render the report as Markdown"
     )
@@ -724,6 +877,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub.choices["logs"].add_argument(
         "-n", "--lines", type=int, default=40, help="trailing lines to show (default 40)"
+    )
+    sub.choices["register"].add_argument(
+        "result", help="path to `scaffold --json` output, or '-' for stdin"
     )
     sub.choices["upgrade-plan"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["upgrade-plan"].add_argument(
