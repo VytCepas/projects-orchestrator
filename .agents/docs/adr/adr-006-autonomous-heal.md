@@ -55,6 +55,13 @@ Chosen option: **PR-gated autonomous fix** (`heal.py`, wired as the `heal
    live agent or GitHub call ever runs in CI), and a dirty worktree,
    failed checkout, agent failure, failed re-verification, or failed
    push/PR all degrade to a typed `HealResult` rather than an exception.
+6. **Every git/gh call is argv-only, never a shell string.** `descriptor.name`
+   (and the branch derived from it) comes from the child's own
+   `.claude/config.yaml` — unlike `tooling.*_command`, ADR-003's "trusted
+   shell string" trust level was never extended to it. `_run_argv` runs
+   `git`/`gh` via `subprocess.run` with a plain argv list (no shell), so a
+   crafted project name cannot be interpreted as shell code at any of the
+   checkout/commit/push/PR/branch-restore call sites.
 
 ### Consequences
 

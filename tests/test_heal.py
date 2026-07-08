@@ -171,6 +171,27 @@ def test_heal_project_fixes_and_opens_pr_end_to_end(fleet_dir: Path, tmp_path: P
     assert result.branch in remote_branches
 
 
+def test_heal_project_malicious_project_name_cannot_inject_shell_commands(fleet_dir: Path) -> None:
+    # A crafted project name (attacker-controlled: it comes from the child's
+    # own .claude/config.yaml, not something this module vets as a trusted
+    # shell string) must never be interpreted by a shell — regression test
+    # for the git/gh argv-only fix.
+    project = make_project(fleet_dir, "a;touch pwn", tooling={"lint": "test -f fixed.txt"})
+    git_init(project)
+    descriptor = load_descriptor(project)
+    assert descriptor.name == "a;touch pwn"
+
+    def fixing_agent(descriptor_: object, _prompt: str) -> AgentOutcome:
+        (descriptor_.path / "fixed.txt").write_text("ok", encoding="utf-8")
+        return AgentOutcome(ok=True, summary="created fixed.txt")
+
+    heal_project(descriptor, _fail("lint"), agent_run=fixing_agent)
+
+    assert not (project / "pwn").exists()
+    assert not (fleet_dir / "pwn").exists()
+    assert not (Path.cwd() / "pwn").exists()
+
+
 def test_heal_project_branch_checkout_failure_reports_branch_failed(fleet_dir: Path) -> None:
     # A locked index (a stale .git/index.lock) makes any git command in the
     # worktree fail, including the initial checkout -B.

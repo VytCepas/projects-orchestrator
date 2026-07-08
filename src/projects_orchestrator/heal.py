@@ -17,12 +17,14 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 from projects_orchestrator.checks import CheckResult, collect_checks
 from projects_orchestrator.descriptor import ProjectDescriptor
-from projects_orchestrator.runner import run_command
+from projects_orchestrator.runner import RunResult
 from projects_orchestrator.status import collect_status
 
 # Gates the heal loop can attempt: both are declared, locally-runnable
@@ -96,6 +98,34 @@ class HealResult:
 
 AgentRun = Callable[[ProjectDescriptor, str], AgentOutcome]
 OpenPr = Callable[[ProjectDescriptor, str, tuple[str, ...]], PrOutcome]
+
+
+def _run_argv(args: list[str], cwd: Path, timeout: float = GIT_TIMEOUT) -> RunResult:
+    """Run one ``git``/``gh`` subcommand via argv, never through a shell.
+
+    Unlike ``runner.run_command`` (shell strings — fine for a project's own
+    declared tooling commands, per ADR-003), the arguments here include
+    values this module does not fully control (``descriptor.name``, a
+    branch built from it). Passing them as separate argv elements means
+    there is no shell to interpret shell metacharacters in a crafted
+    project name — never raises, degrading to a failed :class:`RunResult`.
+    """
+    start = time.monotonic()
+    try:
+        proc = subprocess.run(  # noqa: S603 — argv list, no shell; args are not concatenated into a command string
+            args, cwd=cwd, capture_output=True, text=True, timeout=timeout, check=False
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return RunResult(
+            command=" ".join(args), returncode=None, error=str(exc), duration=time.monotonic() - start
+        )
+    return RunResult(
+        command=" ".join(args),
+        returncode=proc.returncode,
+        stdout=proc.stdout,
+        stderr=proc.stderr,
+        duration=time.monotonic() - start,
+    )
 
 
 def pending_failures(cached: dict[str, CheckResult]) -> tuple[CheckResult, ...]:
@@ -189,8 +219,8 @@ def _default_open_pr(descriptor: ProjectDescriptor, branch: str, tasks: tuple[st
         "Opened automatically by projects-orchestrator's heal command after a scoped "
         f"agent fixed and verified: {', '.join(tasks)}. Review before merging."
     )
-    command = f'gh pr create --title "{title}" --body "{body}" --head {branch}'
-    result = run_command(command, cwd=descriptor.path, timeout=GIT_TIMEOUT)
+    args = ["gh", "pr", "create", "--title", title, "--body", body, "--head", branch]
+    result = _run_argv(args, cwd=descriptor.path, timeout=GIT_TIMEOUT)
     if not result.ok:
         return PrOutcome(ok=False, detail=result.stderr.strip()[-300:] or "gh pr create failed")
     url = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
@@ -200,23 +230,23 @@ def _default_open_pr(descriptor: ProjectDescriptor, branch: str, tasks: tuple[st
 def _restore_branch(descriptor: ProjectDescriptor, original_branch: str) -> None:
     """Return the worktree to the branch it was on before healing started."""
     if original_branch:
-        run_command(f"git checkout {original_branch}", cwd=descriptor.path, timeout=GIT_TIMEOUT)
+        _run_argv(["git", "checkout", original_branch], cwd=descriptor.path)
 
 
 def _commit_and_land(
     descriptor: ProjectDescriptor, branch: str, tasks: tuple[str, ...], open_pr: OpenPr
 ) -> HealResult:
     """Commit a verified fix, push the branch, and open a PR."""
-    commit = run_command(
-        f'git add -A && git commit -m "fix: repair failing {", ".join(tasks)} (automated)"',
-        cwd=descriptor.path,
-        timeout=GIT_TIMEOUT,
-    )
+    add = _run_argv(["git", "add", "-A"], cwd=descriptor.path)
+    if not add.ok:
+        return HealResult(descriptor.name, BRANCH_FAILED, branch=branch, detail=add.stderr.strip()[-300:])
+    message = f"fix: repair failing {', '.join(tasks)} (automated)"
+    commit = _run_argv(["git", "commit", "-m", message], cwd=descriptor.path)
     if not commit.ok:
         return HealResult(
             descriptor.name, BRANCH_FAILED, branch=branch, detail=commit.stderr.strip()[-300:]
         )
-    push = run_command(f"git push -u origin {branch}", cwd=descriptor.path, timeout=GIT_TIMEOUT)
+    push = _run_argv(["git", "push", "-u", "origin", branch], cwd=descriptor.path)
     if not push.ok:
         return HealResult(descriptor.name, PUSH_FAILED, branch=branch, detail=push.stderr.strip()[-300:])
     pr = open_pr(descriptor, branch, tasks)
@@ -258,7 +288,7 @@ def heal_project(
     tasks = tuple(sorted({result.task for result in failing}))
     branch = f"heal/{'-'.join(tasks)}-{descriptor.name}"
 
-    checkout = run_command(f"git checkout -B {branch}", cwd=descriptor.path, timeout=GIT_TIMEOUT)
+    checkout = _run_argv(["git", "checkout", "-B", branch], cwd=descriptor.path)
     if not checkout.ok:
         return HealResult(descriptor.name, BRANCH_FAILED, detail=checkout.stderr.strip()[-300:])
 
