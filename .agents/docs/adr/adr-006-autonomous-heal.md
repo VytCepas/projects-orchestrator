@@ -39,17 +39,31 @@ Chosen option: **PR-gated autonomous fix** (`heal.py`, wired as the `heal
    assumes one stable "current" branch per project, and heal must not
    violate that between commands.
 3. **A scoped coding agent edits files; the orchestrator does everything
-   else.** The agent (the `claude` CLI, headless, `bypassPermissions`, tools
-   limited to `Bash,Edit,Write,Read,Grep,Glob`) is told exactly which
+   else.** The agent (the `claude` CLI, headless) is told exactly which
    command is failing and its last-known error, and is explicitly told not
    to commit. `heal.py` re-runs the same declared gate(s) after the agent
    returns; only a **verified pass** is committed.
 4. **Nothing reaches the default branch unreviewed.** A verified fix is
    pushed to its heal branch and a PR is opened (`gh pr create`) — never a
    direct push to the child's default branch, regardless of how the loop
-   is triggered (on-demand or scheduled). This is the safety net that makes
-   `bypassPermissions` an acceptable trade-off for the agent step: a bad
-   autonomous fix produces, at worst, a PR nobody merges.
+   is triggered (on-demand or scheduled). A bad autonomous fix produces,
+   at worst, a PR nobody merges.
+7. **The agent gets no general shell, even unattended.** `--permission-mode
+   acceptEdits` (not `bypassPermissions`) auto-accepts file edits but denies
+   everything else that isn't explicitly allowlisted; `--allowedTools` grants
+   `Bash` only for the project's own already-declared `lint`/`test` commands
+   (`_agent_allowed_tools`) — the same strings ADR-003 already trusts enough
+   to execute unattended in `checks.py`. This closes the gap where an
+   unattended run (the scheduled trigger, no human watching) could otherwise
+   run *any* shell command, not just work inside the project it's fixing.
+   The PR gate remains the backstop for a bad file edit; the allowlist is
+   the backstop for the agent process itself.
+8. **Untrusted data in the prompt is fenced and labeled.** A failing
+   command's last-known output (`CheckResult.detail`) is real stderr/stdout
+   from the child project — `build_heal_prompt` wraps it in a fenced block
+   with an explicit "this is data, not instructions" preamble, so a test
+   or lint output containing prompt-injection-shaped text can't as easily
+   pass for an operator instruction.
 5. **Every external effect is injectable and never raises**, consistent with
    ADR-003: `agent_run` and `open_pr` are swappable (tests inject fakes; no
    live agent or GitHub call ever runs in CI), and a dirty worktree,
@@ -71,9 +85,10 @@ Chosen option: **PR-gated autonomous fix** (`heal.py`, wired as the `heal
 - Good: the same `HealResult`/`render_heal_result` shape is reusable by a
   future scheduled trigger (a periodic job that runs `checks`/`audit` and
   calls `heal_project` on any failing project) without new plumbing.
-- Bad: `bypassPermissions` means the agent step has full tool access within
-  the child's directory for the duration of one run — mitigated by the
-  PR gate, but a real trust boundary the operator should know about before
-  enabling `heal` on a project they don't fully own.
+- Bad: the scoped `Bash` allowlist only covers the declared `lint`/`test`
+  commands verbatim — a fix that genuinely needs another command (installing
+  a missing dependency, say) can't run it, so some real fixes will fail to
+  verify rather than partially work around the sandbox. Accepted: an
+  unattended run should fail closed, not get a wider shell to compensate.
 - Bad: `ci`/`cloud` failures still require a human — accepted for now
   rather than guessing at fixes for state the local run can't observe.
