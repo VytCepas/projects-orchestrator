@@ -1,10 +1,12 @@
 """Read a child project's machine-readable self-description.
 
-Every project scaffolded by project-init ships ``.claude/config.yaml``
-(descriptor contract v1): name, language, tooling commands, memory tier and
-path. The orchestrator is a *reader* of that contract — it never invents a
-parallel one. Parsing never raises; malformed input degrades to defaults and
-is surfaced through :attr:`ProjectDescriptor.warnings`.
+Every project scaffolded by project-init ships a ``config.yaml`` descriptor
+(contract v1): name, language, tooling commands, memory tier and path. It lives
+under ``.agents/`` on a current scaffold (project-init PI-627) and under
+``.claude/`` on a legacy one — :func:`resolve_config` finds either. The
+orchestrator is a *reader* of that contract — it never invents a parallel one.
+Parsing never raises; malformed input degrades to defaults and is surfaced
+through :attr:`ProjectDescriptor.warnings`.
 """
 
 from __future__ import annotations
@@ -15,7 +17,36 @@ from typing import Any
 
 import yaml
 
-CONFIG_RELPATH = Path(".claude/config.yaml")
+# Scaffold layout roots, most-current first. project-init PI-627 relocated the
+# canonical tree from ``.claude/`` to ``.agents/`` and its ``.claude/`` projection
+# deliberately EXCLUDES config.yaml/CAPABILITIES/memory (single source of truth),
+# so a modern scaffold declares itself under ``.agents/``. Pre-PI-627 projects
+# still ship ``.claude/config.yaml`` — read it as a legacy fallback.
+_LAYOUT_DIRS: tuple[str, ...] = (".agents", ".claude")
+_CONFIG_BASENAME = "config.yaml"
+
+# Legacy alias kept for backward compatibility; new code resolves the layout via
+# :func:`resolve_config` and reads paths off :attr:`ProjectDescriptor.config_root`.
+CONFIG_RELPATH = Path(".claude") / _CONFIG_BASENAME
+
+
+def resolve_config(project_dir: Path) -> tuple[Path, str] | None:
+    """Locate a project's descriptor across scaffold layouts.
+
+    Args:
+        project_dir: Candidate project root.
+
+    Returns:
+        ``(config_path, config_root)`` — the readable ``config.yaml`` and the
+        layout dir it lives in (``.agents`` preferred, ``.claude`` legacy) — or
+        ``None`` when neither layout has a config.
+    """
+    for root in _LAYOUT_DIRS:
+        candidate = project_dir / root / _CONFIG_BASENAME
+        if candidate.is_file():
+            return candidate, root
+    return None
+
 
 _TOOLING_SUFFIX = "_command"
 
@@ -85,6 +116,7 @@ class ProjectDescriptor:
 
     name: str
     path: Path
+    config_root: str = ".claude"
     language: str = "unknown"
     delivery: str = "unknown"
     contract_version: int = 0
@@ -105,6 +137,11 @@ class ProjectDescriptor:
     def has_task(self, task: str) -> bool:
         """Return whether the project declares a runnable command for ``task``."""
         return bool(self.tooling.get(task, "").strip())
+
+    @property
+    def config_path(self) -> Path:
+        """Absolute path to the descriptor this project was read from."""
+        return self.path / self.config_root / _CONFIG_BASENAME
 
 
 def _as_mapping(value: Any) -> dict[str, Any]:
@@ -223,12 +260,16 @@ def _extract_hooks_expected(raw: dict[str, Any]) -> tuple[str, ...]:
     return tuple(str(name) for name in expected if isinstance(name, str) and name.strip())
 
 
-def parse_config(text: str, project_dir: Path) -> ProjectDescriptor:
+def parse_config(text: str, project_dir: Path, config_root: str = ".claude") -> ProjectDescriptor:
     """Build a descriptor from raw config text (pure; never raises).
 
     Args:
-        text: Contents of ``.claude/config.yaml``.
+        text: Contents of the project's ``config.yaml``.
         project_dir: Project root the config belongs to.
+        config_root: Layout dir the config was found in (``.agents`` for a
+            PI-627 scaffold, ``.claude`` legacy). Read surfaces without an
+            explicit path in the config (memory, capabilities, observability)
+            default under this dir. Defaults to ``.claude`` for direct callers.
 
     Returns:
         A descriptor; parse failures degrade to defaults with a warning.
@@ -250,11 +291,12 @@ def parse_config(text: str, project_dir: Path) -> ProjectDescriptor:
 
     project = _as_mapping(raw.get("project"))
     memory = _as_mapping(raw.get("memory"))
-    memory_rel = str(memory.get("memory_path") or ".claude/memory")
+    memory_default = f"{config_root}/memory"
+    memory_rel = str(memory.get("memory_path") or memory_default)
     memory_path = _contained_path(project_dir, memory_rel)
     if memory_path is None:
-        warnings.append(f"memory_path '{memory_rel}' escapes the project root — using .claude/memory")
-        memory_path = project_dir / ".claude/memory"
+        warnings.append(f"memory_path '{memory_rel}' escapes the project root — using {memory_default}")
+        memory_path = project_dir / memory_default
     contract_version = _as_int(project.get("project_init_contract_version"))
     is_v2 = contract_version >= CONTRACT_V2
     memory_tier = _as_int(memory.get("tier"))
@@ -263,6 +305,7 @@ def parse_config(text: str, project_dir: Path) -> ProjectDescriptor:
     return ProjectDescriptor(
         name=str(project.get("name") or project_dir.name),
         path=project_dir,
+        config_root=config_root,
         language=str(raw.get("language") or "unknown"),
         delivery=str(raw.get("delivery") or "unknown"),
         contract_version=contract_version,
@@ -316,9 +359,13 @@ def load_descriptor(project_dir: Path) -> ProjectDescriptor | None:
 
     Returns:
         The parsed descriptor, or ``None`` when the directory is not a
-        project-init project (no readable ``.claude/config.yaml``).
+        project-init project (no readable ``.agents/config.yaml`` or legacy
+        ``.claude/config.yaml``).
     """
-    config_path = project_dir / CONFIG_RELPATH
+    resolved = resolve_config(project_dir)
+    if resolved is None:
+        return None
+    config_path, config_root = resolved
     try:
         # errors="replace": a config saved in a non-UTF-8 encoding degrades to
         # a slightly-garbled descriptor rather than dropping the project from
@@ -326,4 +373,4 @@ def load_descriptor(project_dir: Path) -> ProjectDescriptor | None:
         text = config_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
-    return parse_config(text, project_dir)
+    return parse_config(text, project_dir, config_root)
