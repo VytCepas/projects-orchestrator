@@ -20,6 +20,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import yaml
+
 from projects_orchestrator.adapters.project_init import parse_scaffold_result
 from projects_orchestrator.capabilities import MCP, SKILL, parse_capabilities
 from projects_orchestrator.descriptor import load_descriptor, parse_config
@@ -174,3 +176,52 @@ def test_v2_scaffold_result_seam_targets_agents_config() -> None:
     parsed = parse_scaffold_result(_SCAFFOLD_RESULT_V2.read_text(encoding="utf-8"))
     assert parsed is not None
     assert parsed.contract_version == 2
+
+
+# --- Schema validation: the golden fixtures conform to the shipped JSON Schema ---
+# project-init ships descriptor.schema.json + usage-event.schema.json as the
+# machine source of truth (VytCepas/project-init#603, packaged via #786). The
+# schemas are vendored under tests/fixtures/project_init/schemas/ (regenerate on
+# a contract bump — see the fixtures README); validating the golden fixtures
+# against them catches a schema-level drift the reader-based tripwire can miss.
+
+
+_SCHEMAS = _FIXTURES / "schemas"
+_DESCRIPTOR_SCHEMA = _SCHEMAS / "descriptor.schema.json"
+_USAGE_EVENT_SCHEMA = _SCHEMAS / "usage-event.schema.json"
+
+
+def _validate(instance, schema_path: Path) -> None:
+    import jsonschema
+
+    jsonschema.validate(
+        instance=instance, schema=json.loads(schema_path.read_text(encoding="utf-8"))
+    )
+
+
+def test_v2_fixture_validates_against_descriptor_schema() -> None:
+    # Only the v2 fixture is expected to conform: the schema IS the v2 contract,
+    # and the v1 fixture is a legacy pre-schema shape (scalar deploy) kept solely
+    # to prove the reader still parses `.claude/`-layout projects.
+    _validate(yaml.safe_load(_CONFIG_V2.read_text(encoding="utf-8")), _DESCRIPTOR_SCHEMA)
+
+
+def test_a_usage_event_validates_against_usage_event_schema() -> None:
+    # The shape project-init's guards log (ts/hook/event/project required).
+    event = {
+        "ts": "2026-07-04T10:00:00Z",
+        "hook": "github_command_guard",
+        "event": "deny",
+        "project": "demo-service",
+        "command": "git push origin main",
+        "session": "abc123",
+    }
+    _validate(event, _USAGE_EVENT_SCHEMA)
+
+
+def test_vendored_descriptor_schema_is_the_v2_shape() -> None:
+    # A stale vendored copy (e.g. a v1 schema) would silently weaken validation;
+    # pin that the vendored schema still defines the v2 surfaces.
+    schema = json.loads(_DESCRIPTOR_SCHEMA.read_text(encoding="utf-8"))
+    assert "v2" in schema["title"]
+    assert {"deploy", "observability", "hooks"} <= set(schema["properties"])

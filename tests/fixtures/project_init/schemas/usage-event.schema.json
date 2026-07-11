@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/VytCepas/project-init/schemas/usage-event.schema.json",
+  "title": "Agentic OS Usage Event (usage.jsonl)",
+  "description": "JSON schema for a single line in .agents/observability/usage.jsonl",
+  "type": "object",
+  "properties": {
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601 UTC timestamp of the event"
+    },
+    "hook": {
+      "type": "string",
+      "description": "The name of the hook generating the event (e.g. pre_commit_gate)"
+    },
+    "event": {
+      "type": "string",
+      "description": "The event type (e.g. PreToolUse)"
+    },
+    "project": {
+      "type": "string",
+      "description": "Absolute path to the project root directory"
+    },
+    "decision": {
+      "type": "string",
+      "enum": ["block", "ask"],
+      "description": "Governance decision made by the guard"
+    },
+    "command": {
+      "type": "string",
+      "description": "The executed command, redacted and truncated"
+    },
+    "session": {
+      "type": "string",
+      "description": "The Claude session ID, if available"
+    }
+  },
+  "required": ["ts", "hook", "event", "project"]
+}

@@ -36,5 +36,15 @@ Then copy `<target>/.agents/config.yaml` → `config.v2.yaml`,
 `scaffold_result.v2.json` (sanitize the absolute `target` path). The v1 fixtures
 were generated the same way with an older project-init that wrote `.claude/`.
 
-The shared JSON Schema (VytCepas/project-init#603, now shipped) will eventually
-validate these fixtures directly — see the schema-validation follow-up (PO #90).
+## Vendored schemas (`schemas/`)
+
+`schemas/descriptor.schema.json` and `schemas/usage-event.schema.json` are
+vendored copies of project-init's shipped machine schemas (VytCepas/project-init#603,
+packaged as a consumable via #786). `tests/test_contract.py` validates the v2
+fixture (and a sample usage event) against them, so a schema-level drift the
+reader-based tripwire could miss still fails CI.
+
+**Refresh** these alongside the config/capabilities fixtures — copy
+`<project-init>/schemas/*.json` here — whenever project-init bumps the contract.
+Once the orchestrator depends on a released project-init that includes #786, this
+vendoring can be replaced by `project_init.schema.load_descriptor_schema()`.
