@@ -10,9 +10,9 @@ type: project
   **Why:** "Realize the core, then build the interface" was the agreed sequence — an interface is a projection of the data model, so the contract was stabilized before the surfaces grew.
   **How to apply:** Build new surfaces on the shared view-model (ADR-004); don't add a fifth parallel projection. Keep new commands read-only and never-raise per ADR-003.
 
-- **Fact:** Descriptor contract v2 (`deploy`, `observability.path`, `hooks.expected`) is implemented on the read side but the doc stays a *proposal* pending upstream project-init emitting `project_init_contract_version: 2`.
-  **Why:** The contract is co-owned upstream; freezing it here before project-init ships v2 would misrepresent the boundary.
-  **How to apply:** Before renaming `docs/reference/descriptor-contract-v2-proposal.md` to the frozen form, file the upstream project-init issue (emit v2; constrain `deploy.app`/`region` to `^[A-Za-z0-9._-]+$`) and record its link in that doc.
+- **Fact:** Descriptor contract v2 (`deploy`, `observability.path`, `hooks.expected`) is live: project-init emits `project_init_contract_version: 2` and the orchestrator parses it. The doc is frozen at `docs/reference/descriptor-contract-v2.md` (PO-91). project-init also relocated its canonical tree `.claude/`→`.agents/` (PI-627); `descriptor.resolve_config` reads `.agents/` first, `.claude/` as a legacy fallback (PO-88).
+  **Why:** The contract is co-owned upstream; it is now stable and emitted, so the boundary is documented as live rather than proposed.
+  **How to apply:** Validate golden fixtures against project-init's shipped `descriptor.schema.json` (packaged via project-init#786; PO #90). When adding a contract surface, read it via the resolved scaffold root, never a hardcoded `.claude/` or `.agents/` prefix.
 
 - **Fact:** Persistent state lives under `$XDG_STATE_HOME/projects-orchestrator/`: supervisor run-state, `audit-digest.json` (digest deltas), and `history.jsonl` (append-only check trends, bounded by `MAX_ENTRIES`).
   **Why:** Trends and digests need durable state the last-known cache can't hold; keeping it under XDG (not the repo) keeps it machine-local.
