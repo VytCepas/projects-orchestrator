@@ -1,12 +1,16 @@
-# Descriptor contract v2 — proposal
+# Descriptor contract v2
 
-Status: **proposed** — the field list below is what this orchestrator needs
-from [project-init](https://github.com/VytCepas/project-init) beyond
-[contract v1](descriptor-contract-v1.md). The contract itself is owned
-upstream; this page tracks the proposal and documents exactly what the
-orchestrator already parses when a child declares
-`project.project_init_contract_version: 2`. File the upstream issue against
-project-init and record its link here once opened.
+Status: **live** — project-init emits `project.project_init_contract_version: 2`
+with the blocks below, and the orchestrator parses them. This page pins the v2
+surfaces beyond [contract v1](descriptor-contract-v1.md); the contract itself is
+owned upstream (project-init) and this is a *reader's* record of what the
+orchestrator consumes.
+
+> Layout note (PI-627): a current project-init scaffold keeps its canonical tree
+> under `.agents/`, not `.claude/`. The descriptor is `.agents/config.yaml`; the
+> `.claude/` projection deliberately excludes it. The orchestrator resolves
+> `.agents/` first and falls back to `.claude/` for pre-PI-627 projects
+> (`descriptor.resolve_config`).
 
 ## Invariants (unchanged from v1)
 
@@ -90,10 +94,10 @@ Undeclared (or v1) keeps the globbing fallback.
 ## Orchestrator implementation state
 
 `descriptor.py` parses all of the above behind `contract_version >= 2`
-(`DeployConfig`, `observability_path`, `hooks_expected`), with synthetic-v2
-config tests in `tests/test_descriptor.py`. v0/v1 children are unaffected —
-the fields stay at their empty defaults and every consumer falls back to the
-v1 behavior.
+(`DeployConfig`, `observability_path`, `hooks_expected`), covered by
+`tests/test_descriptor.py` and — against a **real** `.agents/`-layout v2 scaffold
+— by `tests/test_contract.py`. v0/v1 children are unaffected: the fields stay at
+their empty defaults and every consumer falls back to the v1 behavior.
 
 **Read-surface hardening (orchestrator-side, done).** `memory_path` and
 `observability.path` are clamped under the project root (an escaping value is
@@ -101,20 +105,20 @@ rejected with a warning, never read); `doctor` warns on a `contract_version`
 newer than the orchestrator understands (`CONTRACT_VERSION_MAX`) instead of
 claiming full conformance; the observability timestamp format is pinned above.
 
-**Remaining before this doc is frozen (upstream, project-init).** project-init
-must actually emit `project_init_contract_version: 2` with these blocks, and
-should constrain `deploy.app`/`region` to `^[A-Za-z0-9._-]+$` at scaffold time
-(the orchestrator already `shlex.quote`s them defensively). File that upstream
-issue and record its link here; then rename this page to
-`descriptor-contract-v2.md`. The rename is intentionally *not* done yet — no
-child emits contract v2 today, so freezing the page would document a shape the
-producer does not yet ship.
+**Emitted upstream.** project-init emits `project_init_contract_version: 2` with
+the `deploy` / `observability.path` / `hooks.expected` blocks and `run_command`
+(verified by the golden `config.v2.yaml` fixture and `tests/test_contract.py`).
+The orchestrator still `shlex.quote`s `deploy.app`/`region` defensively; a
+stricter `^[A-Za-z0-9._-]+$` constraint at scaffold time would be a nice-to-have
+upstream hardening, not a blocker.
 
-**Machine source of truth (pending).** When project-init ships the shared
-`descriptor.schema.json` (VytCepas/project-init#603), both this page and
-[contract v1](descriptor-contract-v1.md) will cross-link it as the authority
-and validate the golden fixtures against it. Until then the producer→consumer
-contract test (`tests/test_contract.py`) is the tripwire.
+**Machine source of truth.** project-init ships the shared
+`descriptor.schema.json` + `usage-event.schema.json` (VytCepas/project-init#603,
+packaged as a consumable via #786 — `project_init.schema.load_descriptor_schema`).
+Validating the golden fixtures directly against it is tracked in PO #90; until
+that lands, the producer→consumer contract test (`tests/test_contract.py`) —
+which parses the real `.agents/`-layout v2 fixture through every reader — is the
+tripwire.
 
 **Registration seam (consumed).** project-init's `scaffold --json` output
 (#510) is no longer a tested-but-dead seam: `adapters/project_init.parse_scaffold_result`

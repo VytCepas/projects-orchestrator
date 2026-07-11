@@ -15,7 +15,15 @@ the `Contract` column of `projects-orchestrator status`.
 > contract, and it degrades (never raises) when any surface is missing or
 > malformed — see [ADR-003](../../.claude/docs/adr/adr-003-fleet-engine.md).
 
-## 1. `.claude/config.yaml` — the descriptor
+> **Layout (PI-627).** A current project-init scaffold keeps its canonical tree
+> under **`.agents/`**, not `.claude/`. The paths below are written `.claude/…`
+> for historical continuity, but the orchestrator resolves the scaffold root via
+> `descriptor.resolve_config` — `.agents/` first, `.claude/` as a legacy
+> fallback for pre-PI-627 projects — and reads every surface (config,
+> `CAPABILITIES.md`, memory, observability) from that root. Read each `.claude/`
+> below as "the scaffold config root".
+
+## 1. `config.yaml` — the descriptor
 
 Parsed by `descriptor.py`. A directory is considered a project-init project iff
 this file exists and is readable.
@@ -124,15 +132,16 @@ strings (`"1"`) are tolerated; a document with no `target` is rejected. This is
 the one place the orchestrator *writes* — to its **own** registry, never to a
 child tree (ADR-003).
 
-## Machine source of truth (pending)
+## Machine source of truth
 
-project-init plans a shared `descriptor.schema.json` (VytCepas/project-init#603)
-as the machine-checkable definition of the surfaces above. Once it ships, this
-page and [contract v2](descriptor-contract-v2-proposal.md) will cross-link it as
-the authority and the golden fixtures under `tests/fixtures/project_init/` will
-be validated against it directly. Until then, the producer→consumer contract
-test (`tests/test_contract.py`) is the tripwire: it parses a **real** project-init
-scaffold through every reader above, so an upstream shape change fails CI.
+project-init ships a shared `descriptor.schema.json` (VytCepas/project-init#603),
+packaged as a consumable via #786 (`project_init.schema.load_descriptor_schema`),
+as the machine-checkable definition of the surfaces above. Validating the golden
+fixtures under `tests/fixtures/project_init/` against it directly is tracked in
+PO #90. Meanwhile the producer→consumer contract test (`tests/test_contract.py`)
+is the tripwire: it parses **real** project-init scaffolds — a legacy `.claude/`
+v1 and a current `.agents/` v2 — through every reader above, so an upstream shape
+change or relocation fails CI. See [contract v2](descriptor-contract-v2.md).
 
 ## Compatibility policy
 

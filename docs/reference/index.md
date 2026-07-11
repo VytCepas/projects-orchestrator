@@ -15,8 +15,8 @@ For Python projects, render API docs from docstrings with a
 - [Descriptor contract v1](descriptor-contract-v1.md) — the project-init
   surfaces the orchestrator reads (config, scaffold manifest, git hooks,
   memory), pinned as a versioned boundary.
-- [Descriptor contract v2 — proposal](descriptor-contract-v2-proposal.md) —
-  the additive fields to request upstream (deploy block, observability path,
-  expected hooks) and what the orchestrator already parses at v2.
+- [Descriptor contract v2](descriptor-contract-v2.md) —
+  the additive v2 fields project-init emits and the orchestrator parses
+  (deploy block, observability path, expected hooks).
 
 *Add reference pages as `docs/reference/<area>.md` and link them here.*
