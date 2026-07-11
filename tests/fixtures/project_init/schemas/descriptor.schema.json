@@ -1,0 +1,108 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/VytCepas/project-init/schemas/descriptor.schema.json",
+  "title": "Agentic OS Memory Descriptor (v2)",
+  "description": "JSON schema for the cross-project memory descriptor contract (.agents/config.yaml).",
+  "type": "object",
+  "properties": {
+    "project": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "created": { "type": "string" },
+        "project_init_version": { "type": "string" },
+        "project_init_contract_version": { "type": "integer" },
+        "project_init_plugin_version": { "type": "string" },
+        "profile": { "type": "string" },
+        "enforcement": { "type": "string" },
+        "project_init_host": { "type": "string" },
+        "project_key": { "type": "string" },
+        "github_project_number": { "type": "integer" }
+      },
+      "required": ["name", "description"]
+    },
+    "language": {
+      "type": "string",
+      "enum": ["python", "node", "go", "none"]
+    },
+    "delivery": {
+      "type": "string",
+      "enum": ["library", "service", "prototype"]
+    },
+    "deploy": {
+      "type": ["string", "object"],
+      "properties": {
+        "target": { "type": "string" },
+        "app": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+        "region": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+        "health_url": { "type": "string" }
+      }
+    },
+    "iac": {
+      "type": "string",
+      "enum": ["none", "opentofu"]
+    },
+    "memory": {
+      "type": "object",
+      "properties": {
+        "tier": { "type": "integer" },
+        "stack": { "type": "string" },
+        "memory_path": { "type": "string" },
+        "vault_path": { "type": "string" },
+        "graph_path": { "type": "string" },
+        "rag_endpoint": { "type": ["string", "null"] }
+      },
+      "required": ["tier", "stack", "memory_path"]
+    },
+    "mcps": {
+      "type": "object",
+      "properties": {
+        "installed": { "type": ["object", "string", "array", "null"] }
+      }
+    },
+    "safety": {
+      "type": "object",
+      "properties": {
+        "allow": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "tooling": {
+      "type": "object",
+      "properties": {
+        "lint_command": { "type": "string" },
+        "format_command": { "type": "string" },
+        "test_command": { "type": "string" },
+        "run_command": { "type": "string" }
+      }
+    },
+    "observability": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string" }
+      }
+    },
+    "hooks": {
+      "type": "object",
+      "properties": {
+        "expected": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "updates": {
+      "type": "object",
+      "properties": {
+        "declined_additions": { "type": "object" }
+      }
+    },
+    "scaffold": {
+      "type": "object"
+    }
+  },
+  "required": ["project", "language", "delivery"]
+}
