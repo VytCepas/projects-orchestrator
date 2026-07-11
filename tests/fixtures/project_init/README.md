@@ -8,13 +8,20 @@ of on a user's fleet.
 
 | File | What | Contract surface |
 |---|---|---|
-| `config.v1.yaml` | a scaffolded `.claude/config.yaml` | the descriptor `descriptor.py` parses |
+| `config.v1.yaml` | a legacy `.claude/config.yaml` (pre-PI-627) | the descriptor `descriptor.py` parses |
 | `capabilities.v1.md` | a scaffolded `.claude/CAPABILITIES.md` | the capability inventory `capabilities.py` parses (ADR-025 §3) |
 | `scaffold_result.v1.json` | `project-init … --json` stdout (target path sanitized) | the `--json` registration seam (#510) |
+| `config.v2.yaml` | a current `.agents/config.yaml` (PI-627, contract v2) | the descriptor + the `deploy`/`observability.path`/`hooks.expected` blocks |
+| `capabilities.v2.md` | a current `.agents/CAPABILITIES.md` | the capability inventory |
+| `scaffold_result.v2.json` | current `project-init … --json` stdout (target sanitized) | the `--json` seam (now targets `.agents/config.yaml`) |
+
+The **v1** fixtures pin the legacy `.claude/` layout the orchestrator still
+reads as a fallback; the **v2** fixtures pin the current `.agents/` layout and
+the contract-v2 shape. Both are guarded by `tests/test_contract.py`.
 
 ## How to refresh (pin to a project-init version)
 
-Generated with **project-init 1.0.0** via:
+The v2 fixtures were generated with **project-init 1.0.1** via:
 
 ```sh
 project-init <target> \
@@ -24,11 +31,10 @@ project-init <target> \
   --non-interactive --json
 ```
 
-Then copy `<target>/.claude/config.yaml` here as `config.v1.yaml` and the JSON
-stdout as `scaffold_result.v1.json` (sanitize the absolute `target` path).
+Then copy `<target>/.agents/config.yaml` → `config.v2.yaml`,
+`<target>/.agents/CAPABILITIES.md` → `capabilities.v2.md`, and the JSON stdout →
+`scaffold_result.v2.json` (sanitize the absolute `target` path). The v1 fixtures
+were generated the same way with an older project-init that wrote `.claude/`.
 
-When project-init emits **contract v2** (VytCepas/project-init#604), add a
-`config.v2.yaml` fixture and extend the contract test to assert the orchestrator
-reads the `deploy` block / `observability.path` / `hooks.expected` / `run_command`.
-The shared JSON Schema (VytCepas/project-init#603) will eventually validate these
-fixtures directly.
+The shared JSON Schema (VytCepas/project-init#603, now shipped) will eventually
+validate these fixtures directly — see the schema-validation follow-up (PO #90).
