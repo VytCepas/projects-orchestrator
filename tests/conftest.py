@@ -73,6 +73,7 @@ def make_project(
     name: str,
     tooling: dict[str, str] | None = None,
     config_text: str | None = None,
+    layout: str = ".claude",
 ) -> Path:
     """Create a minimal project-init-shaped project directory.
 
@@ -81,18 +82,20 @@ def make_project(
         name: Project (directory) name.
         tooling: Task → shell command map written as ``<task>_command``.
         config_text: Full config.yaml override (ignores ``tooling``).
+        layout: Scaffold layout dir the descriptor lives in — ``.agents`` for a
+            PI-627 scaffold, ``.claude`` for a legacy one.
 
     Returns:
         The project root path.
     """
     project = base / name
-    claude_dir = project / ".claude"
-    claude_dir.mkdir(parents=True)
+    config_dir = project / layout
+    config_dir.mkdir(parents=True)
     if config_text is None:
         tooling = tooling if tooling is not None else {"lint": "true"}
         lines = "".join(f'  {task}_command: "{cmd}"\n' for task, cmd in tooling.items())
         config_text = CONFIG_TEMPLATE.format(name=name, tooling=lines or "  {}\n")
-    (claude_dir / "config.yaml").write_text(config_text, encoding="utf-8")
+    (config_dir / "config.yaml").write_text(config_text, encoding="utf-8")
     return project
 
 

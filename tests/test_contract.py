@@ -63,7 +63,7 @@ def test_real_config_carries_a_hashable_scaffold_manifest(tmp_path: Path) -> Non
     (tmp_path / ".claude/config.yaml").write_text(
         _CONFIG_V1.read_text(encoding="utf-8"), encoding="utf-8"
     )
-    manifest = _load_manifest(tmp_path)
+    manifest = _load_manifest(tmp_path / ".claude" / "config.yaml")
     assert manifest, "scaffold.manifest is the whole contract for drift detection"
     assert all(len(sha) == 64 for sha in manifest.values())  # sha256 hex
 

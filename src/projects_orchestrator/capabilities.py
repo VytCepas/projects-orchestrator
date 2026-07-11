@@ -187,7 +187,9 @@ def load_capabilities(descriptor: ProjectDescriptor) -> ProjectCapabilities:
         The parsed inventory; a missing or oversized file yields an empty
         ``present=False`` result with a warning.
     """
-    path = descriptor.path / CAPABILITIES_RELPATH
+    # CAPABILITIES.md lives beside the descriptor — under ``.agents/`` on a
+    # PI-627 scaffold, ``.claude/`` on a legacy one (descriptor.config_root).
+    path = descriptor.path / descriptor.config_root / CAPABILITIES_RELPATH.name
     try:
         if path.stat().st_size > _MAX_FILE_BYTES:
             return ProjectCapabilities(

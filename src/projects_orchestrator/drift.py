@@ -17,7 +17,7 @@ from pathlib import Path
 
 import yaml
 
-from projects_orchestrator.descriptor import CONFIG_RELPATH, ProjectDescriptor
+from projects_orchestrator.descriptor import ProjectDescriptor
 
 HOOKS_SOURCE_DIR = Path(".github/hooks")
 
@@ -51,12 +51,10 @@ class DriftReport:
         return "none" if changed == 0 else f"{changed} file{'s' if changed != 1 else ''}"
 
 
-def _load_manifest(project_dir: Path) -> dict[str, str]:
+def _load_manifest(config_path: Path) -> dict[str, str]:
     """Read ``scaffold.manifest`` from the project config; empty on failure."""
     try:
-        raw = yaml.safe_load(
-            (project_dir / CONFIG_RELPATH).read_text(encoding="utf-8", errors="replace")
-        )
+        raw = yaml.safe_load(config_path.read_text(encoding="utf-8", errors="replace"))
     except (OSError, yaml.YAMLError):
         return {}
     if not isinstance(raw, dict):
@@ -88,7 +86,7 @@ def compute_drift(descriptor: ProjectDescriptor) -> DriftReport:
         The drift report; a project without a manifest is ``no-manifest``
         (older contract), not an error.
     """
-    manifest = _load_manifest(descriptor.path)
+    manifest = _load_manifest(descriptor.config_path)
     if not manifest:
         return DriftReport(project=descriptor.name, status="no-manifest")
 
