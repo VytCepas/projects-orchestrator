@@ -7,6 +7,15 @@
 .claude/memory/.cache/
 .claude/logs/
 .claude/.local/
+# The plugin hooks (post-PI-627) write runtime state under .agents/, but this
+# scaffold predates that rename, so the .claude/ rules above never match them.
+# `project-init upgrade` regenerates this file with these paths; until then:
+.agents/scheduled_tasks.lock
+.agents/.session_setup_stamp
+.agents/settings.local.json
+.agents/memory/.cache/
+.agents/logs/
+.agents/.local/
 
 # Python
 __pycache__/
