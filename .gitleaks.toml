@@ -22,4 +22,11 @@ description = "project-init scaffold record (content hashes, not secrets)."
 # example-path exemption is needed.
 paths = [
   '''\.agents/config\.yaml''',
+  # The CI secret-scan checks out FULL HISTORY, which still contains the record at
+  # its pre-PI-606 path — the .agents/ rename does not rewrite past commits. Drop
+  # this and every PR fails the gitleaks gate on 3 findings in old commits.
+  '''\.claude/config\.yaml''',
+  # Our own golden fixtures of that record, carrying the same manifest hashes
+  # (tests/test_contract.py). Same content hashes, same false positive.
+  '''tests/fixtures/project_init/config\.v[12]\.yaml''',
 ]
