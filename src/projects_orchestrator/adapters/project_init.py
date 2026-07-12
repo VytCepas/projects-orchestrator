@@ -115,9 +115,7 @@ def parse_scaffold_result(text: str) -> ScaffoldResult | None:
     raw_memory = data.get("memory")
     memory: dict[str, Any] = raw_memory if isinstance(raw_memory, dict) else {}
     raw_conflicts = data.get("conflicts")
-    conflicts = (
-        tuple(str(c) for c in raw_conflicts) if isinstance(raw_conflicts, list) else ()
-    )
+    conflicts = tuple(str(c) for c in raw_conflicts) if isinstance(raw_conflicts, list) else ()
     return ScaffoldResult(
         target=Path(target.strip()),
         preset=str(data.get("preset") or ""),

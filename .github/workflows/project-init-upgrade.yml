@@ -1,6 +1,6 @@
 # Open the project-init scaffolding upgrade as a reviewable pull request instead
 # of writing drift straight into your branch (#241). Renovate-style, but for the
-# `.claude/` scaffold: run it on demand (or on a schedule) and review every
+# `.agents/` scaffold: run it on demand (or on a schedule) and review every
 # upgrade like a dependency bump. The job no-ops when there is no drift.
 #
 # Default trigger is manual (workflow_dispatch). Uncomment the schedule to check

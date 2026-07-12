@@ -90,9 +90,7 @@ def render_digest(digest: AuditDigest) -> str:
     if not digest.changed:
         return "audit digest: no change since last run"
     lines = [f"audit digest: {len(digest.new)} new, {len(digest.resolved)} resolved"]
-    lines.extend(
-        f"  + [{f.severity}] {f.project}: {f.message} ({f.category})" for f in digest.new
-    )
+    lines.extend(f"  + [{f.severity}] {f.project}: {f.message} ({f.category})" for f in digest.new)
     lines.extend(f"  - resolved {f.project}: {f.message} ({f.category})" for f in digest.resolved)
     return "\n".join(lines)
 

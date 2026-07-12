@@ -1,11 +1,11 @@
 # GitHub Copilot Instructions — projects-orchestrator
 
-Canonical agent rules: [AGENTS.md](../AGENTS.md) | Workflow: [.claude/project-init.md](../.claude/project-init.md)
+Canonical agent rules: [AGENTS.md](../AGENTS.md) | Workflow: [.agents/project-init.md](../.agents/project-init.md)
 
 ## Issue & project tracking
 
 - Tracking system: **GitHub Projects** (kanban board) + **GitHub Issues** (tickets)
-- Create issues: load the `create_issue` skill and use `.claude/scripts/create_issue.sh`; it handles metadata gathering, priority labels, and acceptance criteria
+- Create issues: load the `create_issue` skill and use `.agents/scripts/create_issue.sh`; it handles metadata gathering, priority labels, and acceptance criteria
 - Board cards move automatically via `board-automation.yml` — no manual updates needed
 - Use a dedicated branch for each issue; format it as `<issue_type>/<project_abbr>-<issue_number>-<slug>`, e.g. `feat/PI-42-add-auth`; no direct commits to `main`
 - Issue and PR names use a project key: `<PROJECT-KEY>-<issue-number>`, e.g. `PI-42`
@@ -19,8 +19,8 @@ Canonical agent rules: [AGENTS.md](../AGENTS.md) | Workflow: [.claude/project-in
 
 ## Key rules
 
-- Write failing tests before implementation (TDD)
+- Test-first for design (a new interface or fix); then prove each guard can fail — break what it checks, watch it fail, then restore
 - No secrets in code — use `os.environ` or `.env` (gitignored)
 - `just lint` must pass before closing a task (`just --list` shows all recipes)
 - Prefer deterministic bash/python over LLM calls for hooks and scripts
-- Permanent decisions → `.claude/docs/adr/`; reusable facts → `.claude/memory/`
+- Permanent decisions → `.agents/docs/adr/`; reusable facts → `.agents/memory/`

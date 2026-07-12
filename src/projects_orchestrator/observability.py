@@ -133,9 +133,7 @@ def load_events(descriptor: ProjectDescriptor) -> ProjectEvents:
             )
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return ProjectEvents(
-            project=descriptor.name, path=path, warnings=("no observability log",)
-        )
+        return ProjectEvents(project=descriptor.name, path=path, warnings=("no observability log",))
 
     events: list[GuardEvent] = []
     malformed = 0

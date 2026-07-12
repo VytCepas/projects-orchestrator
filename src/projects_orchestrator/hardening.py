@@ -111,7 +111,9 @@ def checklist(
     cached: dict[str, dict[str, CheckResult]],
 ) -> list[HardeningReport]:
     """Build hardening checklists for the fleet."""
-    return [project_checklist(descriptor, cached.get(descriptor.name)) for descriptor in descriptors]
+    return [
+        project_checklist(descriptor, cached.get(descriptor.name)) for descriptor in descriptors
+    ]
 
 
 def render_text(reports: list[HardeningReport]) -> str:
@@ -126,7 +128,5 @@ def render_text(reports: list[HardeningReport]) -> str:
             lines.append(f"{report.project}: ok")
             continue
         lines.append(f"{report.project}:")
-        lines.extend(
-            f"  {item.category}: {item.detail} — {item.action}" for item in report.items
-        )
+        lines.extend(f"  {item.category}: {item.detail} — {item.action}" for item in report.items)
     return "\n".join(lines)

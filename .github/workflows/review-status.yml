@@ -1,20 +1,43 @@
 name: Review status
 
-# Creates a commit status named "review/decision" whenever a PR review is
-# submitted, edited, or dismissed. This lets monitor_pr.sh treat review state
-# as just another CI check instead of polling reviewDecision in a separate loop.
+# Creates a commit status named "review/decision" reflecting the *agent* review
+# protocol, so monitor_pr.sh can treat review state as just another CI check.
 #
-# Maps the PR's *aggregate* reviewDecision (not just the triggering event) so
-# that a later COMMENT review doesn't flip an already-approved PR back to pending.
+# PI-715: this used to map straight off reviewDecision, which meant the check
+# only ever went green on APPROVED. On a solo repo nobody can approve — GitHub
+# refuses self-approval and the bot reviewers (Copilot, Codex) submit COMMENTED,
+# never APPROVED — so the check was permanently pending and every merge became an
+# `--admin` override. The gate now asks the question an agent workflow can
+# actually answer: has a review landed, and are its comments resolved?
 #
-# Status mapping:
-#   APPROVED          → success  ("Approved")
-#   CHANGES_REQUESTED → failure  ("Changes requested")
-#   REVIEW_REQUIRED / other → pending  ("Review required — awaiting approval")
+# Status mapping (first match wins):
+#   CHANGES_REQUESTED          → failure  ("Changes requested")
+#   no review yet              → pending  ("Awaiting review")
+#   unresolved review threads  → failure  ("N unresolved review comment(s)")
+#   APPROVED                   → success  ("Approved")
+#   reviewed, nothing open     → success  ("Reviewed — no open comments")
+#
+# A failure is not a dead end: it is what drives monitor_pr.sh's review cycle
+# (exit 2 → address comments → resolve threads → push → re-run).
 
 on:
   pull_request_review:
     types: [submitted, edited, dismissed]
+  # Inline review comments are the thread activity we CAN see. Resolving a thread
+  # emits no workflow event at all — `pull_request_review_thread` is a webhook
+  # event, not an Actions trigger, and naming it made GitHub reject this entire
+  # file at load time (#719). So a resolution only refreshes the status once some
+  # other event follows: a comment, a review, or a push.
+  pull_request_review_comment:
+    types: [created, edited, deleted]
+  # PR comments (the review-response convention) are a reliable post-resolution
+  # nudge. `issue_comment` also fires for plain issues; the job guards on that.
+  issue_comment:
+    types: [created]
+  # A new commit needs its own status, or the required check is missing on the
+  # head SHA and the PR is blocked with nothing to click.
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   statuses: write
@@ -23,26 +46,64 @@ permissions:
 jobs:
   set-review-status:
     name: Set review/decision status
+    # issue_comment fires for plain issues too; only PRs have a head SHA to
+    # attach a commit status to (#719).
+    if: github.event_name != 'issue_comment' || github.event.issue.pull_request
     runs-on: ubuntu-24.04
     steps:
       - name: Post commit status
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          SHA: ${{ github.event.pull_request.head.sha }}
+          # pull_request* events carry .pull_request; issue_comment carries .issue.
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
           REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+          # Route event values through env, not inline ${{ }} in the script —
+          # keeps the whole workflow to one untrusted-input discipline (2026-07
+          # review). GitHub-generated URL, so risk is low; consistency matters.
+          # Empty on non-review events; the status is posted without a target.
+          REVIEW_URL: ${{ github.event.review.html_url }}
         run: |
-          DECISION=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json reviewDecision -q '.reviewDecision // ""')
-          case "$DECISION" in
-            APPROVED)
-              STATE="success"; DESCRIPTION="Approved" ;;
-            CHANGES_REQUESTED)
-              STATE="failure"; DESCRIPTION="Changes requested" ;;
-            *)
-              STATE="pending"; DESCRIPTION="Review required — awaiting approval" ;;
-          esac
-          gh api --method POST "repos/${REPO}/statuses/${SHA}" \
-            --field state="$STATE" \
-            --field description="$DESCRIPTION" \
-            --field context="review/decision" \
-            --field target_url="${{ github.event.review.html_url }}"
+          set -euo pipefail
+
+          # Resolve the head SHA from the API rather than the payload: only the
+          # pull_request* events carry .pull_request.head.sha, and posting the
+          # status to the wrong (or empty) SHA leaves the check missing (#719).
+          SHA=$(gh pr view "$PR_NUMBER" --repo "$REPO" \
+            --json headRefOid -q '.headRefOid')
+
+          DECISION=$(gh pr view "$PR_NUMBER" --repo "$REPO" \
+            --json reviewDecision -q '.reviewDecision // ""')
+          REVIEWS=$(gh pr view "$PR_NUMBER" --repo "$REPO" \
+            --json reviews -q '.reviews | length')
+          UNRESOLVED=$(gh api graphql \
+            -F owner="$OWNER" -F repo="$REPO_NAME" -F number="$PR_NUMBER" -f query='
+              query($owner:String!, $repo:String!, $number:Int!) {
+                repository(owner:$owner, name:$repo) {
+                  pullRequest(number:$number) {
+                    reviewThreads(first:100) { nodes { isResolved } }
+                  }
+                }
+              }' --jq '[.data.repository.pullRequest.reviewThreads.nodes[]
+                       | select(.isResolved == false)] | length')
+
+          if [ "$DECISION" = "CHANGES_REQUESTED" ]; then
+            STATE="failure"; DESCRIPTION="Changes requested"
+          elif [ "$REVIEWS" -eq 0 ]; then
+            STATE="pending"; DESCRIPTION="Awaiting review"
+          elif [ "$UNRESOLVED" -gt 0 ]; then
+            STATE="failure"; DESCRIPTION="$UNRESOLVED unresolved review comment(s)"
+          elif [ "$DECISION" = "APPROVED" ]; then
+            STATE="success"; DESCRIPTION="Approved"
+          else
+            STATE="success"; DESCRIPTION="Reviewed — no open comments"
+          fi
+
+          set -- --field state="$STATE" \
+                 --field description="$DESCRIPTION" \
+                 --field context="review/decision"
+          if [ -n "${REVIEW_URL:-}" ]; then
+            set -- "$@" --field target_url="$REVIEW_URL"
+          fi
+          gh api --method POST "repos/${REPO}/statuses/${SHA}" "$@"

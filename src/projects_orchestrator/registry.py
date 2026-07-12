@@ -239,7 +239,10 @@ def register_project(fleet_file: Path, project: Path) -> RegisterOutcome:
         fleet_file.write_text(yaml.safe_dump(document, sort_keys=True), encoding="utf-8")
     except OSError as exc:
         return RegisterOutcome(
-            fleet_file, resolved, added=False, warnings=(*warnings, f"cannot write {fleet_file}: {exc}")
+            fleet_file,
+            resolved,
+            added=False,
+            warnings=(*warnings, f"cannot write {fleet_file}: {exc}"),
         )
     return RegisterOutcome(fleet_file, resolved, added=True, warnings=warnings)
 

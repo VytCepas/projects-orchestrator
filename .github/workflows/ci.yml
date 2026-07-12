@@ -1,5 +1,13 @@
 name: CI
 
+# Compute jobs read `vars.CI_RUNS_ON` (PI-666): set the repo variable to
+# `self-hosted` to run CI on your own runner — the escape hatch when a private
+# repo exhausts its GitHub Actions minutes. Toggle with `just ci-local-on` /
+# `ci-local-off`; setup guide: .agents/docs/guides/self-hosted-ci-runner.md.
+# Secret/PAT-bearing workflows deliberately stay on GitHub-hosted ephemeral runners.
+# Pinned here: board-automation, validate-pr, issue-validation, project-init-upgrade.
+
+
 on:
   push:
     branches: [main]
@@ -9,16 +17,35 @@ on:
     # Weekly OpenSSF Scorecard security-posture run (#576). The scorecard job
     # below is schedule-gated, so it never runs — or blocks — on a PR.
     - cron: "0 4 * * 1"
-
-    # Nightly mutation-testing run (PI-138/#563).
+    # Nightly run: the `fuzz` job in every language, plus `mutation-tests` for
+    # python (PI-138/#563). Each schedule-gated job below matches on its OWN
+    # cron via `github.event.schedule` — `github.event_name == 'schedule'` alone
+    # fires on EVERY cron here, which silently made `fuzz` weekly for node/go/
+    # rust (where this nightly entry used to be absent) and made scorecard run
+    # nightly for python (PR #736 review, Copilot + Codex).
+    #
+    # NOTE: a cron triggers the whole workflow. Ungated jobs (lint-and-test,
+    # secret-scan, semgrep, license-scan, ci-gate) run on it too — see the
+    # `fuzz` job's comment for how to restrict cron runs to gated jobs only.
     - cron: "0 3 * * *"
-
   # Optimization: Only run CI when relevant files change
   # Uncomment and adjust paths as needed for your project
 
 permissions:
   contents: read
   pull-requests: write
+
+# Cancel a superseded run when a new commit is pushed to the SAME pull request
+# (PI-589) — review cycles re-push often, and finishing an obsolete run just
+# burns runner-minutes. `cancel-in-progress` is gated to pull_request events, so
+# scheduled (nightly fuzz/mutation, weekly scorecard) and main-push
+# runs are NEVER cancelled — they always complete. `github.event_name` is in the
+# group key so those non-PR runs don't share a group (they'd otherwise serialize:
+# a long nightly on main would make a main push CI queue
+# behind it).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
 
@@ -31,7 +58,7 @@ jobs:
   # a new CPython is released. The floor is always taken from requires-python.
   python-matrix:
     name: Resolve Python matrix
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.CI_RUNS_ON || 'ubuntu-24.04' }}
     outputs:
       versions: ${{ steps.resolve.outputs.versions }}
     steps:
@@ -44,6 +71,10 @@ jobs:
 
       - name: Resolve versions satisfying requires-python
         id: resolve
+        env:
+          # Which cron fired (empty for push/pull_request). The resolver runs the
+          # full matrix ONLY on the nightly cron — not the weekly Scorecard one.
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
         run: |
           uv run --no-project --with packaging python - <<'PY'
           import json
@@ -54,8 +85,13 @@ jobs:
           from packaging.specifiers import InvalidSpecifier, SpecifierSet
 
           # Maintained ceiling set — every CPython this template is willing to
-          # test. The floor comes from requires-python (below), never from here.
+          # test. The floor comes from requires-python, else from the version
+          # project-init pinned at scaffold time; never from here. Kept
+          # byte-equal to SUPPORTED_PYTHON_VERSIONS in the scaffolder.
           KNOWN = ["3.11", "3.12", "3.13", "3.14"]
+
+          def _key(v):
+              return tuple(int(part) for part in v.split("."))
 
           spec = ""
           pyproject = pathlib.Path("pyproject.toml")
@@ -75,23 +111,37 @@ jobs:
                   # than failing the job on a bad requires-python.
                   versions = list(KNOWN)
           else:
-              # No declared floor yet (e.g. a fresh scaffold) — test the full set.
-              versions = list(KNOWN)
+              # No requires-python yet (a fresh scaffold, #628) — honor the floor
+              # project-init pinned into mise.toml and mypy.ini instead of fanning
+              # out across CPythons the project never claimed to support.
+              versions = [v for v in KNOWN if _key(v) >= _key("3.11")]
           if not versions:
               # requires-python excludes every KNOWN version — fall back to the
               # newest so CI still runs instead of erroring on an empty matrix.
               versions = [KNOWN[-1]]
 
+          # Per-PR/push test only the FLOOR version for fast, cheap feedback
+          # (PI-761). ONLY the nightly cron runs the full matrix — a version-
+          # specific break is caught within a day. A cron triggers the whole
+          # workflow, so gate on the specific schedule (github.event.schedule),
+          # not event_name==schedule, or the WEEKLY Scorecard cron would fan out
+          # too. "0 3 * * *" must match the nightly entry in `on.schedule` below;
+          # test_ci_matrix_per_event asserts they agree.
+          event = os.environ.get("GITHUB_EVENT_NAME", "")
+          nightly = event == "schedule" and os.environ.get("GITHUB_EVENT_SCHEDULE", "") == "0 3 * * *"
+          if not nightly and len(versions) > 1:
+              versions = [min(versions, key=_key)]
+
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
               out.write("versions=" + json.dumps(versions) + "\n")
-          print("requires-python:", spec or "(none) -> full KNOWN set")
+          print("requires-python:", spec or '(none) -> floor 3.11 from project-init')
           print("matrix:", versions)
           PY
 
 
   lint-and-test:
     name: Lint and test
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.CI_RUNS_ON || 'ubuntu-24.04' }}
 
     needs: python-matrix
     strategy:
@@ -143,6 +193,42 @@ jobs:
       - name: Typecheck
         run: just typecheck
 
+      # PI-686: CODE_MAP.md's header tells agents to "read this before grepping",
+      # but nothing checked it was current — the generator shipped wired only to
+      # a manual `just code-map`, so the map rotted silently and agents were
+      # routed to a stale index. Regenerate into a temp dir (gen_code_map.py
+      # writes .agents/docs/CODE_MAP.md relative to cwd) and compare bytes;
+      # never rewrite the committed file in CI. Skips cleanly before the first
+      # `just code-map` run, so a fresh scaffold is not born red.
+      - name: CODE_MAP is current
+        run: |
+          set -euo pipefail
+          map=".agents/docs/CODE_MAP.md"
+          gen=".agents/scripts/gen_code_map.py"
+          # A python scaffold always ships the generator, so its absence is a
+          # broken scaffold, not a not-yet-generated map — fail rather than
+          # silently pass a check that can never run (PR #724 review).
+          if [ ! -f "$gen" ]; then
+            echo "::error file=$gen::missing — the CODE_MAP staleness check cannot run"
+            exit 1
+          fi
+          if [ ! -f "$map" ]; then
+            echo "no $map yet — generate it with 'just code-map' and commit."
+            exit 0
+          fi
+          scan="src"
+          [ -d "$scan" ] || scan="."
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          ( cd "$tmp" && uv run --no-project python \
+              "$GITHUB_WORKSPACE/$gen" "$GITHUB_WORKSPACE/$scan" >/dev/null )
+          if ! cmp -s "$tmp/$map" "$map"; then
+            echo "::error file=$map::CODE_MAP.md is stale — run 'just code-map' and commit"
+            diff -u "$map" "$tmp/$map" | head -n 40 || true
+            exit 1
+          fi
+          echo "$map is current."
+
       # Coverage gate (PI-138/PI-569): always on, not conditional — pytest-cov
       # is pulled in ephemerally via `uv run --with`, the same pattern mypy
       # (PI-558) and mutmut (PI-563) use, so there's no dev-dependency to
@@ -183,7 +269,7 @@ jobs:
           gh run view --log-failed
           \`\`\`
 
-          Fix the issues, then run \`.claude/scripts/push_branch.sh\` to re-trigger CI."
+          Fix the issues, then run \`.agents/scripts/push_branch.sh\` to re-trigger CI."
 
 
   # Optimization #2: Split heavyweight tests into separate job
@@ -193,7 +279,7 @@ jobs:
   # integration suite is stable enough to gate merges.
   integration-tests:
     name: Integration tests
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.CI_RUNS_ON || 'ubuntu-24.04' }}
     needs: lint-and-test
     # Optional: Only run on main branch or when tests change significantly
     # if: github.ref == 'refs/heads/main' || contains(github.event.pull_request.files[*].name, 'tests/')
@@ -244,8 +330,9 @@ jobs:
   # not a standalone file like ruff.toml/mypy.ini.
   mutation-tests:
     name: Mutation tests (mutmut)
-    runs-on: ubuntu-24.04
-    if: github.event_name == 'schedule'
+    runs-on: ${{ vars.CI_RUNS_ON || 'ubuntu-24.04' }}
+    # Nightly cron only — not the weekly Scorecard one (see `on.schedule`).
+    if: github.event_name == 'schedule' && github.event.schedule == '0 3 * * *'
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
@@ -293,7 +380,7 @@ jobs:
   # gives fast local feedback but is fail-open; this job is the hard gate.
   secret-scan:
     name: Secret scan (gitleaks)
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.CI_RUNS_ON || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
@@ -316,7 +403,7 @@ jobs:
   # visible. Promote to ci-gate's needs once calibrated.
   semgrep:
     name: Semgrep (semantic security scan)
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.CI_RUNS_ON || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
@@ -324,18 +411,27 @@ jobs:
           # commit reachable, not just the latest diff.
           fetch-depth: 0
 
+      # uvx (not bare `pip`): a self-hosted runner has no writable system
+      # site-packages, so `pip install semgrep` fails there (externally-managed
+      # env). uvx runs it from an ephemeral, pinned env on hosted and
+      # self-hosted alike (CI_RUNS_ON switch, PI-666/PI-673).
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.7"
+
       - name: Run Semgrep
         env:
           SEMGREP_ENABLE_VERSION_CHECK: "0"
         run: |
-          pip install --quiet semgrep==1.168.0
+          SEMGREP="uvx semgrep@1.168.0"
           RULESETS="--config p/secrets --config p/owasp-top-ten --config p/python"
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             # Scan only the diff against the PR's base commit.
-            semgrep scan --error --metrics=off $RULESETS \
+            $SEMGREP scan --error --metrics=off $RULESETS \
               --baseline-commit "${{ github.event.pull_request.base.sha }}"
           else
-            semgrep scan --error --metrics=off $RULESETS
+            $SEMGREP scan --error --metrics=off $RULESETS
           fi
 
   # Dependency license compliance (#579): flag copyleft (GPL/AGPL) dependencies
@@ -347,7 +443,7 @@ jobs:
   # lives in the justfile's `license` recipe (or deny.toml for Rust).
   license-scan:
     name: Dependency license scan
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.CI_RUNS_ON || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
@@ -362,7 +458,76 @@ jobs:
       - name: License scan (pip-licenses)
         run: just license
 
+  # Property-based testing / fuzzing (#580, #727). `just fuzz` exists in every
+  # language, so it runs in CI in every language — previously only Go had a job,
+  # and the other three shipped a recipe nothing ever invoked: dead surface that
+  # reads as covered.
+  #
+  # WHY NIGHTLY, NOT PER-PR (#727). Fuzzing is a pattern for surfacing edge
+  # cases, not a uniform gate like ruff or coverage. Per-PR it would tax every
+  # push for near-zero value on a fresh scaffold. Nightly is also where it earns
+  # its keep: Hypothesis, proptest and fast-check draw FRESH random seeds each
+  # run, so a nightly job explores inputs a per-PR run would only repeat. (Go's
+  # `go test -run=Fuzz` is a deterministic seed-corpus replay, so it gains
+  # nothing from repetition — but uniformity across the four languages is worth
+  # more than one job placed differently.) This is the same rollout mutation
+  # testing already uses: schedule-gated, non-blocking, promote when you have a
+  # baseline worth gating on.
+  #
+  # Non-blocking: NOT in ci-gate's `needs`. To gate on it, add a `-fuzztime`
+  # active-fuzzing step and promote it there deliberately.
+  #
+  # Only one language renders per scaffold, so exactly one `fuzz` job exists.
+  #
+  # COST, STATED HONESTLY (PR #736 review). A cron entry triggers the WHOLE
+  # workflow, not just the jobs gated on it. The nightly cron therefore also runs
+  # every ungated job — `lint-and-test`, `secret-scan`, `semgrep`, `license-scan`
+  # — plus `ci-gate`. Python scaffolds have behaved this way since the nightly
+  # mutmut cron landed (#563); #727 extends the same nightly run to node/go/rust.
+  # To make cron runs execute ONLY the schedule-gated jobs, add
+  # `if: github.event_name != 'schedule'` to each ungated job AND to `ci-gate`
+  # — `ci-gate` is `if: always()` and treats a skipped `needs` job as a failure,
+  # so gating the others without gating it turns every nightly run red.
+  #
+  # The `if:` matches the NIGHTLY cron specifically. `github.event_name ==
+  # 'schedule'` alone fires on every cron in `on.schedule`, which would make
+  # this job weekly-and-nightly and (worse) couple unrelated jobs' cadences.
+  fuzz:
+    name: Fuzz / property tests
+    runs-on: ${{ vars.CI_RUNS_ON || 'ubuntu-24.04' }}
+    # Nightly cron only — not the weekly Scorecard one (see `on.schedule`).
+    if: github.event_name == 'schedule' && github.event.schedule == '0 3 * * *'
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
+      - name: Install just
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+
+      # A fresh scaffold ships no manifest. Skip rather than fail: a nightly run
+      # that is red from day one is a notification people learn to ignore. Only
+      # one language renders per scaffold, so testing all four names needs no
+      # per-language variable.
+      - name: Check for a project manifest
+        id: manifest
+        run: |
+          if [ -f pyproject.toml ] || [ -f package.json ] || [ -f go.mod ] || [ -f Cargo.toml ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "No project manifest yet — nothing to fuzz."
+          fi
+
+      - name: Install uv
+        if: steps.manifest.outputs.exists == 'true'
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.7"
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
+
+      - name: Run property/fuzz tests
+        if: steps.manifest.outputs.exists == 'true'
+        run: just fuzz
 
   # OpenSSF Scorecard (#576): standardized security-posture scoring (branch
   # protection, dependency pinning, SAST presence, token permissions, ...).
@@ -377,8 +542,9 @@ jobs:
   # granted so the OIDC upload to the public dashboard works).
   scorecard:
     name: OpenSSF Scorecard
-    runs-on: ubuntu-24.04
-    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04  # pinned: OSSF scorecard-action requires GitHub-hosted runners
+    # Weekly cron only — not the nightly one (see `on.schedule`).
+    if: github.event_name == 'schedule' && github.event.schedule == '0 4 * * 1'
     permissions:
       security-events: write   # upload the SARIF result to code scanning
       id-token: write          # only needed if publish_results is turned on
@@ -420,7 +586,7 @@ jobs:
   # failing gate actually blocks the merge.
   ci-gate:
     name: CI gate
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.CI_RUNS_ON || 'ubuntu-24.04' }}  # must follow the variable: it is the REQUIRED check — pinned, it can't start during a billing lockout and blocks the merge
     needs: [lint-and-test, secret-scan]
     if: always()
     steps:

@@ -57,8 +57,9 @@ def test_load_missing_log_is_empty(tmp_path: Path) -> None:
 
 def test_load_skips_malformed_lines(tmp_path: Path) -> None:
     path = tmp_path / "history.jsonl"
-    path.write_text('{"broken\n{"project":"a","task":"t","status":"pass","checked_at":"x"}\n',
-                    encoding="utf-8")
+    path.write_text(
+        '{"broken\n{"project":"a","task":"t","status":"pass","checked_at":"x"}\n', encoding="utf-8"
+    )
     assert [e.status for e in load_history(path)] == ["pass"]
 
 
@@ -89,7 +90,11 @@ def test_transitions_only_reports_status_changes() -> None:
 
 
 def test_primary_trend_prefers_test_gate() -> None:
-    entries = [_entry("pass", task="lint"), _entry("fail", task="test"), _entry("pass", task="test")]
+    entries = [
+        _entry("pass", task="lint"),
+        _entry("fail", task="test"),
+        _entry("pass", task="test"),
+    ]
     assert primary_trend(entries, "alpha") == "x+"
 
 

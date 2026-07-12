@@ -182,9 +182,7 @@ def _project_checks(
     if head and clean_worktree_head(descriptor) != head:
         fresh_results = [replace(result, head="") for result in fresh_results]
     fresh = dict(zip(to_run, fresh_results, strict=True))
-    return [
-        (reusable[task], True) if task in reusable else (fresh[task], False) for task in tasks
-    ]
+    return [(reusable[task], True) if task in reusable else (fresh[task], False) for task in tasks]
 
 
 def _cmd_checks(args: argparse.Namespace) -> int:
@@ -473,8 +471,7 @@ def _cmd_events(args: argparse.Namespace) -> int:
             command = f" — {event.command}" if event.command else ""
             session = f" ({event.session})" if event.session else ""
             print(
-                f"{event.project} {event.timestamp} [{event.hook}]"
-                f" {event.action}{session}{command}"
+                f"{event.project} {event.timestamp} [{event.hook}] {event.action}{session}{command}"
             )
     if empty:
         print("no events recorded")
@@ -829,9 +826,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.choices["ci"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["cloud-status"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["events"].add_argument("project", nargs="?", help="limit to one project")
-    sub.choices["events"].add_argument(
-        "--since", help="only events at/after this ISO-8601 instant"
-    )
+    sub.choices["events"].add_argument("--since", help="only events at/after this ISO-8601 instant")
     sub.choices["history"].add_argument("project", help="project to show history for")
     sub.choices["history"].add_argument(
         "-n", "--width", type=int, default=HISTORY_TREND_WIDTH, help="trend width (default 10)"
