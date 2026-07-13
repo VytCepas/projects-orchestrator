@@ -27,7 +27,7 @@ from projects_orchestrator.adapters.project_init import (
     trigger_upgrade,
 )
 from projects_orchestrator.adapters.status_url import probe_status_url, status_check_results
-from projects_orchestrator.audit import audit_project, render_markdown
+from projects_orchestrator.audit import AuditReport, audit_project, render_markdown
 from projects_orchestrator.capabilities import (
     HOOK,
     MCP,
@@ -60,6 +60,7 @@ from projects_orchestrator.memory import load_memory, retrieval_mode, search_mem
 from projects_orchestrator.notify import (
     alerts_payload,
     fleet_alerts,
+    post_payload,
     post_webhook,
     render_alerts,
 )
@@ -316,8 +317,27 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     return 1 if any(r.status == "fail" for r in reports) else 0
 
 
+def _emit_digest(args: argparse.Namespace, reports: list[AuditReport]) -> int:
+    """Diff this audit against the last run, optionally push it, and report the delta."""
+    digest = compute_digest(reports, load_prior())
+    save_current(reports)
+    payload = digest_payload(digest)
+    # Only a *change* is worth pushing: a daily timer that posted "no change"
+    # every morning would train the reader to ignore the channel.
+    if args.webhook and digest.changed:
+        ok = post_payload(args.webhook, payload)
+        print(f"webhook: {'delivered' if ok else 'delivery failed'}", file=sys.stderr)
+    if args.json:
+        return _emit_json(payload)
+    print(render_digest(digest))
+    return 1 if digest.new else 0
+
+
 def _cmd_audit(args: argparse.Namespace) -> int:
     """Run the composed governance audit; exit 1 when anything needs attention."""
+    if args.webhook and not args.digest:
+        print("--webhook requires --digest (only a delta is worth pushing)", file=sys.stderr)
+        return 2
     fleet = _discover(args)
     selected = list(fleet.descriptors)
     if args.project:
@@ -329,12 +349,7 @@ def _cmd_audit(args: argparse.Namespace) -> int:
     cached = cache.load_results()
     reports = [audit_project(d, cached.get(d.name)) for d in selected]
     if args.digest:
-        digest = compute_digest(reports, load_prior())
-        save_current(reports)
-        if args.json:
-            return _emit_json(digest_payload(digest))
-        print(render_digest(digest))
-        return 1 if digest.new else 0
+        return _emit_digest(args, reports)
     if args.json:
         return _emit_json([asdict(r) for r in reports])
     if args.markdown:
@@ -837,6 +852,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--digest",
         action="store_true",
         help="show only what changed since the last audit run (exit 1 on new issues)",
+    )
+    sub.choices["audit"].add_argument(
+        "--webhook",
+        help="POST the digest delta as JSON to this URL (Slack-compatible); requires --digest",
     )
     sub.choices["ci"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["cloud-status"].add_argument("project", nargs="?", help="limit to one project")

@@ -70,6 +70,14 @@ test-mutation:
 audit:
     sh -c 'if [ -f pyproject.toml ] || [ -f requirements.txt ] || [ -f uv.lock ]; then uv run --with pip-audit pip-audit; else echo "No Python dependency manifest yet — nothing to audit."; fi'
 
+# What changed in the FLEET since the last digest run (#98) — not a dependency
+# scan; that's `just audit` above. Set PO_DIGEST_WEBHOOK to also push the delta
+# to Slack. This is what the systemd timer in contrib/systemd/ runs on a
+# cadence; see docs/how-to/scheduled-audit-digest.md.
+[doc("fleet audit digest: what changed since the last run (#98)")]
+digest:
+    sh -c 'uv run projects-orchestrator audit --digest ${PO_DIGEST_WEBHOOK:+--webhook "$PO_DIGEST_WEBHOOK"}'
+
 # generate a CycloneDX SBOM of the runtime dependency tree (#574). release.yml
 # attaches this to GitHub Releases; run locally on demand. --no-dev so it
 # reflects what ships; uvx keeps cyclonedx-py out of the scanned .venv.

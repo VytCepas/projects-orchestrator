@@ -1,0 +1,17 @@
+[Unit]
+Description=Run the projects-orchestrator audit digest on a daily cadence
+Documentation=https://github.com/VytCepas/projects-orchestrator/blob/main/docs/how-to/scheduled-audit-digest.md
+
+[Timer]
+OnCalendar=daily
+
+# The usual host for a local fleet is a laptop that is asleep at 00:00.
+# Persistent=true runs the digest on the next boot when a firing was missed,
+# so a closed lid means a late digest rather than a lost one.
+Persistent=true
+
+# Don't stampede with every other daily timer at midnight.
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
