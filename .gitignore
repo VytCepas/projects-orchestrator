@@ -1,12 +1,19 @@
 # project-init runtime artifacts
 # NB: do NOT ignore .codex/ wholesale — the codex overlay commits
 # .codex/hooks.json and .codex/config.toml as project config (2026-07 review).
+.agents/scheduled_tasks.lock
+.agents/.session_setup_stamp
+.agents/settings.local.json
+# Claude Code writes runtime state into the generated .claude/ mirror it
+# actually reads — never commit it (#668)
 .claude/scheduled_tasks.lock
-.claude/.session_setup_stamp
 .claude/settings.local.json
-.claude/memory/.cache/
-.claude/logs/
-.claude/.local/
+.agents/memory/.cache/
+.agents/logs/
+.agents/.local/
+# Session handoff files (checkpoint skill, PI-663) — contain session state,
+# must never be committable by accident
+.agents/tmp/
 
 # Python
 __pycache__/
@@ -15,10 +22,23 @@ __pycache__/
 .venv/
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
+.dmypy.json
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.ipynb_checkpoints/
+
+# Docs preview build output (mkdocs)
+site/
 
 # OS / editor
 .DS_Store
 *.swp
+*.swo
+*.log
 # .vscode is personal, except a generated MCP config meant to be shared (PI-366).
 .vscode/*
 !.vscode/mcp.json

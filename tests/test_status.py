@@ -66,8 +66,20 @@ def test_collect_status_ahead_of_upstream(fleet_dir: Path) -> None:
         ["git", "clone", "-q", str(project), str(clone)], check=True, capture_output=True
     )
     subprocess.run(
-        ["git", "-C", str(clone), "-c", "user.email=t@e.c", "-c", "user.name=T",
-         "commit", "-q", "--allow-empty", "-m", "ahead"],
+        [
+            "git",
+            "-C",
+            str(clone),
+            "-c",
+            "user.email=t@e.c",
+            "-c",
+            "user.name=T",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "ahead",
+        ],
         check=True,
         capture_output=True,
     )

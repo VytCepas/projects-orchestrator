@@ -154,10 +154,7 @@ def test_observability_path_escaping_project_root_is_ignored(tmp_path: Path) -> 
 
 
 def test_v1_config_ignores_v2_fields(tmp_path: Path) -> None:
-    text = (
-        "project:\n  name: alpha\n  project_init_contract_version: 1\n"
-        "deploy:\n  target: fly\n"
-    )
+    text = "project:\n  name: alpha\n  project_init_contract_version: 1\ndeploy:\n  target: fly\n"
     assert parse_config(text, tmp_path).deploy is None
 
 
@@ -175,10 +172,7 @@ def test_v2_config_without_deploy_block_is_none(tmp_path: Path) -> None:
 
 
 def test_v2_deploy_defaults_to_none_target(tmp_path: Path) -> None:
-    text = (
-        "project:\n  name: alpha\n  project_init_contract_version: 2\n"
-        "deploy:\n  app: svc\n"
-    )
+    text = "project:\n  name: alpha\n  project_init_contract_version: 2\ndeploy:\n  app: svc\n"
     assert parse_config(text, tmp_path).deploy.target == "none"
 
 
@@ -210,22 +204,30 @@ def test_tier0_config_ignores_vault_path(tmp_path: Path) -> None:
 
 
 def test_tier2_config_exposes_graph_path(tmp_path: Path) -> None:
-    descriptor = parse_config(_memory_config(2, "  graph_path: graphify-out/graph.json\n"), tmp_path)
+    descriptor = parse_config(
+        _memory_config(2, "  graph_path: graphify-out/graph.json\n"), tmp_path
+    )
     assert descriptor.graph_path == tmp_path.resolve() / "graphify-out/graph.json"
 
 
 def test_tier1_config_ignores_graph_path(tmp_path: Path) -> None:
-    descriptor = parse_config(_memory_config(1, "  graph_path: graphify-out/graph.json\n"), tmp_path)
+    descriptor = parse_config(
+        _memory_config(1, "  graph_path: graphify-out/graph.json\n"), tmp_path
+    )
     assert descriptor.graph_path is None
 
 
 def test_tier3_config_exposes_rag_endpoint(tmp_path: Path) -> None:
-    descriptor = parse_config(_memory_config(3, "  rag_endpoint: http://127.0.0.1:8099\n"), tmp_path)
+    descriptor = parse_config(
+        _memory_config(3, "  rag_endpoint: http://127.0.0.1:8099\n"), tmp_path
+    )
     assert descriptor.rag_endpoint == "http://127.0.0.1:8099"
 
 
 def test_tier2_config_ignores_rag_endpoint(tmp_path: Path) -> None:
-    descriptor = parse_config(_memory_config(2, "  rag_endpoint: http://127.0.0.1:8099\n"), tmp_path)
+    descriptor = parse_config(
+        _memory_config(2, "  rag_endpoint: http://127.0.0.1:8099\n"), tmp_path
+    )
     assert descriptor.rag_endpoint == ""
 
 

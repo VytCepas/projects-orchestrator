@@ -18,7 +18,7 @@ Install the repo git hooks once per clone — they enforce commit-message
 format, secret scanning, and branch naming locally:
 
 ```bash
-.claude/scripts/install_hooks.sh
+.agents/scripts/install_hooks.sh
 ```
 
 ## Commands
@@ -36,17 +36,17 @@ locally, CI agrees.
 | No-issue PR | `type: description` | `chore: bump dev dependency` |
 | PR body | must include `Closes #N` (skip for no-issue PRs) | |
 
-`KEY` is the project issue key set in `.claude/config.yaml`
+`KEY` is the project issue key set in `.agents/config.yaml`
 (`project_key`). Types: `feat` `fix` `chore` `docs` `test`. Work starts
-from an issue — use `.claude/scripts/create_issue.sh` (or the
+from an issue — use `.agents/scripts/create_issue.sh` (or the
 `start_task` skill in Claude Code) so metadata lands on the project board.
 
 ## Review flow
 
-1. Open a draft PR early; push with `.claude/scripts/push_branch.sh`.
+1. Open a draft PR early; push with `.agents/scripts/push_branch.sh`.
 2. Mark ready when CI is green. Respond to every review comment —
    including bot reviews — either by fixing or by explaining why not.
-3. Merges go through `.claude/scripts/monitor_pr.sh <n> --merge` so CI
+3. Merges go through `.agents/scripts/monitor_pr.sh <n> --merge` so CI
    and review gates are honored.
 
 ## Security

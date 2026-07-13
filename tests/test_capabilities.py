@@ -16,9 +16,7 @@ from projects_orchestrator.capabilities import (
 )
 from projects_orchestrator.descriptor import load_descriptor
 
-_REAL_FIXTURE = (
-    Path(__file__).parent / "fixtures" / "project_init" / "capabilities.v1.md"
-)
+_REAL_FIXTURE = Path(__file__).parent / "fixtures" / "project_init" / "capabilities.v1.md"
 
 
 def _load(project: Path):

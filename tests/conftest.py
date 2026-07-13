@@ -184,7 +184,9 @@ def make_memory_project(
     )
 
 
-def add_graph(project: Path, nodes: list[dict[str, str]], relpath: str = "graphify-out/graph.json") -> Path:
+def add_graph(
+    project: Path, nodes: list[dict[str, str]], relpath: str = "graphify-out/graph.json"
+) -> Path:
     """Write a graphify-shaped ``graph.json`` with the given nodes.
 
     Args:

@@ -66,9 +66,13 @@ def snapshot_alerts(snapshot: ProjectSnapshot) -> list[Alert]:
     if check_failed("lint"):
         alerts.append(Alert(name, WARNING, "lint", "lint is failing"))
     if snapshot.drift.status == "drift":
-        alerts.append(Alert(name, WARNING, "drift", f"{snapshot.drift.summary} diverged from scaffold"))
+        alerts.append(
+            Alert(name, WARNING, "drift", f"{snapshot.drift.summary} diverged from scaffold")
+        )
     if snapshot.hooks in ("missing", "partial"):
-        alerts.append(Alert(name, WARNING, "hooks", f"git hooks {snapshot.hooks} — enforcement inactive"))
+        alerts.append(
+            Alert(name, WARNING, "hooks", f"git hooks {snapshot.hooks} — enforcement inactive")
+        )
     return alerts
 
 

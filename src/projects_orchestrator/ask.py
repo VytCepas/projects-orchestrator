@@ -88,7 +88,7 @@ def build_prompt(question: str, project_names: tuple[str, ...]) -> str:
         f"Allowed verbs: {verbs}. Known projects: {projects}.\n"
         'Verb notes: "check" runs gates (args = task names, e.g. ["lint","test"]); '
         '"run" runs one declared task (args = [task]); "memory" searches memories '
-        '(args = [query]). Omit target/args when not applicable.\n'
+        "(args = [query]). Omit target/args when not applicable.\n"
         f"Request: {question}"
     )
 

@@ -38,14 +38,18 @@ def test_snapshot_alerts_flags_failing_tests_as_critical(fleet_dir: Path) -> Non
 
 def test_snapshot_alerts_flags_red_ci_as_critical(fleet_dir: Path) -> None:
     make_project(fleet_dir, "alpha")
-    assert any(a.category == "ci" and a.level == CRITICAL for a in
-               snapshot_alerts(_snapshot(fleet_dir, _cached("ci", "fail"))))
+    assert any(
+        a.category == "ci" and a.level == CRITICAL
+        for a in snapshot_alerts(_snapshot(fleet_dir, _cached("ci", "fail")))
+    )
 
 
 def test_snapshot_alerts_flags_failing_lint_as_warning(fleet_dir: Path) -> None:
     make_project(fleet_dir, "alpha")
-    assert any(a.category == "lint" and a.level == WARNING for a in
-               snapshot_alerts(_snapshot(fleet_dir, _cached("lint", "fail"))))
+    assert any(
+        a.category == "lint" and a.level == WARNING
+        for a in snapshot_alerts(_snapshot(fleet_dir, _cached("lint", "fail")))
+    )
 
 
 def test_snapshot_alerts_clean_project_has_no_alerts(fleet_dir: Path) -> None:
@@ -92,7 +96,10 @@ def test_post_webhook_delivers_and_reports_success() -> None:
 
 
 def test_post_webhook_non_2xx_is_failure() -> None:
-    assert post_webhook("http://hook", [Alert("a", CRITICAL, "ci", "red")], send=lambda _u, _b: 500) is False
+    assert (
+        post_webhook("http://hook", [Alert("a", CRITICAL, "ci", "red")], send=lambda _u, _b: 500)
+        is False
+    )
 
 
 def test_post_webhook_never_raises_on_send_error() -> None:

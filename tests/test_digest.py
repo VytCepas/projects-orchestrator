@@ -37,7 +37,9 @@ def test_unchanged_run_reports_no_delta() -> None:
 
 def test_new_finding_appears_in_new() -> None:
     prior = [_warn("old issue", category="hooks")]
-    current = [_report(_warn("old issue", category="hooks"), _warn("fresh issue", category="drift"))]
+    current = [
+        _report(_warn("old issue", category="hooks"), _warn("fresh issue", category="drift"))
+    ]
     digest = compute_digest(current, prior)
     assert [f.message for f in digest.new] == ["fresh issue"]
 

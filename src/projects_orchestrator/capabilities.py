@@ -164,8 +164,7 @@ def parse_capabilities(text: str, project: str, path: Path) -> ProjectCapabiliti
         if kind is None:
             continue
         by_kind[kind].extend(
-            Capability(kind=kind, name=name, detail=detail)
-            for name, detail in _parse_table(body)
+            Capability(kind=kind, name=name, detail=detail) for name, detail in _parse_table(body)
         )
     return ProjectCapabilities(
         project=project,

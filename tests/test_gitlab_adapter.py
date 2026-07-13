@@ -76,7 +76,9 @@ def test_as_check_results_maps_mr_count_to_prs_task() -> None:
 
 
 def test_as_check_results_marks_unknown_mr_count() -> None:
-    results = as_check_results(GitlabStatus("alpha", ci="pass", open_mrs=None), "2026-07-05T00:00:00")
+    results = as_check_results(
+        GitlabStatus("alpha", ci="pass", open_mrs=None), "2026-07-05T00:00:00"
+    )
     prs = next(r for r in results if r.task == "prs")
     assert prs.status == "unknown"
 

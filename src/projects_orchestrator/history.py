@@ -69,7 +69,9 @@ def record(results: list[CheckResult], path: Path | None = None) -> None:
     kept.extend(HistoryEntry(r.project, r.task, r.status, r.checked_at) for r in fresh)
     kept = kept[-MAX_ENTRIES:]
     body = "\n".join(
-        json.dumps({"project": e.project, "task": e.task, "status": e.status, "checked_at": e.checked_at})
+        json.dumps(
+            {"project": e.project, "task": e.task, "status": e.status, "checked_at": e.checked_at}
+        )
         for e in kept
     )
     _atomic_write(path, body + "\n")
@@ -126,7 +128,9 @@ def sparkline(entries: list[HistoryEntry], width: int = DEFAULT_TREND_WIDTH) -> 
 _PRIMARY_TASKS = ("test", "lint")
 
 
-def primary_trend(entries: list[HistoryEntry], project: str, width: int = DEFAULT_TREND_WIDTH) -> str:
+def primary_trend(
+    entries: list[HistoryEntry], project: str, width: int = DEFAULT_TREND_WIDTH
+) -> str:
     """The sparkline for a project's primary gate; ``""`` when it has no history.
 
     Prefers ``test`` then ``lint``, else the first recorded task — one compact

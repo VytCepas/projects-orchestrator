@@ -141,7 +141,10 @@ def test_memory_search_reads_graph_surface(fleet_dir: Path, capsys) -> None:
 
 def test_memory_notes_unqueried_rag_endpoint(fleet_dir: Path, capsys) -> None:
     make_memory_project(
-        fleet_dir, "alpha", tier=3, graph_path="graphify-out/graph.json",
+        fleet_dir,
+        "alpha",
+        tier=3,
+        graph_path="graphify-out/graph.json",
         rag_endpoint="http://127.0.0.1:8099",
     )
     main(["memory", "anything", "--root", str(fleet_dir)])
@@ -178,7 +181,9 @@ def test_register_invalid_result_exits_one(tmp_path: Path) -> None:
 
 
 def test_register_missing_file_exits_two(tmp_path: Path) -> None:
-    assert main(["register", str(tmp_path / "absent.json"), "--fleet", str(tmp_path / "f.yaml")]) == 2
+    assert (
+        main(["register", str(tmp_path / "absent.json"), "--fleet", str(tmp_path / "f.yaml")]) == 2
+    )
 
 
 def test_drift_no_manifest_exits_zero(fleet_dir: Path) -> None:
@@ -252,7 +257,9 @@ def test_audit_digest_first_run_exits_one_then_zero(fleet_dir: Path, tmp_path, m
     assert main(["audit", "--root", str(fleet_dir), "--digest"]) == 0
 
 
-def test_audit_digest_reports_no_change_on_second_run(fleet_dir: Path, tmp_path, monkeypatch, capsys) -> None:
+def test_audit_digest_reports_no_change_on_second_run(
+    fleet_dir: Path, tmp_path, monkeypatch, capsys
+) -> None:
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     make_project(fleet_dir, "alpha")
     main(["audit", "--root", str(fleet_dir), "--digest"])

@@ -91,9 +91,7 @@ def _check_contract(descriptor: ProjectDescriptor) -> Finding:
     """A contract version is declared and understood."""
     version = descriptor.contract_version
     if version < CONTRACT_VERSION:
-        return Finding(
-            "contract", FAIL, "no project_init_contract_version — predates the contract"
-        )
+        return Finding("contract", FAIL, "no project_init_contract_version — predates the contract")
     if version > CONTRACT_VERSION_MAX:
         # A newer child may use surfaces this orchestrator misreads — flag it
         # rather than silently claiming full conformance.

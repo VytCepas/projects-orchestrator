@@ -205,7 +205,9 @@ def _extract_observability_path(
         return None
     contained = _contained_path(project_dir, declared.strip())
     if contained is None:
-        warnings.append(f"observability.path '{declared.strip()}' escapes the project root — ignored")
+        warnings.append(
+            f"observability.path '{declared.strip()}' escapes the project root — ignored"
+        )
     return contained
 
 
@@ -295,7 +297,9 @@ def parse_config(text: str, project_dir: Path, config_root: str = ".claude") -> 
     memory_rel = str(memory.get("memory_path") or memory_default)
     memory_path = _contained_path(project_dir, memory_rel)
     if memory_path is None:
-        warnings.append(f"memory_path '{memory_rel}' escapes the project root — using {memory_default}")
+        warnings.append(
+            f"memory_path '{memory_rel}' escapes the project root — using {memory_default}"
+        )
         memory_path = project_dir / memory_default
     contract_version = _as_int(project.get("project_init_contract_version"))
     is_v2 = contract_version >= CONTRACT_V2

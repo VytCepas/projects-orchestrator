@@ -5,7 +5,7 @@
 #      the same rule as dag_workflow.py's _BRANCH_RE. Full issue-key
 #      validation (<type>/<KEY>-<n>-<slug>) runs in CI via validate-pr.yml,
 #      where the linked issue can actually be checked.
-# Install: .claude/scripts/install_hooks.sh
+# Install: .agents/scripts/install_hooks.sh
 
 set -e
 
@@ -32,10 +32,10 @@ while read -r _ local_sha remote_ref _; do
     echo ""
     echo "To contribute:"
     echo "  1. Create a new branch with the project key: git checkout -b <issue_type>/<project_abbr>-<issue_number>-<slug>"
-    echo "  2. Make your changes and push: .claude/scripts/push_branch.sh"
+    echo "  2. Make your changes and push: .agents/scripts/push_branch.sh"
     echo "  3. Open a PR on GitHub"
     echo ""
-    echo "For more details, see .claude/project-init.md"
+    echo "For more details, see .agents/project-init.md"
     exit 1
   fi
 
@@ -47,36 +47,40 @@ while read -r _ local_sha remote_ref _; do
     echo "  Issue-linked:  feat/PI-42-add-oauth-login"
     echo "  No issue:      chore/nojira-bump-dev-dependency"
     echo ""
-    echo "Use .claude/scripts/start_issue.sh or create_nojira_pr.sh to create branches."
+    echo "Use .agents/scripts/start_issue.sh or create_nojira_pr.sh to create branches."
     exit 1
   fi
 done
 
-# Full CI gate before the push leaves the machine: run the SAME `just ci`
-# (lint + full test suite) that CI runs, so nothing red reaches a PR and the
-# push→CI-fail→fix→re-push loop is caught locally instead. Only fires for a
-# real branch push (not tag/delete). Fail-CLOSED when `just`/the recipe are
-# present (block the push, bypassable with `git push --no-verify`); fail-open
-# when the toolchain is absent — CI stays the hard backstop.
+# Fast local gate before the push leaves the machine: run `just fast-ci`
+# (lint + parallel tests) — deliberately lighter than the full `just ci` so the
+# push stays fast. CI re-runs the full gate (typecheck/coverage/audit + more),
+# so this catches the common break (a failing test or lint error) without
+# duplicating the whole suite on every push. Only fires for a real branch push
+# (not tag/delete). Fail-CLOSED when `just`/the recipe are present (block the
+# push, bypassable with `git push --no-verify`); fail-open when `just` or the
+# `fast-ci` recipe is absent — CI stays the hard backstop. (If `just` and the
+# recipe are present but a language tool is missing, the recipe itself decides:
+# the day-one guards skip cleanly, a genuinely missing linter fails closed.)
 if [[ "$PUSHING_BRANCH" == "1" ]]; then
-  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || (cd "$(dirname "$0")/../.." && pwd))"
   if command -v just >/dev/null 2>&1 && [ -f "$REPO_ROOT/justfile" ] &&
-    (cd "$REPO_ROOT" && just --show ci >/dev/null 2>&1); then
-    # `just ci` runs against the working tree, but the push ships the committed
-    # tree. If the worktree is dirty (uncommitted changes or untracked files),
-    # testing it would give a false result either way — a WIP fix could hide a
-    # failure in the pushed commit, or unrelated WIP could fail a clean push.
-    # So skip the gate (fail-open) with a clear nudge instead of testing a tree
-    # that isn't what's being pushed; CI stays the backstop.
+    (cd "$REPO_ROOT" && just --show fast-ci >/dev/null 2>&1); then
+    # `just fast-ci` runs against the working tree, but the push ships the
+    # committed tree. If the worktree is dirty (uncommitted changes or untracked
+    # files), testing it would give a false result either way — a WIP fix could
+    # hide a failure in the pushed commit, or unrelated WIP could fail a clean
+    # push. So skip the gate (fail-open) with a clear nudge instead of testing a
+    # tree that isn't what's being pushed; CI stays the backstop.
     if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
-      echo "pre-push: working tree is dirty — skipping the 'just ci' gate" >&2
+      echo "pre-push: working tree is dirty — skipping the 'just fast-ci' gate" >&2
       echo "  (it would test the worktree, not the commit being pushed)." >&2
       echo "  Commit or stash your changes to run the gate before pushing." >&2
     else
-      echo "pre-push: running 'just ci' (lint + tests) before push…"
-      if ! (cd "$REPO_ROOT" && just ci); then
+      echo "pre-push: running 'just fast-ci' (lint + tests) before push…"
+      if ! (cd "$REPO_ROOT" && just fast-ci); then
         echo ""
-        echo "❌ pre-push: 'just ci' failed — fix the errors above before pushing."
+        echo "❌ pre-push: 'just fast-ci' failed — fix the errors above before pushing."
         echo "   (bypass in an emergency with: git push --no-verify)"
         exit 1
       fi

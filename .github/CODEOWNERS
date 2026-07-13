@@ -9,4 +9,4 @@
 # /src/             @your-org/backend
 # /docs/            @your-org/docs
 # /.github/         @your-org/platform
-# /.claude/         @your-org/platform
+# /.agents/         @your-org/platform
