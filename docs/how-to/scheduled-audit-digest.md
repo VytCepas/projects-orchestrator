@@ -49,6 +49,10 @@ chmod 600 ~/.config/projects-orchestrator/digest.env
 
 Skip that step to run with no sink — the digest still lands in the journal.
 
+The unit audits `~/projects` by default. If your fleet lives elsewhere, add
+`PO_FLEET_ROOT=/path/to/your/projects` to that same file. Nothing else needs
+editing — the unit does not care where the orchestrator itself is checked out.
+
 ```bash
 mkdir -p ~/.config/systemd/user
 cp contrib/systemd/projects-orchestrator-digest.* ~/.config/systemd/user/
@@ -64,20 +68,24 @@ systemctl --user start projects-orchestrator-digest.service       # run it now
 journalctl --user -u projects-orchestrator-digest.service -n 20   # what it said
 ```
 
-The unit assumes the orchestrator is at `~/projects/projects_orchestrator` and
-the console script at `~/.local/bin/projects-orchestrator`. Edit
-`WorkingDirectory` / `ExecStart` if yours live elsewhere.
+The unit expects the console script at `~/.local/bin/projects-orchestrator` (a
+`uv tool install` / `pip install --user` puts it there). Adjust `ExecStart` if
+yours lives elsewhere.
 
 ### cron instead
 
 ```cron
+PO_FLEET_ROOT=/home/you/projects
+PO_DIGEST_WEBHOOK=https://hooks.slack.com/services/...
+
 # Daily at 09:00. `audit --digest` exits 1 on new findings — that is a working
 # run with something to say, so don't let cron treat it as an error.
-0 9 * * * cd "$HOME/projects/projects_orchestrator" && "$HOME/.local/bin/projects-orchestrator" audit --digest --webhook "$PO_DIGEST_WEBHOOK" || true
+0 9 * * * "$HOME/.local/bin/projects-orchestrator" audit --digest --root "$PO_FLEET_ROOT" --webhook "$PO_DIGEST_WEBHOOK" || true
 ```
 
-cron runs with a near-empty environment, so set `PO_DIGEST_WEBHOOK=...` at the
-top of the crontab, and use absolute paths.
+cron runs with a near-empty environment, so set the variables at the top of the
+crontab and use absolute paths. Pass `--root` explicitly rather than relying on
+a working directory — the fleet root is what the digest actually needs.
 
 ## Why this runs on your machine, not in GitHub Actions
 

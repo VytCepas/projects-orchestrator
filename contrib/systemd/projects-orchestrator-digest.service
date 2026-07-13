@@ -12,17 +12,23 @@ Type=oneshot
 # lives under $XDG_STATE_HOME — both belong to the human's account, not to
 # root and not to a CI runner. See the how-to guide for why this cannot be a
 # GitHub-hosted cron.
-WorkingDirectory=%h/projects/projects_orchestrator
+#
+# Deliberately NOT the orchestrator's own checkout. The clone directory name is
+# not ours to predict — `git clone` produces `projects-orchestrator`, but a given
+# machine may well hold `projects_orchestrator` — and a WorkingDirectory that does
+# not exist makes systemd fail the unit before the digest can run at all. `%h`
+# always exists, and the fleet root is passed explicitly below rather than being
+# inferred from the working directory.
+WorkingDirectory=%h
 
-# Optional Slack/webhook sink. Create the file with mode 600 and put
-#   PO_DIGEST_WEBHOOK=https://hooks.slack.com/services/...
-# in it. A webhook URL is a credential, so it is read from a private file
-# rather than written into this unit (which is committed to the repo).
-# The leading `-` makes the file optional: with no sink, the digest still
-# runs and its output lands in the journal.
+# Optional config. Create the file with mode 600 and put in it:
+#   PO_DIGEST_WEBHOOK=https://hooks.slack.com/services/...   (a credential)
+#   PO_FLEET_ROOT=/path/to/your/projects                     (if not ~/projects)
+# The leading `-` makes the file optional: with no sink and no override, the
+# digest still runs against ~/projects and its output lands in the journal.
 EnvironmentFile=-%h/.config/projects-orchestrator/digest.env
 
-ExecStart=/bin/sh -c 'exec %h/.local/bin/projects-orchestrator audit --digest ${PO_DIGEST_WEBHOOK:+--webhook "$PO_DIGEST_WEBHOOK"}'
+ExecStart=/bin/sh -c 'exec %h/.local/bin/projects-orchestrator audit --digest --root "${PO_FLEET_ROOT:-%h/projects}" ${PO_DIGEST_WEBHOOK:+--webhook "$PO_DIGEST_WEBHOOK"}'
 
 # `audit --digest` exits 1 when it finds NEW issues. That is a run that worked
 # and had something to say — not a failed unit. Without this, systemd would
