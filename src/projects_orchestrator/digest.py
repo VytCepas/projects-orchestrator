@@ -96,8 +96,9 @@ def render_digest(digest: AuditDigest) -> str:
 
 
 def digest_payload(digest: AuditDigest) -> dict[str, object]:
-    """Build the JSON payload for a digest."""
+    """Build the JSON/webhook payload (Slack-compatible ``text`` + details)."""
     return {
+        "text": render_digest(digest),
         "changed": digest.changed,
         "new": [asdict(f) for f in digest.new],
         "resolved": [asdict(f) for f in digest.resolved],

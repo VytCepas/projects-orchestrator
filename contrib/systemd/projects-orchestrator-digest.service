@@ -1,0 +1,30 @@
+[Unit]
+Description=projects-orchestrator audit digest — report what changed in the fleet
+Documentation=https://github.com/VytCepas/projects-orchestrator/blob/main/docs/how-to/scheduled-audit-digest.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+# A *user* unit on purpose. The fleet is discovered on local disk (sibling
+# directories carrying .agents/config.yaml), and the digest's prior-run state
+# lives under $XDG_STATE_HOME — both belong to the human's account, not to
+# root and not to a CI runner. See the how-to guide for why this cannot be a
+# GitHub-hosted cron.
+WorkingDirectory=%h/projects/projects_orchestrator
+
+# Optional Slack/webhook sink. Create the file with mode 600 and put
+#   PO_DIGEST_WEBHOOK=https://hooks.slack.com/services/...
+# in it. A webhook URL is a credential, so it is read from a private file
+# rather than written into this unit (which is committed to the repo).
+# The leading `-` makes the file optional: with no sink, the digest still
+# runs and its output lands in the journal.
+EnvironmentFile=-%h/.config/projects-orchestrator/digest.env
+
+ExecStart=/bin/sh -c 'exec %h/.local/bin/projects-orchestrator audit --digest ${PO_DIGEST_WEBHOOK:+--webhook "$PO_DIGEST_WEBHOOK"}'
+
+# `audit --digest` exits 1 when it finds NEW issues. That is a run that worked
+# and had something to say — not a failed unit. Without this, systemd would
+# mark every eventful digest as failed and stop being a useful signal.
+SuccessExitStatus=1

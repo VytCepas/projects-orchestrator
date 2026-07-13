@@ -16,6 +16,7 @@ from projects_orchestrator.notify import (
     Alert,
     alerts_payload,
     fleet_alerts,
+    post_payload,
     post_webhook,
     render_alerts,
     snapshot_alerts,
@@ -107,3 +108,31 @@ def test_post_webhook_never_raises_on_send_error() -> None:
         raise OSError("network down")
 
     assert post_webhook("http://hook", [Alert("a", CRITICAL, "ci", "red")], send=boom) is False
+
+
+# --- The generic sink: any JSON payload, same never-raising delivery (#98) ---
+# The scheduled audit digest posts a *digest* payload, not alerts, through the
+# same transport. post_webhook is now a thin caller of post_payload.
+
+
+def test_post_payload_delivers_an_arbitrary_payload() -> None:
+    captured: dict[str, object] = {}
+
+    def send(url: str, body: bytes) -> int:
+        captured["url"] = url
+        captured["body"] = json.loads(body)
+        return 200
+
+    assert post_payload("http://hook", {"text": "2 new", "changed": True}, send=send) is True
+    assert captured["body"] == {"text": "2 new", "changed": True}
+
+
+def test_post_payload_non_2xx_is_failure() -> None:
+    assert post_payload("http://hook", {"text": "x"}, send=lambda _u, _b: 500) is False
+
+
+def test_post_payload_never_raises_on_send_error() -> None:
+    def boom(_url: str, _body: bytes) -> int:
+        raise OSError("network down")
+
+    assert post_payload("http://hook", {"text": "x"}, send=boom) is False

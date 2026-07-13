@@ -9,6 +9,7 @@ from projects_orchestrator.digest import (
     AuditDigest,
     compute_digest,
     digest_path,
+    digest_payload,
     load_prior,
     render_digest,
     save_current,
@@ -95,3 +96,23 @@ def test_load_corrupt_state_is_empty(tmp_path: Path) -> None:
 def test_digest_path_honors_xdg_state_home(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     assert digest_path() == tmp_path / "projects-orchestrator" / "audit-digest.json"
+
+
+# --- The webhook payload: a scheduled run posts this to Slack (#98) ---
+# Slack renders the top-level `text` key, so the payload has to carry a
+# human-readable summary alongside the machine-readable delta.
+
+
+def test_digest_payload_carries_a_slack_text_summary() -> None:
+    digest = compute_digest([_report(_warn("2 file(s) diverged from scaffold"))], prior=[])
+    assert digest_payload(digest)["text"] == render_digest(digest)
+
+
+def test_digest_payload_text_says_no_change_when_unchanged() -> None:
+    assert "no change since last run" in str(digest_payload(AuditDigest())["text"])
+
+
+def test_digest_payload_carries_the_machine_readable_delta() -> None:
+    digest = compute_digest([_report(_warn("drifted"))], prior=[])
+    payload = digest_payload(digest)
+    assert payload["new"][0]["message"] == "drifted"  # type: ignore[index]

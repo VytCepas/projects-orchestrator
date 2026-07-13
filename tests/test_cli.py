@@ -268,6 +268,42 @@ def test_audit_digest_reports_no_change_on_second_run(
     assert "no change since last run" in capsys.readouterr().out
 
 
+def test_audit_digest_webhook_posts_the_delta(fleet_dir: Path, monkeypatch) -> None:
+    # The scheduled job's whole point: a changed digest reaches the sink (#98).
+    posted: dict[str, object] = {}
+    monkeypatch.setattr(cli, "post_payload", lambda url, payload: posted.update(url=url, **payload))
+    make_project(fleet_dir, "alpha")
+    main(["audit", "--root", str(fleet_dir), "--digest", "--webhook", "http://hook"])
+    assert posted["url"] == "http://hook"
+    assert posted["changed"] is True
+
+
+def test_audit_digest_webhook_stays_silent_when_nothing_changed(
+    fleet_dir: Path, monkeypatch
+) -> None:
+    # A daily cron must not post "no change" every day — only deltas.
+    calls: list[str] = []
+    monkeypatch.setattr(cli, "post_payload", lambda url, _payload: calls.append(url))
+    make_project(fleet_dir, "alpha")
+    main(["audit", "--root", str(fleet_dir), "--digest", "--webhook", "http://hook"])
+    calls.clear()
+    main(["audit", "--root", str(fleet_dir), "--digest", "--webhook", "http://hook"])
+    assert calls == []
+
+
+def test_audit_digest_survives_a_failing_webhook(fleet_dir: Path, monkeypatch) -> None:
+    # Delivery is best-effort: a dead sink must not break the audit's exit code.
+    monkeypatch.setattr(cli, "post_payload", lambda _url, _payload: False)
+    make_project(fleet_dir, "alpha")
+    assert main(["audit", "--root", str(fleet_dir), "--digest", "--webhook", "http://hook"]) == 1
+
+
+def test_audit_webhook_without_digest_is_rejected(fleet_dir: Path) -> None:
+    # --webhook only means something for a digest; a full report has no delta.
+    make_project(fleet_dir, "alpha")
+    assert main(["audit", "--root", str(fleet_dir), "--webhook", "http://hook"]) == 2
+
+
 def test_ci_offline_exits_zero(fleet_dir: Path) -> None:
     make_project(fleet_dir, "alpha")
     assert main(["ci", "--root", str(fleet_dir)]) == 0
