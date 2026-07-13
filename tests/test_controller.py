@@ -45,6 +45,7 @@ from projects_orchestrator.registry import FleetConfig
         ("logs alpha", "logs"),
         ("deploy alpha", "deploy"),
         ("deploy alpha rollback", "deploy"),
+        ("heal alpha", "heal"),
         ("frobnicate", "unknown"),
     ],
 )
@@ -313,3 +314,18 @@ def test_repl_hint_is_copy_pasteable_for_every_action(fleet_dir: Path) -> None:
         lines = list(dispatch(parse_command(f"deploy alpha {action}"), _ctx(fleet_dir)))
         hint = next(line for line in lines if "--apply" in line)
         assert f"--action {action}" in hint
+
+
+def test_dispatch_heal_requires_project(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")
+    lines = list(dispatch(parse_command("heal"), _ctx(fleet_dir)))
+    assert lines == ["usage: heal <project>"]
+
+
+def test_dispatch_heal_no_cached_failure_is_a_no_op(fleet_dir: Path) -> None:
+    from conftest import git_init
+
+    project = make_project(fleet_dir, "alpha")
+    git_init(project)
+    lines = list(dispatch(parse_command("heal alpha"), _ctx(fleet_dir)))
+    assert lines == ["alpha: no_action — no failing lint/test gate cached"]
