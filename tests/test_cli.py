@@ -588,3 +588,33 @@ def test_cloud_status_caches_for_status_table(fleet_dir: Path, capsys) -> None:
     capsys.readouterr()
     main(["status", "--root", str(fleet_dir)])
     assert "none" in capsys.readouterr().out
+
+
+def test_deploy_apply_json_failure_still_exits_nonzero(
+    fleet_dir: Path, monkeypatch, capsys
+) -> None:
+    # --json must not launder a failure into a success. `_emit_json` returns 0,
+    # so an early `return _emit_json(...)` would hand every JSON consumer the
+    # exact success-that-wasn't the text path guards against:
+    #   deploy alpha --apply --json && notify "rolled back"
+    def failed(command: str, cwd, timeout: float = 0.0):  # noqa: ARG001 — run_command's signature
+        from projects_orchestrator.runner import RunResult
+
+        return RunResult(command=command, returncode=1, stdout="", stderr="gh: boom", duration=0.0)
+
+    monkeypatch.setattr(cloud, "run_command", failed)
+    _deployable(fleet_dir)
+    exit_code = main(["deploy", "alpha", "--apply", "--json", "--root", str(fleet_dir)])
+    assert json.loads(capsys.readouterr().out)["status"] == "failed"
+    assert exit_code == 1
+
+
+def test_deploy_apply_json_that_skips_exits_nonzero(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")  # no deploy target
+    assert main(["deploy", "alpha", "--apply", "--json", "--root", str(fleet_dir)]) == 1
+
+
+def test_deploy_dry_run_json_exits_zero(fleet_dir: Path) -> None:
+    # A dry run asked for nothing, so it cannot have failed to do it.
+    _deployable(fleet_dir)
+    assert main(["deploy", "alpha", "--json", "--root", str(fleet_dir)]) == 0

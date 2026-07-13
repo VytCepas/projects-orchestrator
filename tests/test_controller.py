@@ -295,3 +295,21 @@ def test_dispatch_stop_not_running_is_friendly(fleet_dir: Path, tmp_path, monkey
     make_project(fleet_dir, "alpha")
     lines = list(dispatch(parse_command("stop alpha"), _ctx(fleet_dir)))
     assert lines == ["alpha: not running"]
+
+
+def test_repl_hint_carries_the_planned_action(fleet_dir: Path) -> None:
+    # `--action` defaults to `deploy`. A bare `deploy alpha --apply` copied out
+    # of a ROLLBACK plan would dispatch a DEPLOY — the cockpit handing the
+    # operator the wrong production mutation, in their own words.
+    _deployable(fleet_dir)
+    lines = list(dispatch(parse_command("deploy alpha rollback"), _ctx(fleet_dir)))
+    hint = next(line for line in lines if "--apply" in line)
+    assert "--action rollback" in hint
+
+
+def test_repl_hint_is_copy_pasteable_for_every_action(fleet_dir: Path) -> None:
+    _deployable(fleet_dir)
+    for action in ("deploy", "rollback", "restart"):
+        lines = list(dispatch(parse_command(f"deploy alpha {action}"), _ctx(fleet_dir)))
+        hint = next(line for line in lines if "--apply" in line)
+        assert f"--action {action}" in hint

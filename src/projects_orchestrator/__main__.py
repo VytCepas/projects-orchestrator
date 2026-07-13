@@ -623,7 +623,12 @@ def _cmd_deploy(args: argparse.Namespace) -> int:
         return 2
     result = trigger_deploy(descriptor, args.action, apply=args.apply)
     if args.json:
-        return _emit_json(asdict(result))
+        # NOT `return _emit_json(...)`: _emit_json always returns 0, which would
+        # hand every JSON consumer the exact success-that-wasn't this function
+        # exists to prevent — `deploy --apply --json && notify "rolled back"`
+        # announcing a rollback that never happened. Emit, then exit properly.
+        _emit_json(asdict(result))
+        return _deploy_exit_code(result, apply=args.apply)
     workflow = f" via {result.workflow}" if result.workflow else ""
     detail = f" — {result.detail}" if result.detail else ""
     print(f"{result.project}: {result.action} {result.status}{workflow}{detail}")

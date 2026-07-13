@@ -364,9 +364,14 @@ def _dispatch_deploy(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
     action = intent.args[0] if intent.args else "deploy"
     result = trigger_deploy(selected[0], action, apply=False)
     if result.status == "planned":
+        # The hint MUST carry the action that was just planned. `--action`
+        # defaults to `deploy`, so a bare `deploy alpha --apply` copied out of a
+        # *rollback* plan would dispatch a DEPLOY — the cockpit would have handed
+        # the operator the wrong production mutation, in their own words.
         yield (
             f"{result.project}: {result.action} planned via {result.workflow} "
-            f"— run `deploy {result.project} --apply` on the CLI to dispatch"
+            f"— run `deploy {result.project} --action {result.action} --apply` "
+            f"on the CLI to dispatch"
         )
         return
     yield f"{result.project}: {result.action} {result.status} — {result.detail}"
