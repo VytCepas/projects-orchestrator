@@ -34,7 +34,7 @@ project. Anchors are invariant across tiers; higher tiers only add surfaces.
 | Stack | auto |
 | memory_path | .agents/memory |
 
-## Skills (14)
+## Skills (19)
 
 | Skill | Description |
 |---|---|
@@ -42,8 +42,11 @@ project. Anchors are invariant across tiers; higher tiers only add surfaces.
 | add_command | Creates a new slash command (skill) that users can invoke with /name. Use when asked to add a command, automate a repeatable workflow step, or expose a task as a /name shortcut. |
 | add_hook | Adds a deterministic hook that fires automatically on tool events. Use when asked to enforce a rule on every commit, block a dangerous pattern, validate output, or gate any tool call. |
 | audit | Full project health audit — scans hooks, skills, scripts, rules, CI config, docs, and GitHub workflow for inconsistencies, broken references, and common mistakes. Creates a GitHub issue with findings and optionally starts fixing them. |
+| checkpoint | Checkpoint-and-clear — write a structured session handoff to a gitignored file so the user can /clear and resume from ~500 tokens instead of a re-sent long context |
 | create_issue | Creates a GitHub Issue with typed labels and structured planning metadata via create_issue.sh. Sub-skill invoked by start_task — do not call directly; use /start_task instead. |
+| diagram | Draw and iterate on diagrams with the user — system architecture, code structure, data models, flows, or idea sketches — as version-controlled Mermaid/DOT/Excalidraw source with live previews |
 | github_workflow | Guides the agent through the full GitHub PR lifecycle — branch naming, push, review responses, and merge. Loaded automatically before any push, PR creation, review response, or merge action. |
+| local_ci | Diagnose a GitHub Actions billing/minutes lockout and move CI to a self-hosted runner — the escape hatch when a private repo runs out of free minutes |
 | plan | TDD-style planning — understand requirements, write tests first, then implement with numbered steps |
 | report_upstream_issue | Files a bug/issue in the right place — routes bugs in shared project-init machinery (hooks, CI templates, lifecycle scripts, board automation, rules, skills) upstream to the project-init repo so they are fixed once for every project, and keeps project-specific bugs local. Use whenever the user asks to report, register, or file a bug or issue. |
 | request_review | Marks a draft PR ready for review, moving it Draft → In Review and triggering board automation. Use when a draft PR is finished and ready for reviewers. |
@@ -52,6 +55,8 @@ project. Anchors are invariant across tiers; higher tiers only add surfaces.
 | session_summary | Summarizes the current session and saves it to the vault. Use at the end of a work session to record completed work, decisions made, and open items for the next session. |
 | start_task | Creates a GitHub Issue, branch, and draft PR before implementation begins. Use before any non-trivial task to keep work traceable — one issue, one branch, one PR. |
 | status | Show project status — git state, recent commits, open tasks, and memory summary |
+| token_efficiency | Work token-frugally during coding and debugging sessions — keep tool output, file reads, and your own responses from bloating the context window |
+| verify-test-strength | Prove a load-bearing test can actually fail — run mutation testing on a target module, then iteratively strengthen its tests until surviving mutants are killed. The automated form of the break-it discipline, for guards that must not silently pass. |
 
 ## Hooks
 
@@ -64,6 +69,7 @@ project. Anchors are invariant across tiers; higher tiers only add surfaces.
 | PreToolUse | package_guard.py |
 | PreToolUse | pre_edit_issue_guard.py |
 | PostToolUse | post_edit_lint.sh |
+| PostToolUse | tool_output_compressor.py |
 | UserPromptSubmit | workflow_state_reminder.sh |
 
 ## MCP servers (0)

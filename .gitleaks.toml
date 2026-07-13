@@ -31,5 +31,11 @@ paths = [
   # Named one by one rather than globbing the fixtures dir: a real credential
   # committed to some *other* fixture must still trip the gate.
   '''tests/fixtures/project_init/config\.v[12]\.yaml''',
+  # HISTORICAL. This fixture was folded into config.v2.yaml and deleted (#103),
+  # but the secret scan checks out FULL HISTORY (ci.yml: fetch-depth: 0) and the
+  # commits that added it are on main — deleting a file does not delete its
+  # manifest hashes from the past. Drop this entry and a full-history scan trips
+  # on 2 findings in old commits (verified). Same reason `.claude/config.yaml`
+  # above outlives the .agents/ rename.
   '''tests/fixtures/project_init/config\.v2_ci\.yaml''',
 ]
