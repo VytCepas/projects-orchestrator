@@ -1,0 +1,72 @@
+# Is the vendored project-init contract still the contract upstream ships?
+#
+# tests/test_contract.py is a tripwire against a producer change — but only
+# against the copy vendored HERE. If project-init changes the contract and nobody
+# re-vendors, those tests keep passing on a stale copy and the drift ships
+# silently: the exact failure the tripwire exists to prevent, one level up.
+# This job closes that loop (epic #68 / #106).
+#
+# It does NOT gate PRs. Upstream moving is not a reason to block this repo's
+# work; it is a reason to open a ticket and re-vendor deliberately.
+name: Contract freshness
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 7 * * 1" # Mondays 07:00 UTC
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  freshness:
+    name: Vendored contract vs upstream project-init
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Compare the vendored contract against upstream
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          report=$(uv run python .agents/scripts/check_contract_freshness.py)
+          code=$?
+          set -e
+          echo "$report"
+          {
+            echo 'report<<EOF'
+            echo "$report"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+          echo "stale=$([ "$code" -eq 1 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          # An unreachable upstream exits 0 (unknown) on purpose: a flaky network
+          # is not a contract change, and a job that cried wolf on every blip gets
+          # muted — and then a real drift goes unread.
+
+      # One issue, reopened and updated — not a new issue every Monday, which is
+      # how a useful signal turns into noise everyone filters.
+      - name: Open or update the drift issue
+        if: steps.check.outputs.stale == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPORT: ${{ steps.check.outputs.report }}
+        run: |
+          title="Contract drift: the vendored project-init contract is stale"
+          existing=$(gh issue list --state all --search "$title in:title" --json number,state --jq '.[0] // empty')
+          body=$(printf '%s\n\n---\nDetected by the scheduled `Contract freshness` workflow (#106).\nRe-vendor per `tests/fixtures/project_init/README.md`, then this issue can close.\n' "$REPORT")
+          if [ -n "$existing" ]; then
+            number=$(echo "$existing" | jq -r .number)
+            state=$(echo "$existing" | jq -r .state)
+            [ "$state" = "CLOSED" ] && gh issue reopen "$number"
+            gh issue comment "$number" --body "$body"
+            echo "updated issue #$number"
+          else
+            gh issue create --title "$title" --body "$body" --label chore
+          fi

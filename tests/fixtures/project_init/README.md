@@ -48,5 +48,22 @@ reader-based tripwire could miss still fails CI.
 **Refresh** these alongside the config/capabilities fixtures — copy
 `<project-init>/schemas/*.json` here — whenever project-init bumps the contract.
 
+## Who notices when these go stale
+
+Nobody, unless something checks — which is the point of `just contract-freshness`
+(#106). These fixtures are a tripwire against a *producer* change, but only
+against the copy vendored here: if project-init changes the contract and nobody
+re-vendors, `tests/test_contract.py` keeps passing against a stale copy and the
+drift ships silently.
+
+`just contract-freshness` compares the vendored `descriptor.schema.json` against
+the one project-init ships today, and the golden fixture's pinned
+`project_init_version` against the latest release. The `Contract freshness`
+workflow runs it weekly and opens (or updates) an issue on drift. It never gates
+a PR — upstream moving is a reason to re-vendor deliberately, not to block work.
+
+A fixture *ahead* of the newest release (regenerated from an unreleased `main`)
+is not stale; only one that has fallen *behind* is.
+
 Once the orchestrator depends on a released project-init that includes #786, this
 vendoring can be replaced by `project_init.schema.load_descriptor_schema()`.

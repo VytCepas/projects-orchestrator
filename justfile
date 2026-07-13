@@ -132,3 +132,11 @@ scan:
 code-map:
     uv run python .agents/scripts/gen_code_map.py
 
+# is the vendored project-init contract still what upstream ships? (#106)
+# The contract tests guard the copy vendored HERE; this guards that copy against
+# upstream. Exits 1 on drift, 0 when fresh OR unreachable (a flaky network is not
+# a contract change). CI runs it weekly and opens an issue; run it locally at will.
+[doc("check the vendored project-init contract against upstream (#106)")]
+contract-freshness:
+    uv run python .agents/scripts/check_contract_freshness.py
+
