@@ -28,13 +28,22 @@ from projects_orchestrator.descriptor import ProjectDescriptor
 _TIMEOUT = 15.0
 
 # Keys the common CI systems report their outcome under, tried in order when the
-# descriptor declares no explicit status_field: Jenkins (`result`), GitLab/most
-# REST APIs (`status`), GitHub-shaped payloads (`conclusion`), Buildkite (`state`).
-_STATUS_KEYS = ("result", "status", "conclusion", "state")
+# descriptor declares no explicit status_field: Jenkins (`result`), GitHub-shaped
+# run objects (`conclusion`), GitLab/most REST APIs (`status`), Buildkite (`state`).
+#
+# `conclusion` MUST be tried before `status`. A GitHub-shaped run carries both,
+# and they mean different things: `status` is where the run is in its lifecycle
+# ("completed"), `conclusion` is how it turned out ("failure"). Reading `status`
+# first reports a FAILED run as green. GitLab has no `conclusion`, so it still
+# falls through to `status`, where the outcome genuinely lives.
+_STATUS_KEYS = ("result", "conclusion", "status", "state")
 
 # Outcome vocabularies differ per system; normalise to the orchestrator's four.
 # Lowercased before lookup, so `SUCCESS` and `success` both land.
-_PASS = {"success", "passed", "pass", "ok", "green", "stable", "successful", "completed"}
+#
+# "completed"/"finished" are deliberately NOT here: they say a run ENDED, not
+# that it passed. Absent a conclusion to read, that is `unknown`, not `pass`.
+_PASS = {"success", "passed", "pass", "ok", "green", "stable", "successful"}
 _FAIL = {"failure", "failed", "fail", "error", "red", "broken", "unstable", "canceled", "cancelled"}
 _RUNNING = {"running", "in_progress", "pending", "building", "queued", "started", "scheduled"}
 

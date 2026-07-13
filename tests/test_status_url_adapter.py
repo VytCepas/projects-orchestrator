@@ -80,6 +80,37 @@ def test_explicit_status_field_wins_over_auto_detection(fleet_dir: Path) -> None
     assert probe_status_url(descriptor, fetch=_fetching(payload)) == "fail"
 
 
+def test_github_shaped_run_reports_the_conclusion_not_the_lifecycle(fleet_dir: Path) -> None:
+    # A GitHub-style run object carries BOTH: `status` is where the run is in its
+    # lifecycle, `conclusion` is how it turned out. Reading `status: completed`
+    # as an outcome reports a FAILED run as green — the exact governance lie this
+    # adapter must never tell.
+    descriptor = _descriptor(fleet_dir)
+    payload = {"status": "completed", "conclusion": "failure"}
+    assert probe_status_url(descriptor, fetch=_fetching(payload)) == "fail"
+
+
+def test_github_run_still_in_flight_is_running(fleet_dir: Path) -> None:
+    # conclusion is null until the run finishes.
+    descriptor = _descriptor(fleet_dir)
+    payload = {"status": "in_progress", "conclusion": None}
+    assert probe_status_url(descriptor, fetch=_fetching(payload)) == "running"
+
+
+def test_completed_alone_is_not_an_outcome(fleet_dir: Path) -> None:
+    # "completed" says the run ENDED, not that it passed. With no conclusion to
+    # read, `unknown` is the honest answer.
+    descriptor = _descriptor(fleet_dir)
+    assert probe_status_url(descriptor, fetch=_fetching({"status": "completed"})) == "unknown"
+
+
+def test_gitlab_shaped_payload_still_reads_status(fleet_dir: Path) -> None:
+    # GitLab has no `conclusion` key — `status` IS the outcome there. Reordering
+    # the keys must not break it.
+    descriptor = _descriptor(fleet_dir)
+    assert probe_status_url(descriptor, fetch=_fetching({"status": "success"})) == "pass"
+
+
 def test_jenkins_build_in_flight_is_running_not_unknown(fleet_dir: Path) -> None:
     # `result: null` (key present, value null) means "still building". A payload
     # with NO status key at all means "I don't understand this shape". Collapsing
