@@ -26,6 +26,7 @@ from projects_orchestrator.adapters.project_init import (
     parse_scaffold_result,
     trigger_upgrade,
 )
+from projects_orchestrator.adapters.status_url import probe_status_url, status_check_results
 from projects_orchestrator.audit import AuditReport, audit_project, render_markdown
 from projects_orchestrator.capabilities import (
     HOOK,
@@ -412,9 +413,23 @@ def _probe_ci(
     GitHub and GitLab.
     """
     checked_at = _dt.datetime.now(tz=_dt.UTC).isoformat(timespec="seconds")
+    if descriptor.ci is not None:
+        # An explicitly declared status URL wins over the forge: the project is
+        # telling us its CI is somewhere else (Jenkins, Buildkite, a self-hosted
+        # runner), and `gh`/`glab` would report `unknown` for it forever.
+        ci = probe_status_url(descriptor)
+        payload: dict[str, object] = {
+            "project": descriptor.name,
+            "ci": ci,
+            # A build endpoint reports builds, not code review — there is no
+            # PR/MR count to show, and `?` is the honest cell.
+            "count": None,
+            "unit": "PR",
+        }
+        return payload, status_check_results(descriptor.name, ci, checked_at), ci == "fail"
     if provider_is_gitlab(descriptor):
         gl = collect_gitlab(descriptor)
-        payload: dict[str, object] = {
+        payload = {
             "project": gl.project,
             "ci": gl.ci,
             "count": gl.open_mrs,

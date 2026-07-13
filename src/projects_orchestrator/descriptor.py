@@ -81,6 +81,25 @@ class DeployConfig:
 
 
 @dataclass(frozen=True)
+class CiConfig:
+    """Contract ``ci:`` block — a non-forge CI status endpoint (project-init #828).
+
+    Optional and additive within contract v2: a child that omits it (every child
+    scaffolded before project-init 1.1.7) is probed through its forge exactly as
+    before. Feature-detected, per ADR-025 §4 — not gated on a version bump.
+
+    Attributes:
+        status_url: JSON endpoint reporting the latest build; empty when the
+            project's CI *is* the forge's and ``gh``/``glab`` should be used.
+        status_field: Dot-path to the status value inside that JSON, for a
+            response shape the auto-detection misses. Empty = auto-detect.
+    """
+
+    status_url: str = ""
+    status_field: str = ""
+
+
+@dataclass(frozen=True)
 class ProjectDescriptor:
     """Everything the orchestrator knows about a project without running it.
 
@@ -111,6 +130,9 @@ class ProjectDescriptor:
         host: Upstream forge host (``project.project_init_host``), e.g.
             ``github.com`` or ``gitlab.com``; empty when undeclared. Selects
             which forge adapter probes CI (``ci`` command).
+        ci: Declared non-forge CI status endpoint; ``None`` when the child omits
+            the block or leaves ``status_url`` empty — the overwhelmingly common
+            case, in which the forge adapters probe CI as before.
         warnings: Human-readable parse problems, empty when the config is clean.
     """
 
@@ -132,6 +154,7 @@ class ProjectDescriptor:
     observability_path: Path | None = None
     hooks_expected: tuple[str, ...] = ()
     host: str = ""
+    ci: CiConfig | None = None
     warnings: tuple[str, ...] = ()
 
     def has_task(self, task: str) -> bool:
@@ -178,6 +201,23 @@ def _extract_deploy(raw: dict[str, Any]) -> DeployConfig | None:
         app=str(deploy.get("app") or ""),
         region=str(deploy.get("region") or ""),
         health_url=str(deploy.get("health_url") or ""),
+    )
+
+
+def _extract_ci(raw: dict[str, Any]) -> CiConfig | None:
+    """Parse the optional ``ci:`` block; ``None`` when absent or ``status_url`` is empty.
+
+    An empty ``status_url`` is the scaffold default, and it means "my CI is the
+    forge's" — so it collapses to ``None`` rather than an empty CiConfig, and
+    callers can branch on presence alone.
+    """
+    block = _as_mapping(raw.get("ci"))
+    status_url = str(block.get("status_url") or "").strip()
+    if not status_url:
+        return None
+    return CiConfig(
+        status_url=status_url,
+        status_field=str(block.get("status_field") or "").strip(),
     )
 
 
@@ -327,6 +367,12 @@ def parse_config(text: str, project_dir: Path, config_root: str = ".claude") -> 
         ),
         hooks_expected=_extract_hooks_expected(raw) if is_v2 else (),
         host=str(project.get("project_init_host") or ""),
+        # Feature-detected, NOT version-gated (unlike deploy/observability/hooks,
+        # which arrived *with* v2). `ci` is an additive field within v2, so the
+        # contract version says nothing about whether a child emits it — ADR-025
+        # §4's rule is to detect the surface, not infer it from a version. A v1
+        # child that hand-adds the block is honoured too, which costs nothing.
+        ci=_extract_ci(raw),
         warnings=tuple(warnings),
     )
 
