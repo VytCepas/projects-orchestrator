@@ -34,10 +34,27 @@ fi
 
 BRANCH=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || echo main)
 
-# Required contexts. A repo with no protection (or a token without admin scope)
-# returns an error — that is not a failure, there is simply nothing to check.
-REQUIRED=$(gh api "repos/$REPO/branches/$BRANCH/protection/required_status_checks" \
+# Required contexts, from BOTH enforcement layers. setup_github.sh writes classic
+# branch protection AND (org profile) a `project-init-baseline` repository ruleset,
+# each carrying its own required_status_checks. Reading only the classic layer means
+# a PR blocked solely by a stale RULESET check is told "all required checks are
+# reported" — a false REASSURANCE, which is worse than the false alarm this script
+# exists to avoid: it sends the operator looking anywhere but the real cause
+# (PI-825).
+#
+# /rules/branches/<branch> is the authoritative view — the rules actually in force
+# for that branch, whatever ruleset they came from. A repo with no protection (or a
+# token without admin scope) errors on either call; that is not a failure, there is
+# simply nothing to check.
+CLASSIC=$(gh api "repos/$REPO/branches/$BRANCH/protection/required_status_checks" \
   --jq '.contexts[]?' 2>/dev/null || true)
+# --paginate: /rules/branches is paginated, and a required_status_checks rule on a
+# later page would be silently omitted — producing the same false "all healthy" this
+# whole check exists to prevent.
+RULESET=$(gh api --paginate "repos/$REPO/rules/branches/$BRANCH" \
+  --jq '.[]? | select(.type == "required_status_checks")
+        | .parameters.required_status_checks[]?.context' 2>/dev/null || true)
+REQUIRED=$(printf '%s\n%s\n' "$CLASSIC" "$RULESET" | sed '/^$/d' | sort -u)
 if [ -z "$REQUIRED" ]; then
   echo "check_branch_protection: no required status checks on $BRANCH — nothing to verify." >&2
   exit 0
@@ -91,7 +108,9 @@ fi
   echo "   up (e.g. PI-761 made the Python matrix run per-PR on the floor version"
   echo "   only, so 'Lint and test (3.12)' and friends stopped being reported)."
   echo ""
-  echo "   Fix: re-run  .agents/scripts/setup_github.sh"
+  # --protect is REQUIRED: without it setup_github.sh never touches protection
+  # or the ruleset, so the "remedy" would silently do nothing at all.
+  echo "   Fix: re-run  .agents/scripts/setup_github.sh --protect"
   echo "   It requires the single 'CI gate' job, which needs: the whole matrix and"
   echo "   the secret scan — so it stays correct across any future matrix change."
 } >&2
