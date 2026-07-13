@@ -8,6 +8,6 @@
     "memory_path": ".agents/memory"
   },
   "config": ".agents/config.yaml",
-  "files_created": 103,
+  "files_created": 109,
   "conflicts": []
 }

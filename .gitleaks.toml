@@ -31,5 +31,4 @@ paths = [
   # Named one by one rather than globbing the fixtures dir: a real credential
   # committed to some *other* fixture must still trip the gate.
   '''tests/fixtures/project_init/config\.v[12]\.yaml''',
-  '''tests/fixtures/project_init/config\.v2_ci\.yaml''',
 ]

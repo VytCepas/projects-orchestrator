@@ -21,7 +21,8 @@ the contract-v2 shape. Both are guarded by `tests/test_contract.py`.
 
 ## How to refresh (pin to a project-init version)
 
-The v2 fixtures were generated with **project-init 1.0.1** via:
+The v2 fixtures were generated with **project-init 1.1.7** (the release that adds
+the optional `ci:` block, VytCepas/project-init#828) via:
 
 ```sh
 project-init <target> \
@@ -47,18 +48,5 @@ reader-based tripwire could miss still fails CI.
 **Refresh** these alongside the config/capabilities fixtures — copy
 `<project-init>/schemas/*.json` here — whenever project-init bumps the contract.
 
-## `config.v2_ci.yaml`
-
-A current scaffold (**project-init 1.1.6 + VytCepas/project-init#828**) that
-additionally carries the optional `ci:` block — the non-forge CI status endpoint
-the `status_url` adapter reads. Generated with the same command as `config.v2.yaml`
-above; nothing about it is hand-written, so a producer that drops or renames the
-block fails `tests/test_contract.py` rather than silently disabling the adapter.
-
-`ci.status_url` is **additive within contract v2** — the version does not move —
-so the fixture also pins that a default scaffold leaves it empty and keeps
-falling back to `gh`/`glab`. Fold it into `config.v2.yaml` and delete this file
-once the fixtures are regenerated against a project-init release that includes
-#828.
 Once the orchestrator depends on a released project-init that includes #786, this
 vendoring can be replaced by `project_init.schema.load_descriptor_schema()`.
