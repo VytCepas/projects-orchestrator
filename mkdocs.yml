@@ -28,4 +28,7 @@ nav:
   - Tutorials: tutorials/index.md
   - How-to guides: how-to/index.md
   - Reference: reference/index.md
-  - Explanation: explanation/index.md
+  - Explanation:
+      - Overview: explanation/index.md
+      - System overview: explanation/overview.md
+      - Interfaces: explanation/interfaces.md

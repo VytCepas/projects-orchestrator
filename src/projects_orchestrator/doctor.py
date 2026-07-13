@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from projects_orchestrator.adapters.cloud import deploy_workflow_relpath, has_deploy_workflow
 from projects_orchestrator.adapters.project_init import (
     has_upgrade_workflow,
     upgrade_workflow_relpath,
@@ -180,6 +181,24 @@ def _check_cloud(descriptor: ProjectDescriptor) -> Finding:
     return Finding("cloud", OK, f"{deploy.target} deploy metadata present")
 
 
+def _check_deploy_workflow(descriptor: ProjectDescriptor) -> Finding:
+    """A service project ships the deploy workflow the control plane dispatches.
+
+    The cloud counterpart of :func:`_check_upgrade`, and for the same reason: a
+    service project with deploy metadata but no ``deploy.yml`` gets a clean
+    ``planned`` dry run for a plan that can never execute. Better to say so here
+    than to have someone discover it mid-incident at ``--apply``.
+    """
+    if descriptor.delivery != "service" or descriptor.deploy is None:
+        return Finding("deploy-workflow", OK, "no deploy dispatch expected")
+    if descriptor.deploy.target == DEPLOY_NONE:
+        return Finding("deploy-workflow", OK, "deploy target none — nothing to dispatch")
+    relpath = deploy_workflow_relpath(descriptor)
+    if has_deploy_workflow(descriptor):
+        return Finding("deploy-workflow", OK, f"{relpath} present")
+    return Finding("deploy-workflow", WARN, f"no {relpath} — deploy --apply cannot dispatch")
+
+
 _CHECKS = (
     _check_config,
     _check_contract,
@@ -189,6 +208,7 @@ _CHECKS = (
     _check_tooling,
     _check_upgrade,
     _check_cloud,
+    _check_deploy_workflow,
 )
 
 

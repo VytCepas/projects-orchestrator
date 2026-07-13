@@ -72,12 +72,17 @@ class DeployConfig:
         app: App/service name at the target.
         region: Target region, when the platform needs one.
         health_url: HTTP health-check URL, empty when undeclared.
+        workflow: The child's ``workflow_dispatch`` deploy pipeline the
+            orchestrator triggers for cloud actions (ADR-005); empty falls back
+            to the ``deploy.yml`` convention. The orchestrator never runs a
+            platform mutation itself — it only dispatches this workflow.
     """
 
     target: str = DEPLOY_NONE
     app: str = ""
     region: str = ""
     health_url: str = ""
+    workflow: str = ""
 
 
 @dataclass(frozen=True)
@@ -201,6 +206,7 @@ def _extract_deploy(raw: dict[str, Any]) -> DeployConfig | None:
         app=str(deploy.get("app") or ""),
         region=str(deploy.get("region") or ""),
         health_url=str(deploy.get("health_url") or ""),
+        workflow=str(deploy.get("workflow") or ""),
     )
 
 
