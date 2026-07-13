@@ -85,6 +85,13 @@
         "path": { "type": "string" }
       }
     },
+    "ci": {
+      "type": "object",
+      "properties": {
+        "status_url": { "type": "string" },
+        "status_field": { "type": "string" }
+      }
+    },
     "hooks": {
       "type": "object",
       "properties": {

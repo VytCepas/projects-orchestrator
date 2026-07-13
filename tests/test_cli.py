@@ -290,6 +290,34 @@ def test_ci_gitlab_host_reports_merge_requests(fleet_dir: Path, capsys) -> None:
     assert "open MR(s)" in capsys.readouterr().out
 
 
+_CI_URL_CONFIG = (
+    "project:\n  name: alpha\n  project_init_contract_version: 2\n"
+    "  project_init_host: github.com\nlanguage: python\n"
+    'ci:\n  status_url: "http://jenkins.example/job/alpha/lastBuild/api/json"\n'
+)
+
+
+def test_ci_declared_status_url_beats_the_forge(fleet_dir: Path, monkeypatch, capsys) -> None:
+    # The project says "my CI is Jenkins" — even on a github.com host, gh must
+    # not be the thing we ask, or we would report `unknown` forever (#100).
+    monkeypatch.setattr(cli, "probe_status_url", lambda _d: "fail")
+    monkeypatch.setattr(cli, "collect_github", _unreachable_forge)
+    make_project(fleet_dir, "alpha", config_text=_CI_URL_CONFIG)
+    assert main(["ci", "--root", str(fleet_dir)]) == 1
+    assert "CI fail" in capsys.readouterr().out
+
+
+def test_ci_without_a_status_url_still_uses_the_forge(fleet_dir: Path, capsys) -> None:
+    # The default scaffold emits status_url: "" — behaviour must be unchanged.
+    make_project(fleet_dir, "alpha")
+    main(["ci", "--root", str(fleet_dir), "--json"])
+    assert json.loads(capsys.readouterr().out)[0]["unit"] == "PR"
+
+
+def _unreachable_forge(_descriptor):
+    raise AssertionError("the forge adapter must not be probed when a status_url is declared")
+
+
 def test_upgrade_plan_offline_renders(fleet_dir: Path, capsys, monkeypatch) -> None:
     make_project(fleet_dir, "alpha")
     monkeypatch.setattr(cli, "latest_upstream_version", lambda _cwd: None)

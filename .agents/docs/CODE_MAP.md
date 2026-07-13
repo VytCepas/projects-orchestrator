@@ -70,6 +70,14 @@ Upstream project-init state via ``gh`` — latest release, upgrade dispatch.
 - `def has_upgrade_workflow` — Whether the child ships a reachable upgrade workflow for its forge.
 - `def trigger_upgrade` — Dispatch a child's forge-appropriate upgrade workflow; never raises.
 
+### `projects_orchestrator/adapters/status_url.py`
+
+CI state from a declared status URL — for projects whose CI is not a forge's.
+
+- `def normalise_status` — Map a CI system's outcome vocabulary onto ``pass``/``fail``/``running``/``unknown`` (pure).
+- `def probe_status_url` — Probe a project's declared CI status endpoint; never raises.
+- `def status_check_results` — Adapt a probed CI state into cacheable check results.
+
 ### `projects_orchestrator/ask.py`
 
 Optional LLM ``/ask`` mode — English in, an existing intent out.
@@ -129,6 +137,7 @@ Read a child project's machine-readable self-description.
 
 - `def resolve_config` — Locate a project's descriptor across scaffold layouts.
 - `class DeployConfig` — Contract-v2 ``deploy:`` block for ``delivery: service`` projects.
+- `class CiConfig` — Contract ``ci:`` block — a non-forge CI status endpoint (project-init #828).
 - `class ProjectDescriptor` — Everything the orchestrator knows about a project without running it.
 - `def parse_config` — Build a descriptor from raw config text (pure; never raises).
 - `def parse_scaffold_version` — Parse a ``MAJOR.MINOR.PATCH`` scaffold version into a comparable tuple.
