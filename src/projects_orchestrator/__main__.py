@@ -16,7 +16,14 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 from projects_orchestrator import __version__, cache
-from projects_orchestrator.adapters.cloud import DEPLOY_ACTIONS, collect_cloud, trigger_deploy
+from projects_orchestrator.adapters.cloud import (
+    DEPLOY_ACTIONS,
+    DISPATCH_DISPATCHED,
+    DISPATCH_FAILED,
+    DeployDispatch,
+    collect_cloud,
+    trigger_deploy,
+)
 from projects_orchestrator.adapters.cloud import as_check_results as cloud_check_results
 from projects_orchestrator.adapters.github import as_check_results, collect_github
 from projects_orchestrator.adapters.gitlab import as_check_results as gitlab_check_results
@@ -620,7 +627,22 @@ def _cmd_deploy(args: argparse.Namespace) -> int:
     workflow = f" via {result.workflow}" if result.workflow else ""
     detail = f" — {result.detail}" if result.detail else ""
     print(f"{result.project}: {result.action} {result.status}{workflow}{detail}")
-    return 1 if result.status == "failed" else 0
+    return _deploy_exit_code(result, apply=args.apply)
+
+
+def _deploy_exit_code(result: DeployDispatch, apply: bool) -> int:
+    """Exit 1 whenever an explicit ``--apply`` did not actually dispatch.
+
+    A dry run reports and exits 0 — nothing was asked for. But under ``--apply``,
+    `skipped` (no deploy target) and `no-workflow` are failures *to act*, not
+    successes: `deploy api --action rollback --apply && notify "rolled back"`
+    must not announce a rollback that never happened.
+    """
+    if result.status == DISPATCH_FAILED:
+        return 1
+    if apply and result.status != DISPATCH_DISPATCHED:
+        return 1
+    return 0
 
 
 def _cmd_start(args: argparse.Namespace) -> int:

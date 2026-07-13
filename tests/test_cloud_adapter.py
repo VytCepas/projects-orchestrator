@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from conftest import make_project, make_project_v2
 
+from projects_orchestrator.adapters import cloud
 from projects_orchestrator.adapters.cloud import (
     CloudStatus,
     as_check_results,
@@ -20,6 +21,32 @@ from projects_orchestrator.adapters.cloud import (
     trigger_deploy,
 )
 from projects_orchestrator.descriptor import load_descriptor
+from projects_orchestrator.runner import RunResult
+
+
+def _with_deploy_workflow(project: Path, relpath: str = ".github/workflows/deploy.yml") -> Path:
+    """Give a project the workflow a dispatch targets — otherwise it is `no-workflow`."""
+    workflow = project / relpath
+    workflow.parent.mkdir(parents=True, exist_ok=True)
+    workflow.write_text("on: workflow_dispatch\n", encoding="utf-8")
+    return project
+
+
+def _spy(calls: list[str], ok: bool = True, stderr: str = ""):
+    """A run_command stand-in that records the command instead of running it."""
+
+    def fake(command: str, cwd: Path, timeout: float = 0.0) -> RunResult:  # noqa: ARG001
+        calls.append(command)
+        return RunResult(
+            command=command,
+            returncode=0 if ok else 1,
+            stdout="",
+            stderr=stderr,
+            duration=0.0,
+        )
+
+    return fake
+
 
 FLY_DEPLOYED = json.dumps({"Name": "svc", "Deployed": True, "Status": "deployed", "Version": "42"})
 FLY_SUSPENDED = json.dumps({"Name": "svc", "Deployed": False, "Status": "suspended"})
@@ -165,13 +192,16 @@ def test_trigger_deploy_unknown_action_is_skipped(fleet_dir: Path) -> None:
 
 
 def test_trigger_deploy_dry_run_is_planned(fleet_dir: Path) -> None:
-    # apply=False must never shell out — it only reports the plan.
-    descriptor = load_descriptor(make_project_v2(fleet_dir, "alpha", deploy_target="fly"))
+    descriptor = load_descriptor(
+        _with_deploy_workflow(make_project_v2(fleet_dir, "alpha", deploy_target="fly"))
+    )
     assert trigger_deploy(descriptor, "deploy").status == "planned"
 
 
 def test_trigger_deploy_dry_run_carries_default_workflow(fleet_dir: Path) -> None:
-    descriptor = load_descriptor(make_project_v2(fleet_dir, "alpha", deploy_target="fly"))
+    descriptor = load_descriptor(
+        _with_deploy_workflow(make_project_v2(fleet_dir, "alpha", deploy_target="fly"))
+    )
     assert trigger_deploy(descriptor, "rollback").workflow == "deploy.yml"
 
 
@@ -181,10 +211,143 @@ def test_trigger_deploy_uses_declared_workflow(fleet_dir: Path) -> None:
         "language: python\ndelivery: service\n"
         "deploy:\n  target: fly\n  app: alpha-svc\n  workflow: ship.yml\n"
     )
-    descriptor = load_descriptor(make_project(fleet_dir, "alpha", config_text=config))
+    project = _with_deploy_workflow(
+        make_project(fleet_dir, "alpha", config_text=config), ".github/workflows/ship.yml"
+    )
+    descriptor = load_descriptor(project)
     assert trigger_deploy(descriptor, "deploy").workflow == "ship.yml"
 
 
-def test_trigger_deploy_degrades_to_failed_offline(fleet_dir: Path) -> None:
+# --- The guardrail: a dry run MUST NOT shell out ---------------------------
+# This is the load-bearing safety property of the whole control plane, so it is
+# asserted on the *behaviour* (was a subprocess launched?), not on the returned
+# status. Asserting `status == "planned"` alone is vacuous: hoisting run_command
+# above the `if not apply` branch keeps the status planned while every dry run
+# fires a real production workflow_dispatch. That mutation must fail a test.
+
+
+def _explode(*_args: object, **_kwargs: object) -> RunResult:
+    raise AssertionError("dry run shelled out — the plan-only guardrail is broken")
+
+
+def test_dry_run_never_shells_out(fleet_dir: Path, monkeypatch) -> None:
+    monkeypatch.setattr(cloud, "run_command", _explode)
+    descriptor = load_descriptor(
+        _with_deploy_workflow(make_project_v2(fleet_dir, "alpha", deploy_target="fly"))
+    )
+    assert trigger_deploy(descriptor, "deploy").status == "planned"
+
+
+def test_dry_run_never_shells_out_for_any_action(fleet_dir: Path, monkeypatch) -> None:
+    # rollback/restart are the destructive ones — pin them individually.
+    monkeypatch.setattr(cloud, "run_command", _explode)
+    descriptor = load_descriptor(
+        _with_deploy_workflow(make_project_v2(fleet_dir, "alpha", deploy_target="fly"))
+    )
+    assert [trigger_deploy(descriptor, a).status for a in ("rollback", "restart")] == [
+        "planned",
+        "planned",
+    ]
+
+
+def test_apply_does_shell_out(fleet_dir: Path, monkeypatch) -> None:
+    # The other half of the guardrail: if apply=True silently stopped dispatching,
+    # the tests above would still pass and the control plane would be a no-op.
+    calls: list[str] = []
+    monkeypatch.setattr(cloud, "run_command", _spy(calls, ok=True))
+    descriptor = load_descriptor(
+        _with_deploy_workflow(make_project_v2(fleet_dir, "alpha", deploy_target="fly"))
+    )
+    assert trigger_deploy(descriptor, "deploy", apply=True).status == "dispatched"
+    assert calls and calls[0].startswith("gh workflow run")
+
+
+def test_trigger_deploy_degrades_to_failed_when_dispatch_fails(
+    fleet_dir: Path, monkeypatch
+) -> None:
+    # Previously this test really ran `gh workflow run` against the developer's
+    # ambient auth, and only "passed" because the fixture repo has no remote.
+    monkeypatch.setattr(cloud, "run_command", _spy([], ok=False, stderr="gh: not authenticated"))
+    descriptor = load_descriptor(
+        _with_deploy_workflow(make_project_v2(fleet_dir, "alpha", deploy_target="fly"))
+    )
+    assert trigger_deploy(descriptor, "deploy", apply=True).status == "failed"
+
+
+# --- Pre-flight: a plan that cannot execute must say so on the DRY RUN -------
+
+
+def test_missing_deploy_workflow_is_reported_on_the_dry_run(fleet_dir: Path) -> None:
+    # No deploy.yml in the child. Previously this reported a clean `planned` —
+    # a plan that can never execute — and only failed at --apply time.
     descriptor = load_descriptor(make_project_v2(fleet_dir, "alpha", deploy_target="fly"))
-    assert trigger_deploy(descriptor, "deploy", apply=True, timeout=10.0).status == "failed"
+    result = trigger_deploy(descriptor, "deploy")
+    assert result.status == "no-workflow"
+
+
+def test_missing_deploy_workflow_says_which_file_is_missing(fleet_dir: Path) -> None:
+    descriptor = load_descriptor(make_project_v2(fleet_dir, "alpha", deploy_target="fly"))
+    assert ".github/workflows/deploy.yml" in trigger_deploy(descriptor, "deploy").detail
+
+
+def test_missing_deploy_workflow_never_shells_out_even_with_apply(
+    fleet_dir: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(cloud, "run_command", _explode)
+    descriptor = load_descriptor(make_project_v2(fleet_dir, "alpha", deploy_target="fly"))
+    assert trigger_deploy(descriptor, "deploy", apply=True).status == "no-workflow"
+
+
+# --- A failed dispatch must say WHY ----------------------------------------
+
+
+def test_failed_dispatch_carries_the_stderr_reason(fleet_dir: Path, monkeypatch) -> None:
+    # "failed" with an empty detail is indistinguishable from "retry in 5s".
+    monkeypatch.setattr(cloud, "run_command", _spy([], ok=False, stderr="gh: not authenticated"))
+    descriptor = load_descriptor(
+        _with_deploy_workflow(make_project_v2(fleet_dir, "alpha", deploy_target="fly"))
+    )
+    assert "not authenticated" in trigger_deploy(descriptor, "deploy", apply=True).detail
+
+
+def test_failed_dispatch_reports_a_timeout_as_a_timeout(fleet_dir: Path, monkeypatch) -> None:
+    def timed_out(command: str, cwd: Path, timeout: float = 0.0) -> RunResult:  # noqa: ARG001
+        return RunResult(
+            command=command, returncode=None, stdout="", stderr="", duration=20.0, timed_out=True
+        )
+
+    monkeypatch.setattr(cloud, "run_command", timed_out)
+    descriptor = load_descriptor(
+        _with_deploy_workflow(make_project_v2(fleet_dir, "alpha", deploy_target="fly"))
+    )
+    assert "timed out" in trigger_deploy(descriptor, "deploy", apply=True).detail
+
+
+# --- GitLab children dispatch via glab, not gh ------------------------------
+
+
+def _gitlab_project(fleet_dir: Path) -> Path:
+    config = (
+        "project:\n  name: alpha\n  project_init_contract_version: 2\n"
+        "  project_init_host: gitlab.com\n"
+        "language: python\ndelivery: service\n"
+        "deploy:\n  target: fly\n  app: alpha-svc\n"
+    )
+    return _with_deploy_workflow(
+        make_project(fleet_dir, "alpha", config_text=config), ".gitlab/deploy.yml"
+    )
+
+
+def test_gitlab_child_dispatches_via_glab(fleet_dir: Path, monkeypatch) -> None:
+    # `gh workflow run` in a GitLab repo can only ever fail — the project would
+    # be structurally undeployable while the dry run cheerfully said `planned`.
+    calls: list[str] = []
+    monkeypatch.setattr(cloud, "run_command", _spy(calls, ok=True))
+    descriptor = load_descriptor(_gitlab_project(fleet_dir))
+    assert trigger_deploy(descriptor, "deploy", apply=True).status == "dispatched"
+    assert calls[0].startswith("glab ")
+
+
+def test_gitlab_child_looks_for_its_workflow_under_gitlab(fleet_dir: Path) -> None:
+    descriptor = load_descriptor(_gitlab_project(fleet_dir))
+    assert trigger_deploy(descriptor, "deploy").status == "planned"

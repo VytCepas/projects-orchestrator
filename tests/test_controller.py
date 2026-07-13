@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from conftest import add_memory, make_project, make_project_v2
 
+from projects_orchestrator.adapters import cloud
 from projects_orchestrator.controller import ControllerContext, dispatch, parse_command
 from projects_orchestrator.registry import FleetConfig
 
@@ -113,16 +114,37 @@ def test_dispatch_check_persists_results_to_cache(fleet_dir: Path) -> None:
     assert cache_file.is_file()
 
 
+def _deployable(fleet_dir: Path, name: str = "alpha") -> Path:
+    """A service project that ships the workflow a dispatch would target."""
+    project = make_project_v2(fleet_dir, name, deploy_target="fly")
+    workflow = project / ".github/workflows/deploy.yml"
+    workflow.parent.mkdir(parents=True, exist_ok=True)
+    workflow.write_text("on: workflow_dispatch\n", encoding="utf-8")
+    return project
+
+
 def test_dispatch_deploy_from_repl_is_plan_only(fleet_dir: Path) -> None:
     # The cockpit never dispatches (ADR-005): a REPL `deploy` reports the plan
     # and points at the CLI --apply, so an agent can't fire a prod deploy.
-    make_project_v2(fleet_dir, "alpha", deploy_target="fly")
+    _deployable(fleet_dir)
     lines = list(dispatch(parse_command("deploy alpha"), _ctx(fleet_dir)))
     assert any("planned" in line and "--apply" in line for line in lines)
 
 
+def test_repl_deploy_never_shells_out(fleet_dir: Path, monkeypatch) -> None:
+    # The REPL is the surface an agent actually drives, so assert the guardrail
+    # on BEHAVIOUR: no subprocess may be launched, whatever the output says.
+    def explode(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("the REPL shelled out — the plan-only cockpit is broken")
+
+    monkeypatch.setattr(cloud, "run_command", explode)
+    _deployable(fleet_dir)
+    for action in ("deploy", "rollback", "restart"):
+        list(dispatch(parse_command(f"deploy alpha --action {action}"), _ctx(fleet_dir)))
+
+
 def test_dispatch_deploy_carries_action(fleet_dir: Path) -> None:
-    make_project_v2(fleet_dir, "alpha", deploy_target="fly")
+    _deployable(fleet_dir)
     lines = list(dispatch(parse_command("deploy alpha rollback"), _ctx(fleet_dir)))
     assert any("rollback" in line for line in lines)
 

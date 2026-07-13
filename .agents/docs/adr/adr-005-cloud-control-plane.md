@@ -47,12 +47,28 @@ Two guardrails make it safe to expose from an interactive/agent surface:
    dispatch and does nothing until `--apply` is given.
 2. **The REPL/TUI cockpit is plan-only.** The controller `deploy` verb never
    dispatches — it always reports the plan and points at `deploy --apply`.
-   An agent driving the REPL cannot fire a production deploy by typing a line;
-   the mutation requires the explicit, non-interactive CLI flag.
+   The mutation requires the explicit, non-interactive CLI flag.
 
-Every dangerous verb (deploy, DB migration, secret rotation) follows this same
-dispatch shape: the child declares the workflow, the orchestrator fires it,
-the audit trail is a CI run with logs, environments, and required reviewers.
+Both guardrails are asserted on *behaviour* (no subprocess is launched), not on
+the returned status — a test that only checks for `planned` passes just as
+happily when a dry run is firing real dispatches.
+
+**What these guardrails do NOT do — be precise, or the safety story is a lie.**
+The plan-only cockpit stops a *typo* and a careless line in a REPL. It does not
+contain an agent: an agent with shell access simply runs
+`orchestrator deploy api --action rollback --apply`. Nothing here prevents that,
+and nothing here could — the CLI is the sanctioned mutation path, and an agent
+holds the same CLI a human does.
+
+The real boundary is therefore **not** in this repo. It is the child's own
+workflow: `gh workflow run` against an *unprotected* `workflow_dispatch` workflow
+deploys to production immediately, with no review, agent or not. "Dispatch to a
+review-gated pipeline" is a property of the child (a GitHub Environment with
+required reviewers, or branch protection on the deploy ref) — a convention this
+system relies on and, today, does not verify. `doctor`'s `deploy-workflow` check
+confirms the workflow *exists*; it does not confirm anyone reviews it. Treat an
+unprotected child deploy workflow as production access granted to every holder of
+the orchestrator CLI.
 
 ### Consequences
 
@@ -60,13 +76,17 @@ the audit trail is a CI run with logs, environments, and required reviewers.
   credentials in the orchestrator — ADR-012 credential separation is preserved
   by construction, not by discipline.
 - Good: consistent with `upgrade-plan --apply`; `trigger_deploy` degrades to
-  `failed` offline and to `skipped` for non-service projects, exactly like the
-  rest of the never-raise engine (ADR-003).
-- Good: every action is auditable — it is a CI workflow run, subject to the
-  child's branch/environment protections, not an opaque local command.
+  `failed` offline (always *with a reason* in `detail`) and to `skipped` for
+  non-service projects, exactly like the rest of the never-raise engine (ADR-003).
+  A GitLab child dispatches via `glab`, as `trigger_upgrade` already does.
+- Good: every action is auditable — it is a CI workflow run, subject to whatever
+  branch/environment protections the child has configured, not an opaque local
+  command. Note "whatever": see the guardrail caveat above; this system does not
+  verify that such protections exist.
 - Bad: the child must own a `workflow_dispatch`-enabled deploy workflow that
-  accepts an `action` input; a project without one gets `failed` on `--apply`.
-  This is the intended coupling — the child declares what is runnable, the
+  accepts an `action` input; a project without one reports `no-workflow` — up
+  front, on the dry run, and via `doctor`, rather than as a mystery `failed` at
+  `--apply` time. This is the intended coupling — the child declares what is runnable, the
   orchestrator only triggers it.
 - Bad: dispatch is fire-and-forget — `trigger_deploy` confirms the workflow was
   *queued*, not that the deploy *succeeded*. Deploy outcome is observed
