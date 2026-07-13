@@ -20,7 +20,7 @@ delivery: library
 
 memory:
   tier: 0
-  memory_path: .claude/memory
+  memory_path: {memory_path}
 
 tooling:
 {tooling}
@@ -94,7 +94,11 @@ def make_project(
     if config_text is None:
         tooling = tooling if tooling is not None else {"lint": "true"}
         lines = "".join(f'  {task}_command: "{cmd}"\n' for task, cmd in tooling.items())
-        config_text = CONFIG_TEMPLATE.format(name=name, tooling=lines or "  {}\n")
+        # Mirror a real scaffold: memory lives beside the descriptor, under the
+        # same layout dir (``.agents/memory`` on PI-627, ``.claude/memory`` legacy).
+        config_text = CONFIG_TEMPLATE.format(
+            name=name, tooling=lines or "  {}\n", memory_path=f"{layout}/memory"
+        )
     (config_dir / "config.yaml").write_text(config_text, encoding="utf-8")
     return project
 

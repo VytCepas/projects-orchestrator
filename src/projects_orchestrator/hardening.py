@@ -59,12 +59,16 @@ def _memory_items(descriptor: ProjectDescriptor) -> list[HardeningItem]:
     """Return memory setup items for one project."""
     memory = load_project_memory(descriptor)
     if memory.memory_path is None or not memory.memory_path.is_dir():
+        # Point the operator at the descriptor-resolved memory dir — ``.agents/memory``
+        # on a PI-627 scaffold, ``.claude/memory`` on a legacy one — never a hardcoded
+        # prefix (memory moved with the canonical tree; lifecycle scripts did not).
+        target = memory.memory_path or descriptor.path / descriptor.config_root / "memory"
         return [
             HardeningItem(
                 category="memory",
                 status=WARN,
                 detail="memory directory is missing",
-                action=f"create {descriptor.path / '.claude/memory'} with MEMORY.md",
+                action=f"create {target} with MEMORY.md",
             )
         ]
     if not memory.index_present:
