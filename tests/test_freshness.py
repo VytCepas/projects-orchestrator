@@ -186,3 +186,71 @@ def test_the_vendored_schema_is_readable_and_declares_the_ci_surface() -> None:
 
 def test_a_missing_vendored_schema_is_none_not_a_crash() -> None:
     assert load_vendored_schema(Path("/nonexistent/descriptor.schema.json")) is None
+
+
+# --- Retypes: same name, different shape — the silent contract break ---------
+# A name-only comparison calls these "fresh". They are the exact class the
+# contract tests exist to catch: a reader that expects a list and gets a string
+# breaks just as hard as one whose field vanished.
+
+
+def _typed(**fields: dict) -> dict:
+    return {"properties": {"hooks": {"type": "object", "properties": fields}}}
+
+
+def test_a_retyped_field_is_drift() -> None:
+    ours = _typed(expected={"type": "array", "items": {"type": "string"}})
+    theirs = _typed(expected={"type": "string"})
+    drifts = compare_schema(ours, theirs)
+    assert "RETYPED" in drifts[0].detail and "hooks.expected" in drifts[0].detail
+
+
+def test_an_enum_change_is_drift() -> None:
+    ours = _typed(target={"type": "string", "enum": ["fly", "cloud-run"]})
+    theirs = _typed(target={"type": "string", "enum": ["fly", "cloud-run", "k8s"]})
+    assert compare_schema(ours, theirs) != []
+
+
+def test_an_items_type_change_is_drift() -> None:
+    ours = _typed(expected={"type": "array", "items": {"type": "string"}})
+    theirs = _typed(expected={"type": "array", "items": {"type": "object"}})
+    assert compare_schema(ours, theirs) != []
+
+
+def test_a_reworded_field_description_is_not_drift() -> None:
+    # Still must not cry wolf on prose — that was the point of reducing at all.
+    ours = _typed(expected={"type": "array", "description": "hooks the scaffold ships"})
+    theirs = _typed(expected={"type": "array", "description": "the git hooks shipped"})
+    assert compare_schema(ours, theirs) == []
+
+
+def test_a_block_whose_own_shape_changed_is_drift() -> None:
+    # e.g. `deploy` going from string-or-object to object-only. Field names are
+    # untouched, so a name-only check sees nothing.
+    ours = {"properties": {"deploy": {"type": ["string", "object"], "properties": {"t": {}}}}}
+    theirs = {"properties": {"deploy": {"type": "object", "properties": {"t": {}}}}}
+    assert "shape" in compare_schema(ours, theirs)[0].detail
+
+
+# --- Partial upstream outages must not read as "fresh" -----------------------
+
+
+def test_a_schema_fetch_failure_alone_is_unknown_not_fresh() -> None:
+    # The version fetch succeeded and matches — but the schema was never checked.
+    # Reporting "the vendored contract matches upstream" here is simply a lie,
+    # and it would mask a real schema drift until someone happened to look.
+    assert compare(_schema(deploy=["target"]), None, "1.1.7", "1.1.7").status == "unknown"
+
+
+def test_a_version_fetch_failure_alone_is_unknown_not_fresh() -> None:
+    schema = _schema(deploy=["target"])
+    assert compare(schema, schema, "1.1.7", "").status == "unknown"
+
+
+def test_drift_from_the_half_that_did_arrive_still_wins() -> None:
+    # A half-outage that already proves staleness must say so, not hide behind
+    # "unknown" — we know enough to act.
+    report = compare(
+        _schema(deploy=["target", "health_url"]), _schema(deploy=["target"]), "1.1.7", ""
+    )
+    assert report.status == "stale"

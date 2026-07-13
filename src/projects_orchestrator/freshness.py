@@ -76,29 +76,64 @@ def _urllib_fetch(url: str) -> str:
         return str(response.read().decode("utf-8", errors="replace"))
 
 
-def _schema_surface(schema: Any) -> dict[str, list[str]]:
-    """The part of a schema the orchestrator actually reads: block → field names.
+# Keys that carry no contract: prose and provenance. Everything else — `type`,
+# `enum`, `items`, `required`, `pattern` — is load-bearing, because a reader that
+# expects a list and gets a string breaks just as hard as one whose field vanished.
+_COSMETIC = frozenset({"description", "title", "$id", "$schema", "$comment", "examples"})
 
-    Reduces a schema to its *contract surface* so cosmetic upstream edits (a
-    reworded description, a reordered file, a bumped ``$id``) don't cry wolf,
-    while a dropped/renamed/added field — the thing that actually breaks a
-    reader — always does.
+
+def _contract(node: Any) -> Any:
+    """Strip prose/provenance from a schema, keeping everything that constrains data (pure).
+
+    Comparing raw schemas would fire on a reworded description; comparing only
+    field *names* would miss a retype — ``hooks.expected`` going from a list of
+    strings to something else keeps its name and silently breaks every reader.
+    So: drop the cosmetic keys, keep the rest.
     """
+    if isinstance(node, dict):
+        return {k: _contract(v) for k, v in sorted(node.items()) if k not in _COSMETIC}
+    if isinstance(node, list):
+        return [_contract(item) for item in node]
+    return node
+
+
+def _blocks(schema: Any) -> dict[str, Any]:
+    """The top-level blocks of a descriptor schema, contract-normalised (pure)."""
     if not isinstance(schema, dict):
         return {}
     properties = schema.get("properties")
     if not isinstance(properties, dict):
         return {}
-    surface: dict[str, list[str]] = {}
-    for block, spec in properties.items():
-        fields = spec.get("properties") if isinstance(spec, dict) else None
-        surface[str(block)] = sorted(str(f) for f in fields) if isinstance(fields, dict) else []
-    return surface
+    return {str(block): _contract(spec) for block, spec in properties.items()}
+
+
+def _fields(block_spec: Any) -> dict[str, Any]:
+    """A block's fields, contract-normalised (pure)."""
+    fields = block_spec.get("properties") if isinstance(block_spec, dict) else None
+    return {str(f): spec for f, spec in fields.items()} if isinstance(fields, dict) else {}
+
+
+def _retyped(block: str, ours: dict[str, Any], theirs: dict[str, Any]) -> list[Drift]:
+    """Fields that kept their name but changed shape — the silent contract break (pure)."""
+    return [
+        Drift(
+            "schema",
+            f"upstream RETYPED {block}.{field}: the reader still expects the old shape",
+        )
+        for field in sorted(set(ours) & set(theirs))
+        if ours[field] != theirs[field]
+    ]
 
 
 def compare_schema(vendored: Any, upstream: Any) -> list[Drift]:
-    """Diff two descriptor schemas by contract surface (pure)."""
-    ours, theirs = _schema_surface(vendored), _schema_surface(upstream)
+    """Diff two descriptor schemas by contract (pure).
+
+    Catches three distinct breakages: a block/field upstream **dropped** (the
+    reader reads something nobody emits), one it **added** (a surface the reader
+    is blind to), and one it **retyped** (same name, different shape — the
+    nastiest, because every name-based check calls it fresh).
+    """
+    ours, theirs = _blocks(vendored), _blocks(upstream)
     if not theirs:
         return []
     drifts: list[Drift] = [
@@ -110,8 +145,9 @@ def compare_schema(vendored: Any, upstream: Any) -> list[Drift]:
         for block in sorted(set(ours) - set(theirs))
     ]
     for block in sorted(set(ours) & set(theirs)):
-        added = sorted(set(theirs[block]) - set(ours[block]))
-        removed = sorted(set(ours[block]) - set(theirs[block]))
+        our_fields, their_fields = _fields(ours[block]), _fields(theirs[block])
+        added = sorted(set(their_fields) - set(our_fields))
+        removed = sorted(set(our_fields) - set(their_fields))
         if added:
             drifts.append(Drift("schema", f"upstream added {block}.{{{', '.join(added)}}}"))
         if removed:
@@ -120,7 +156,19 @@ def compare_schema(vendored: Any, upstream: Any) -> list[Drift]:
                     "schema", f"upstream dropped {block}.{{{', '.join(removed)}}} — still read here"
                 )
             )
+        drifts += _retyped(block, our_fields, their_fields)
+        # A block whose own shape changed (its `type`, its `required` list) while
+        # its fields stayed put — e.g. deploy going string-or-object → object-only.
+        if not added and not removed and _block_shape(ours[block]) != _block_shape(theirs[block]):
+            drifts.append(Drift("schema", f"upstream changed the shape of block '{block}'"))
     return drifts
+
+
+def _block_shape(block_spec: Any) -> Any:
+    """A block's own constraints, ignoring its fields (pure)."""
+    if not isinstance(block_spec, dict):
+        return block_spec
+    return {k: v for k, v in block_spec.items() if k != "properties"}
 
 
 def _version(text: str) -> tuple[int, ...] | None:
@@ -157,17 +205,28 @@ def compare(
 ) -> FreshnessReport:
     """Build the full freshness report (pure).
 
-    An unreachable upstream (no schema, no version) is ``unknown`` — a flaky
-    network is not a contract change, and a scheduled job that cried wolf on
-    every blip would be muted within a week.
+    Three states, and the distinction between the last two is the whole point:
+
+    - ``stale``  — something we *did* fetch proves the vendored copy diverged.
+    - ``fresh``  — both halves were fetched, and both match.
+    - ``unknown`` — at least one half never arrived. NOT ``fresh``: a report that
+      says "the vendored contract matches upstream" when the schema fetch failed
+      is a lie, and it would mask a real drift until someone happened to look.
+      Nor ``stale``: a flaky network is not a contract change, and a job that
+      cried wolf on every blip gets muted within a week.
+
+    Drift found from a source that *did* arrive still wins — a half-outage that
+    already proves staleness should say so, not hide behind ``unknown``.
     """
-    if upstream_schema is None and not upstream_version:
-        return FreshnessReport(status=UNKNOWN)
     drifts = tuple(
         compare_schema(vendored_schema, upstream_schema)
         + compare_fixture_version(pinned_version, upstream_version)
     )
-    return FreshnessReport(status=STALE if drifts else FRESH, drifts=drifts)
+    if drifts:
+        return FreshnessReport(status=STALE, drifts=drifts)
+    if upstream_schema is None or not upstream_version:
+        return FreshnessReport(status=UNKNOWN)
+    return FreshnessReport(status=FRESH)
 
 
 def render(report: FreshnessReport) -> str:

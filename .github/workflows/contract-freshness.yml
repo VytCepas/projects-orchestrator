@@ -47,7 +47,18 @@ jobs:
             echo "$report"
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
-          echo "stale=$([ "$code" -eq 1 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+          # The script's contract: 0 = fresh or unknown, 1 = stale. ANY other exit
+          # is the checker itself being broken — a crash, a bad dependency, a uv
+          # failure. Mapping that to `stale=false` would make a dead freshness
+          # monitor look exactly like a healthy one, which is the worst outcome
+          # available: nobody learns the watchman stopped watching.
+          case "$code" in
+            0) echo "stale=false" >> "$GITHUB_OUTPUT" ;;
+            1) echo "stale=true"  >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::the freshness checker exited $code — it is broken, not fresh"
+               exit "$code" ;;
+          esac
           # An unreachable upstream exits 0 (unknown) on purpose: a flaky network
           # is not a contract change, and a job that cried wolf on every blip gets
           # muted — and then a real drift goes unread.
