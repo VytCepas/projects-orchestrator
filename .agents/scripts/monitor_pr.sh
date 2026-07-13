@@ -654,6 +654,13 @@ if [ "$MODE" = "--merge" ]; then
       echo "  passed — typically an unresolved review conversation, or a required" >&2
       echo "  check that has not reported. Resolve the blocker, or re-run with --admin" >&2
       echo "  to override (refused under the org profile, #251)." >&2
+      # "A required check that has not reported" is the one blocker with no visible
+      # cause: CI is green, nothing errors, and the PR is simply never mergeable
+      # (PI-819). Name the phantom contexts rather than leaving it to be guessed.
+      _SELF_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+      if [ -x "$_SELF_DIR/check_branch_protection.sh" ]; then
+        "$_SELF_DIR/check_branch_protection.sh" "$PR_NUMBER" || true
+      fi
       exit 1
     fi
   else

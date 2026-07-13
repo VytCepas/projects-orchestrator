@@ -153,10 +153,23 @@ JSON
   "bypass_actors": []
 }
 RULESET_JSON
-    if gh api "repos/$OWNER/$NAME/rulesets" -X POST --input "$RULESET" >/dev/null 2>&1; then
+    # Update-or-create, not create-only. A POST that fails because the ruleset
+    # already exists left a STALE ruleset in place forever: its required checks kept
+    # blocking every PR, and re-running this script — the remedy every diagnostic
+    # points at — changed nothing (PI-825). Idempotence is the whole point of a
+    # setup script you are told to re-run.
+    RULESET_ID=$(gh api "repos/$OWNER/$NAME/rulesets" \
+      --jq '.[]? | select(.name == "project-init-baseline") | .id' 2>/dev/null | head -1)
+    if [ -n "$RULESET_ID" ]; then
+      if gh api "repos/$OWNER/$NAME/rulesets/$RULESET_ID" -X PUT --input "$RULESET" >/dev/null 2>&1; then
+        echo "Repository ruleset 'project-init-baseline' updated (id $RULESET_ID) — required checks re-synced"
+      else
+        echo "WARNING: could not update the existing repository ruleset (plan/permission insufficient)." >&2
+      fi
+    elif gh api "repos/$OWNER/$NAME/rulesets" -X POST --input "$RULESET" >/dev/null 2>&1; then
       echo "Repository ruleset 'project-init-baseline' applied (binds everyone — empty bypass)"
     else
-      echo "WARNING: could not create the repository ruleset (it may already exist, or the plan/permission is insufficient)." >&2
+      echo "WARNING: could not create the repository ruleset (plan/permission insufficient)." >&2
     fi
   else
     echo "Rulesets API unavailable on this host/plan — relying on branch protection only." >&2
