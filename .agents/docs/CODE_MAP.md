@@ -151,7 +151,7 @@ Audit digest — what changed since the last audit run.
 - `class AuditDigest` — The delta between two audit runs.
 - `def compute_digest` — Diff this run's issues against the prior run's (pure).
 - `def render_digest` — Render a digest as text lines (pure).
-- `def digest_payload` — Build the JSON payload for a digest.
+- `def digest_payload` — Build the JSON/webhook payload (Slack-compatible ``text`` + details).
 - `def load_prior` — Load the previous run's attention-worthy findings; ``[]`` on any problem.
 - `def save_current` — Persist this run's attention-worthy findings for the next diff; never raises.
 
@@ -236,6 +236,7 @@ Threshold alerts and a notifications sink — governance that reaches out.
 - `def fleet_alerts` — Collect every project's alerts, most severe first (pure).
 - `def render_alerts` — Render alerts as text lines, or a friendly all-clear (pure).
 - `def alerts_payload` — Build the JSON/webhook payload (Slack-compatible ``text`` + details).
+- `def post_payload` — Deliver any JSON payload to a webhook; report acceptance (never raises).
 - `def post_webhook` — Deliver alerts to a webhook; return whether it was accepted (never raises).
 
 ### `projects_orchestrator/observability.py`
