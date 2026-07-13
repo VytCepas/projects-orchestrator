@@ -13,11 +13,13 @@ from conftest import (
     git_init,
     make_memory_project,
     make_project,
+    make_project_v2,
 )
 
 import projects_orchestrator.__main__ as cli
 from projects_orchestrator import __version__
 from projects_orchestrator.__main__ import main
+from projects_orchestrator.adapters import cloud
 
 
 @pytest.fixture(autouse=True)
@@ -64,6 +66,62 @@ def test_status_single_project(fleet_dir: Path, capsys) -> None:
     git_init(make_project(fleet_dir, "alpha"))
     main(["status", "alpha", "--root", str(fleet_dir)])
     assert "alpha: clean on main" in capsys.readouterr().out
+
+
+def _deployable(fleet_dir: Path, name: str = "alpha") -> Path:
+    """A service project that actually ships the workflow a dispatch targets."""
+    project = make_project_v2(fleet_dir, name, deploy_target="fly")
+    workflow = project / ".github/workflows/deploy.yml"
+    workflow.parent.mkdir(parents=True, exist_ok=True)
+    workflow.write_text("on: workflow_dispatch\n", encoding="utf-8")
+    return project
+
+
+def test_deploy_dry_run_is_planned(fleet_dir: Path, capsys) -> None:
+    # Without --apply the deploy command dispatches nothing (ADR-005): it only
+    # prints the plan, so it is safe to run from any surface.
+    _deployable(fleet_dir)
+    exit_code = main(["deploy", "alpha", "--root", str(fleet_dir)])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "planned" in out
+
+
+def test_deploy_dry_run_never_shells_out(fleet_dir: Path, monkeypatch) -> None:
+    # The CLI is the ONE surface that can dispatch, so pin the dry-run guardrail
+    # here too — on behaviour, not on the printed word "planned".
+    def explode(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("dry run shelled out — the plan-only guardrail is broken")
+
+    monkeypatch.setattr(cloud, "run_command", explode)
+    _deployable(fleet_dir)
+    assert main(["deploy", "alpha", "--root", str(fleet_dir)]) == 0
+
+
+def test_deploy_non_service_is_skipped(fleet_dir: Path, capsys) -> None:
+    make_project(fleet_dir, "alpha")
+    main(["deploy", "alpha", "--action", "rollback", "--root", str(fleet_dir)])
+    assert "skipped" in capsys.readouterr().out
+
+
+def test_deploy_apply_that_skips_exits_nonzero(fleet_dir: Path) -> None:
+    # `deploy --apply && notify "rolled back"` must NOT announce a rollback that
+    # never happened. Under an explicit --apply, skipped is a failure to act.
+    make_project(fleet_dir, "alpha")
+    assert (
+        main(["deploy", "alpha", "--action", "rollback", "--apply", "--root", str(fleet_dir)]) == 1
+    )
+
+
+def test_deploy_apply_without_a_workflow_exits_nonzero(fleet_dir: Path) -> None:
+    make_project_v2(fleet_dir, "alpha", deploy_target="fly")  # no deploy.yml
+    assert main(["deploy", "alpha", "--apply", "--root", str(fleet_dir)]) == 1
+
+
+def test_deploy_dry_run_that_skips_still_exits_zero(fleet_dir: Path) -> None:
+    # Nothing was asked for, so nothing failing to happen is not an error.
+    make_project(fleet_dir, "alpha")
+    assert main(["deploy", "alpha", "--root", str(fleet_dir)]) == 0
 
 
 def test_status_unknown_project_exits_2(fleet_dir: Path) -> None:
@@ -530,3 +588,33 @@ def test_cloud_status_caches_for_status_table(fleet_dir: Path, capsys) -> None:
     capsys.readouterr()
     main(["status", "--root", str(fleet_dir)])
     assert "none" in capsys.readouterr().out
+
+
+def test_deploy_apply_json_failure_still_exits_nonzero(
+    fleet_dir: Path, monkeypatch, capsys
+) -> None:
+    # --json must not launder a failure into a success. `_emit_json` returns 0,
+    # so an early `return _emit_json(...)` would hand every JSON consumer the
+    # exact success-that-wasn't the text path guards against:
+    #   deploy alpha --apply --json && notify "rolled back"
+    def failed(command: str, cwd, timeout: float = 0.0):  # noqa: ARG001 — run_command's signature
+        from projects_orchestrator.runner import RunResult
+
+        return RunResult(command=command, returncode=1, stdout="", stderr="gh: boom", duration=0.0)
+
+    monkeypatch.setattr(cloud, "run_command", failed)
+    _deployable(fleet_dir)
+    exit_code = main(["deploy", "alpha", "--apply", "--json", "--root", str(fleet_dir)])
+    assert json.loads(capsys.readouterr().out)["status"] == "failed"
+    assert exit_code == 1
+
+
+def test_deploy_apply_json_that_skips_exits_nonzero(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")  # no deploy target
+    assert main(["deploy", "alpha", "--apply", "--json", "--root", str(fleet_dir)]) == 1
+
+
+def test_deploy_dry_run_json_exits_zero(fleet_dir: Path) -> None:
+    # A dry run asked for nothing, so it cannot have failed to do it.
+    _deployable(fleet_dir)
+    assert main(["deploy", "alpha", "--json", "--root", str(fleet_dir)]) == 0

@@ -16,6 +16,7 @@ projects-orchestrator checks [project]    # run each project's own lint/test gat
 projects-orchestrator start <project>     # launch the project's run_command (detached, logged)
 projects-orchestrator stop <project>      # terminate the supervised process
 projects-orchestrator logs <project>      # tail the captured run output (-n lines)
+projects-orchestrator deploy <project>    # dispatch the child's deploy workflow (--action deploy|rollback|restart; --apply)
 projects-orchestrator memory <query>      # search every project's memory files
 projects-orchestrator drift [project]     # scaffold drift vs the recorded manifest
 projects-orchestrator doctor [project]    # diagnose contract-v1 conformance

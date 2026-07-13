@@ -30,6 +30,10 @@ Per-project deploy/runtime status, driven by the contract-v2 deploy block.
 - `def probe_health` — HTTP GET a health URL; never raises.
 - `def collect_cloud` — Probe one project's deploy state and health; never raises.
 - `def as_check_results` — Adapt a :class:`CloudStatus` into one cacheable ``cloud`` check result.
+- `def deploy_workflow_relpath` — Where the child's deploy workflow lives, per its forge.
+- `def has_deploy_workflow` — Whether the child actually ships the deploy workflow a dispatch would target.
+- `class DeployDispatch` — The outcome of one cloud action for one project (ADR-005).
+- `def trigger_deploy` — Dispatch a child's deploy workflow for a cloud action; never raises.
 
 ### `projects_orchestrator/adapters/generic.py`
 

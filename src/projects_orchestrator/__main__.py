@@ -16,8 +16,15 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 from projects_orchestrator import __version__, cache
+from projects_orchestrator.adapters.cloud import (
+    DEPLOY_ACTIONS,
+    DISPATCH_DISPATCHED,
+    DISPATCH_FAILED,
+    DeployDispatch,
+    collect_cloud,
+    trigger_deploy,
+)
 from projects_orchestrator.adapters.cloud import as_check_results as cloud_check_results
-from projects_orchestrator.adapters.cloud import collect_cloud
 from projects_orchestrator.adapters.github import as_check_results, collect_github
 from projects_orchestrator.adapters.gitlab import as_check_results as gitlab_check_results
 from projects_orchestrator.adapters.gitlab import collect_gitlab, provider_is_gitlab
@@ -603,6 +610,46 @@ def _resolve_project(args: argparse.Namespace) -> ProjectDescriptor | None:
     return descriptor
 
 
+def _cmd_deploy(args: argparse.Namespace) -> int:
+    """Dispatch a project's deploy workflow for a cloud action (ADR-005).
+
+    Dry-run by default: prints the plan and dispatches nothing. ``--apply``
+    triggers the child's own ``workflow_dispatch`` pipeline, where production
+    credentials live — the orchestrator holds none (ADR-012). Exits 1 when an
+    applied dispatch fails.
+    """
+    descriptor = _resolve_project(args)
+    if descriptor is None:
+        return 2
+    result = trigger_deploy(descriptor, args.action, apply=args.apply)
+    if args.json:
+        # NOT `return _emit_json(...)`: _emit_json always returns 0, which would
+        # hand every JSON consumer the exact success-that-wasn't this function
+        # exists to prevent — `deploy --apply --json && notify "rolled back"`
+        # announcing a rollback that never happened. Emit, then exit properly.
+        _emit_json(asdict(result))
+        return _deploy_exit_code(result, apply=args.apply)
+    workflow = f" via {result.workflow}" if result.workflow else ""
+    detail = f" — {result.detail}" if result.detail else ""
+    print(f"{result.project}: {result.action} {result.status}{workflow}{detail}")
+    return _deploy_exit_code(result, apply=args.apply)
+
+
+def _deploy_exit_code(result: DeployDispatch, apply: bool) -> int:
+    """Exit 1 whenever an explicit ``--apply`` did not actually dispatch.
+
+    A dry run reports and exits 0 — nothing was asked for. But under ``--apply``,
+    `skipped` (no deploy target) and `no-workflow` are failures *to act*, not
+    successes: `deploy api --action rollback --apply && notify "rolled back"`
+    must not announce a rollback that never happened.
+    """
+    if result.status == DISPATCH_FAILED:
+        return 1
+    if apply and result.status != DISPATCH_DISPATCHED:
+        return 1
+    return 0
+
+
 def _cmd_start(args: argparse.Namespace) -> int:
     """Launch a project's declared run_command, detached and logged."""
     descriptor = _resolve_project(args)
@@ -808,6 +855,12 @@ def _build_parser() -> argparse.ArgumentParser:
             _cmd_notify,
             True,
         ),
+        (
+            "deploy",
+            "dispatch a project's deploy workflow (deploy/rollback/restart; --apply)",
+            _cmd_deploy,
+            True,
+        ),
         ("start", "launch a project's run_command (detached, logged)", _cmd_start, False),
         ("stop", "terminate a project's supervised process", _cmd_stop, False),
         ("logs", "tail a project's captured run output", _cmd_logs, False),
@@ -869,8 +922,19 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.choices["notify"].add_argument(
         "--webhook", help="POST alerts as JSON to this URL (Slack-compatible)"
     )
-    for name in ("start", "stop", "logs"):
+    for name in ("start", "stop", "logs", "deploy"):
         sub.choices[name].add_argument("project", help="project to act on")
+    sub.choices["deploy"].add_argument(
+        "--action",
+        choices=DEPLOY_ACTIONS,
+        default="deploy",
+        help="cloud action to dispatch (default: deploy)",
+    )
+    sub.choices["deploy"].add_argument(
+        "--apply",
+        action="store_true",
+        help="actually dispatch the workflow (default: dry-run plan only)",
+    )
     sub.choices["logs"].add_argument(
         "-n", "--lines", type=int, default=40, help="trailing lines to show (default 40)"
     )

@@ -16,11 +16,13 @@ config in its own directory (`.codex/`, `.agents/`, `.cursor/`, `.amp/`,
 Code's own hook configuration is Claude-specific (see "Claude Code specifics"
 below); everything else is reusable by any agent.
 
+- [`docs/explanation/overview.md`](docs/explanation/overview.md) — the whole system on one page: capabilities, the read-only project-init contract boundary, and the architecture (read this for the mental model)
 - [`.agents/project-init.md`](.agents/project-init.md) — workflow, conventions, task tracking
 - [`.agents/memory/MEMORY.md`](.agents/memory/MEMORY.md) — memory index (read first for context)
 - [`.agents/docs/`](.agents/docs/) — system of record: ADRs and development guides
 - `.agents/docs/CODE_MAP.md` — generated map of what each module does; **read before grepping** (generate/refresh with `just code-map`)
 - [`.agents/CAPABILITIES.md`](.agents/CAPABILITIES.md) — generated inventory of the hooks, skills and MCP servers this project ships
+>>>>>>> origin/main
 
 ## Skills (load on demand)
 
