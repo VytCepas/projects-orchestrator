@@ -3,6 +3,7 @@
 # a root ruff.toml takes precedence over pyproject.toml.
 
 line-length = 100
+extend-exclude = [".claude"]
 
 [lint]
 # D       enforced docstrings (Google style)
@@ -46,4 +47,4 @@ max-complexity = 10
 # vulnerability (PI-570).
 "tests/**" = ["D", "S"]
 # Agent infrastructure (hooks/scripts) is not project code.
-".claude/**" = ["D", "C901", "PLR0912", "PLR0913", "PLR0915"]
+".agents/**" = ["D", "C901", "PLR0912", "PLR0913", "PLR0915"]

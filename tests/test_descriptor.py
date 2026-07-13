@@ -6,11 +6,14 @@ from pathlib import Path
 
 from conftest import make_project, make_project_v2
 
+from projects_orchestrator.capabilities import load_capabilities
 from projects_orchestrator.descriptor import (
     load_descriptor,
     parse_config,
     parse_scaffold_version,
+    resolve_config,
 )
+from projects_orchestrator.observability import observability_dir
 
 
 def test_parse_scaffold_version_reads_dotted_integers() -> None:
@@ -164,10 +167,7 @@ def test_observability_path_escaping_project_root_is_ignored(tmp_path: Path) -> 
 
 
 def test_v1_config_ignores_v2_fields(tmp_path: Path) -> None:
-    text = (
-        "project:\n  name: alpha\n  project_init_contract_version: 1\n"
-        "deploy:\n  target: fly\n"
-    )
+    text = "project:\n  name: alpha\n  project_init_contract_version: 1\ndeploy:\n  target: fly\n"
     assert parse_config(text, tmp_path).deploy is None
 
 
@@ -185,10 +185,7 @@ def test_v2_config_without_deploy_block_is_none(tmp_path: Path) -> None:
 
 
 def test_v2_deploy_defaults_to_none_target(tmp_path: Path) -> None:
-    text = (
-        "project:\n  name: alpha\n  project_init_contract_version: 2\n"
-        "deploy:\n  app: svc\n"
-    )
+    text = "project:\n  name: alpha\n  project_init_contract_version: 2\ndeploy:\n  app: svc\n"
     assert parse_config(text, tmp_path).deploy.target == "none"
 
 
@@ -220,22 +217,30 @@ def test_tier0_config_ignores_vault_path(tmp_path: Path) -> None:
 
 
 def test_tier2_config_exposes_graph_path(tmp_path: Path) -> None:
-    descriptor = parse_config(_memory_config(2, "  graph_path: graphify-out/graph.json\n"), tmp_path)
+    descriptor = parse_config(
+        _memory_config(2, "  graph_path: graphify-out/graph.json\n"), tmp_path
+    )
     assert descriptor.graph_path == tmp_path.resolve() / "graphify-out/graph.json"
 
 
 def test_tier1_config_ignores_graph_path(tmp_path: Path) -> None:
-    descriptor = parse_config(_memory_config(1, "  graph_path: graphify-out/graph.json\n"), tmp_path)
+    descriptor = parse_config(
+        _memory_config(1, "  graph_path: graphify-out/graph.json\n"), tmp_path
+    )
     assert descriptor.graph_path is None
 
 
 def test_tier3_config_exposes_rag_endpoint(tmp_path: Path) -> None:
-    descriptor = parse_config(_memory_config(3, "  rag_endpoint: http://127.0.0.1:8099\n"), tmp_path)
+    descriptor = parse_config(
+        _memory_config(3, "  rag_endpoint: http://127.0.0.1:8099\n"), tmp_path
+    )
     assert descriptor.rag_endpoint == "http://127.0.0.1:8099"
 
 
 def test_tier2_config_ignores_rag_endpoint(tmp_path: Path) -> None:
-    descriptor = parse_config(_memory_config(2, "  rag_endpoint: http://127.0.0.1:8099\n"), tmp_path)
+    descriptor = parse_config(
+        _memory_config(2, "  rag_endpoint: http://127.0.0.1:8099\n"), tmp_path
+    )
     assert descriptor.rag_endpoint == ""
 
 
@@ -252,3 +257,59 @@ def test_vault_path_escaping_project_root_is_ignored(tmp_path: Path) -> None:
 def test_vault_path_escaping_project_root_warns(tmp_path: Path) -> None:
     descriptor = parse_config(_memory_config(1, "  vault_path: /etc\n"), tmp_path)
     assert any("escapes the project root" in w for w in descriptor.warnings)
+
+
+class TestScaffoldLayout:
+    """PI-627: the descriptor lives under ``.agents/`` (current project-init)
+    or ``.claude/`` (legacy). The reader must find both — a current scaffold
+    has no ``.claude/config.yaml`` at all, so hardcoding it dropped every
+    modern project from discovery."""
+
+    def test_discovers_agents_layout(self, fleet_dir: Path) -> None:
+        project = make_project(fleet_dir, "modern", layout=".agents")
+        d = load_descriptor(project)
+        assert d is not None
+        assert d.config_root == ".agents"
+        assert d.config_path == project / ".agents" / "config.yaml"
+
+    def test_legacy_claude_layout_still_works(self, fleet_dir: Path) -> None:
+        project = make_project(fleet_dir, "legacy", layout=".claude")
+        d = load_descriptor(project)
+        assert d is not None
+        assert d.config_root == ".claude"
+
+    def test_agents_preferred_when_both_present(self, fleet_dir: Path) -> None:
+        # A stray legacy .claude/config.yaml must not shadow the current one.
+        project = make_project(fleet_dir, "both", layout=".agents")
+        (project / ".claude").mkdir(parents=True, exist_ok=True)
+        (project / ".claude" / "config.yaml").write_text(
+            'project:\n  name: "stale"\n', encoding="utf-8"
+        )
+        d = load_descriptor(project)
+        assert d is not None
+        assert d.config_root == ".agents"
+        assert d.name == "both"
+
+    def test_no_config_is_not_a_project(self, tmp_path: Path) -> None:
+        assert load_descriptor(tmp_path) is None
+        assert resolve_config(tmp_path) is None
+
+    def test_memory_defaults_under_config_root(self, tmp_path: Path) -> None:
+        # A config that omits memory_path anchors it beside the descriptor.
+        d = parse_config('project:\n  name: "m"\n', tmp_path, config_root=".agents")
+        assert d.memory_path == tmp_path / ".agents" / "memory"
+
+    def test_capabilities_read_under_agents_layout(self, fleet_dir: Path) -> None:
+        project = make_project(fleet_dir, "modern", layout=".agents")
+        (project / ".agents" / "CAPABILITIES.md").write_text(
+            "# Capabilities\n\n## Skills (1)\n\n| Skill | Description |\n|---|---|\n| plan | plan |\n",
+            encoding="utf-8",
+        )
+        d = load_descriptor(project)
+        assert d is not None
+        cap = load_capabilities(d)
+        assert cap.present
+
+    def test_observability_dir_defaults_under_config_root(self, tmp_path: Path) -> None:
+        d = parse_config('project:\n  name: "o"\n', tmp_path, config_root=".agents")
+        assert observability_dir(d) == tmp_path / ".agents" / "observability"

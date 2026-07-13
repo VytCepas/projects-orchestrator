@@ -1,0 +1,13 @@
+{
+  "target": "/tmp/demo-service",
+  "preset": "auto",
+  "contract_version": "2",
+  "memory": {
+    "tier": "0",
+    "stack": "auto",
+    "memory_path": ".agents/memory"
+  },
+  "config": ".agents/config.yaml",
+  "files_created": 103,
+  "conflicts": []
+}

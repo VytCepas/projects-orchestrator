@@ -53,7 +53,7 @@ those commands make network calls).
 The contract surfaces the orchestrator reads from each project-init child are
 pinned in [`docs/reference/descriptor-contract-v1.md`](docs/reference/descriptor-contract-v1.md);
 the additive v2 surfaces (deploy block, observability path, expected hooks) are
-specified in [`docs/reference/descriptor-contract-v2-proposal.md`](docs/reference/descriptor-contract-v2-proposal.md).
+specified in [`docs/reference/descriptor-contract-v2.md`](docs/reference/descriptor-contract-v2.md).
 
 `checks --changed-only` trusts a cached pass only for a project whose clean
 worktree is still at the same HEAD commit — note it cannot see changes in

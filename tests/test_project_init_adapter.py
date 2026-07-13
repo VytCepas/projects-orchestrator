@@ -33,8 +33,7 @@ _SCAFFOLD_JSON = json.dumps(
 )
 
 _GITLAB_CONFIG = (
-    "project:\n  name: gl\n  project_init_contract_version: 1\n"
-    "  project_init_host: gitlab.com\n"
+    "project:\n  name: gl\n  project_init_contract_version: 1\n  project_init_host: gitlab.com\n"
 )
 
 

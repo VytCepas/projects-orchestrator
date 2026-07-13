@@ -117,16 +117,17 @@ def test_retrieval_mode_tier2_without_graph_degrades_to_grep(fleet_dir: Path) ->
 
 def test_retrieval_mode_tier3_with_endpoint_queries_rag(fleet_dir: Path) -> None:
     project = make_memory_project(
-        fleet_dir, "alpha", tier=3, graph_path="graphify-out/graph.json",
+        fleet_dir,
+        "alpha",
+        tier=3,
+        graph_path="graphify-out/graph.json",
         rag_endpoint="http://127.0.0.1:8099",
     )
     assert retrieval_mode(_descriptor(project)) == MODE_RAG
 
 
 def test_retrieval_mode_tier3_without_endpoint_degrades_to_graph(fleet_dir: Path) -> None:
-    project = make_memory_project(
-        fleet_dir, "alpha", tier=3, graph_path="graphify-out/graph.json"
-    )
+    project = make_memory_project(fleet_dir, "alpha", tier=3, graph_path="graphify-out/graph.json")
     assert retrieval_mode(_descriptor(project)) == MODE_GRAPH
 
 

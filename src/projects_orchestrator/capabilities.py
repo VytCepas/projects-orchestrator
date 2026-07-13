@@ -164,8 +164,7 @@ def parse_capabilities(text: str, project: str, path: Path) -> ProjectCapabiliti
         if kind is None:
             continue
         by_kind[kind].extend(
-            Capability(kind=kind, name=name, detail=detail)
-            for name, detail in _parse_table(body)
+            Capability(kind=kind, name=name, detail=detail) for name, detail in _parse_table(body)
         )
     return ProjectCapabilities(
         project=project,
@@ -187,7 +186,9 @@ def load_capabilities(descriptor: ProjectDescriptor) -> ProjectCapabilities:
         The parsed inventory; a missing or oversized file yields an empty
         ``present=False`` result with a warning.
     """
-    path = descriptor.path / CAPABILITIES_RELPATH
+    # CAPABILITIES.md lives beside the descriptor — under ``.agents/`` on a
+    # PI-627 scaffold, ``.claude/`` on a legacy one (descriptor.config_root).
+    path = descriptor.path / descriptor.config_root / CAPABILITIES_RELPATH.name
     try:
         if path.stat().st_size > _MAX_FILE_BYTES:
             return ProjectCapabilities(

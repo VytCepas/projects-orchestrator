@@ -32,9 +32,7 @@ CLOUD_RUN_READY = json.dumps(
         }
     }
 )
-CLOUD_RUN_NOT_READY = json.dumps(
-    {"status": {"conditions": [{"type": "Ready", "status": "False"}]}}
-)
+CLOUD_RUN_NOT_READY = json.dumps({"status": {"conditions": [{"type": "Ready", "status": "False"}]}})
 
 
 def test_parse_fly_status_deployed() -> None:
@@ -88,7 +86,7 @@ def test_collect_cloud_does_not_execute_injected_app_name(fleet_dir: Path) -> No
     config = (
         "project:\n  name: alpha\n  project_init_contract_version: 2\n"
         "language: python\ndelivery: service\n"
-        f"deploy:\n  target: cloud-run\n  app: \"x; touch {marker}\"\n  region: us\n"
+        f'deploy:\n  target: cloud-run\n  app: "x; touch {marker}"\n  region: us\n'
     )
     descriptor = load_descriptor(make_project(fleet_dir, "alpha", config_text=config))
     collect_cloud(descriptor)

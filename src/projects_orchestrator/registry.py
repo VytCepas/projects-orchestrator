@@ -8,7 +8,8 @@ Sources, in precedence order:
    the conventional ``~/projects/<name>`` sibling layout.
 
 Discovery never raises: unreadable directories are skipped, non-projects
-(no ``.claude/config.yaml``) are ignored, duplicates collapse by resolved
+(no ``.agents/config.yaml``, nor a legacy ``.claude/`` one) are ignored,
+duplicates collapse by resolved
 path, and the result is sorted by name for stable rendering.
 """
 
@@ -239,7 +240,10 @@ def register_project(fleet_file: Path, project: Path) -> RegisterOutcome:
         fleet_file.write_text(yaml.safe_dump(document, sort_keys=True), encoding="utf-8")
     except OSError as exc:
         return RegisterOutcome(
-            fleet_file, resolved, added=False, warnings=(*warnings, f"cannot write {fleet_file}: {exc}")
+            fleet_file,
+            resolved,
+            added=False,
+            warnings=(*warnings, f"cannot write {fleet_file}: {exc}"),
         )
     return RegisterOutcome(fleet_file, resolved, added=True, warnings=warnings)
 

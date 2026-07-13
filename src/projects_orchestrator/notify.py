@@ -66,9 +66,13 @@ def snapshot_alerts(snapshot: ProjectSnapshot) -> list[Alert]:
     if check_failed("lint"):
         alerts.append(Alert(name, WARNING, "lint", "lint is failing"))
     if snapshot.drift.status == "drift":
-        alerts.append(Alert(name, WARNING, "drift", f"{snapshot.drift.summary} diverged from scaffold"))
+        alerts.append(
+            Alert(name, WARNING, "drift", f"{snapshot.drift.summary} diverged from scaffold")
+        )
     if snapshot.hooks in ("missing", "partial"):
-        alerts.append(Alert(name, WARNING, "hooks", f"git hooks {snapshot.hooks} — enforcement inactive"))
+        alerts.append(
+            Alert(name, WARNING, "hooks", f"git hooks {snapshot.hooks} — enforcement inactive")
+        )
     return alerts
 
 
@@ -104,12 +108,15 @@ def _urllib_send(url: str, body: bytes) -> int:
         return int(response.status)
 
 
-def post_webhook(url: str, alerts: list[Alert], send: Sender | None = None) -> bool:
-    """Deliver alerts to a webhook; return whether it was accepted (never raises).
+def post_payload(url: str, payload: dict[str, object], send: Sender | None = None) -> bool:
+    """Deliver any JSON payload to a webhook; report acceptance (never raises).
+
+    The transport behind every push sink. Alerts use it via :func:`post_webhook`;
+    the scheduled ``audit --digest`` posts a digest payload through it directly.
 
     Args:
         url: The webhook endpoint (Slack incoming-webhook compatible).
-        alerts: Alerts to deliver.
+        payload: The JSON body. A top-level ``text`` key is what Slack renders.
         send: Sink override; ``None`` uses a bounded stdlib POST. Tests inject
             a fake so no network call is made.
 
@@ -117,9 +124,14 @@ def post_webhook(url: str, alerts: list[Alert], send: Sender | None = None) -> b
         ``True`` on a 2xx response; ``False`` on any failure.
     """
     sender = send or _urllib_send
-    body = json.dumps(alerts_payload(alerts)).encode("utf-8")
+    body = json.dumps(payload).encode("utf-8")
     try:
         status = sender(url, body)
     except (urllib.error.URLError, OSError, ValueError):
         return False
     return 200 <= status < 300
+
+
+def post_webhook(url: str, alerts: list[Alert], send: Sender | None = None) -> bool:
+    """Deliver alerts to a webhook; return whether it was accepted (never raises)."""
+    return post_payload(url, alerts_payload(alerts), send)

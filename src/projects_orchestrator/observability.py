@@ -80,7 +80,9 @@ def observability_dir(descriptor: ProjectDescriptor) -> Path:
     """
     if descriptor.observability_path is not None:
         return descriptor.observability_path
-    return descriptor.path / OBSERVABILITY_CONVENTION
+    # Undeclared (or v1): the log dir lives beside the descriptor — under
+    # ``.agents/`` on a PI-627 scaffold, ``.claude/`` on a legacy one.
+    return descriptor.path / descriptor.config_root / OBSERVABILITY_CONVENTION.name
 
 
 def parse_event(line: str, project: str) -> GuardEvent | None:
@@ -131,9 +133,7 @@ def load_events(descriptor: ProjectDescriptor) -> ProjectEvents:
             )
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return ProjectEvents(
-            project=descriptor.name, path=path, warnings=("no observability log",)
-        )
+        return ProjectEvents(project=descriptor.name, path=path, warnings=("no observability log",))
 
     events: list[GuardEvent] = []
     malformed = 0

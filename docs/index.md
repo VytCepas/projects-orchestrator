@@ -12,7 +12,7 @@ put each page where its *purpose* fits, not where its topic fits:
 | [Reference](reference/index.md) | Looking up facts (API, config) | working, needs precision |
 | [Explanation](explanation/index.md) | Understanding why | studying, wants context |
 
-Architectural decisions live in `.claude/docs/adr/` in the repository (not
+Architectural decisions live in `.agents/docs/adr/` in the repository (not
 part of this site) — use the `add_adr` skill to record one.
 
 > Tip (public repos): [DeepWiki](https://deepwiki.com/) generates free,

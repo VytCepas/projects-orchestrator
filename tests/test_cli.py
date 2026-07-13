@@ -158,7 +158,10 @@ def test_memory_search_reads_graph_surface(fleet_dir: Path, capsys) -> None:
 
 def test_memory_notes_unqueried_rag_endpoint(fleet_dir: Path, capsys) -> None:
     make_memory_project(
-        fleet_dir, "alpha", tier=3, graph_path="graphify-out/graph.json",
+        fleet_dir,
+        "alpha",
+        tier=3,
+        graph_path="graphify-out/graph.json",
         rag_endpoint="http://127.0.0.1:8099",
     )
     main(["memory", "anything", "--root", str(fleet_dir)])
@@ -195,7 +198,9 @@ def test_register_invalid_result_exits_one(tmp_path: Path) -> None:
 
 
 def test_register_missing_file_exits_two(tmp_path: Path) -> None:
-    assert main(["register", str(tmp_path / "absent.json"), "--fleet", str(tmp_path / "f.yaml")]) == 2
+    assert (
+        main(["register", str(tmp_path / "absent.json"), "--fleet", str(tmp_path / "f.yaml")]) == 2
+    )
 
 
 def test_drift_no_manifest_exits_zero(fleet_dir: Path) -> None:
@@ -269,13 +274,51 @@ def test_audit_digest_first_run_exits_one_then_zero(fleet_dir: Path, tmp_path, m
     assert main(["audit", "--root", str(fleet_dir), "--digest"]) == 0
 
 
-def test_audit_digest_reports_no_change_on_second_run(fleet_dir: Path, tmp_path, monkeypatch, capsys) -> None:
+def test_audit_digest_reports_no_change_on_second_run(
+    fleet_dir: Path, tmp_path, monkeypatch, capsys
+) -> None:
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     make_project(fleet_dir, "alpha")
     main(["audit", "--root", str(fleet_dir), "--digest"])
     capsys.readouterr()
     main(["audit", "--root", str(fleet_dir), "--digest"])
     assert "no change since last run" in capsys.readouterr().out
+
+
+def test_audit_digest_webhook_posts_the_delta(fleet_dir: Path, monkeypatch) -> None:
+    # The scheduled job's whole point: a changed digest reaches the sink (#98).
+    posted: dict[str, object] = {}
+    monkeypatch.setattr(cli, "post_payload", lambda url, payload: posted.update(url=url, **payload))
+    make_project(fleet_dir, "alpha")
+    main(["audit", "--root", str(fleet_dir), "--digest", "--webhook", "http://hook"])
+    assert posted["url"] == "http://hook"
+    assert posted["changed"] is True
+
+
+def test_audit_digest_webhook_stays_silent_when_nothing_changed(
+    fleet_dir: Path, monkeypatch
+) -> None:
+    # A daily cron must not post "no change" every day — only deltas.
+    calls: list[str] = []
+    monkeypatch.setattr(cli, "post_payload", lambda url, _payload: calls.append(url))
+    make_project(fleet_dir, "alpha")
+    main(["audit", "--root", str(fleet_dir), "--digest", "--webhook", "http://hook"])
+    calls.clear()
+    main(["audit", "--root", str(fleet_dir), "--digest", "--webhook", "http://hook"])
+    assert calls == []
+
+
+def test_audit_digest_survives_a_failing_webhook(fleet_dir: Path, monkeypatch) -> None:
+    # Delivery is best-effort: a dead sink must not break the audit's exit code.
+    monkeypatch.setattr(cli, "post_payload", lambda _url, _payload: False)
+    make_project(fleet_dir, "alpha")
+    assert main(["audit", "--root", str(fleet_dir), "--digest", "--webhook", "http://hook"]) == 1
+
+
+def test_audit_webhook_without_digest_is_rejected(fleet_dir: Path) -> None:
+    # --webhook only means something for a digest; a full report has no delta.
+    make_project(fleet_dir, "alpha")
+    assert main(["audit", "--root", str(fleet_dir), "--webhook", "http://hook"]) == 2
 
 
 def test_ci_offline_exits_zero(fleet_dir: Path) -> None:
@@ -298,6 +341,34 @@ def test_ci_gitlab_host_reports_merge_requests(fleet_dir: Path, capsys) -> None:
     make_project(fleet_dir, "alpha", config_text=config)
     main(["ci", "--root", str(fleet_dir)])
     assert "open MR(s)" in capsys.readouterr().out
+
+
+_CI_URL_CONFIG = (
+    "project:\n  name: alpha\n  project_init_contract_version: 2\n"
+    "  project_init_host: github.com\nlanguage: python\n"
+    'ci:\n  status_url: "http://jenkins.example/job/alpha/lastBuild/api/json"\n'
+)
+
+
+def test_ci_declared_status_url_beats_the_forge(fleet_dir: Path, monkeypatch, capsys) -> None:
+    # The project says "my CI is Jenkins" — even on a github.com host, gh must
+    # not be the thing we ask, or we would report `unknown` forever (#100).
+    monkeypatch.setattr(cli, "probe_status_url", lambda _d: "fail")
+    monkeypatch.setattr(cli, "collect_github", _unreachable_forge)
+    make_project(fleet_dir, "alpha", config_text=_CI_URL_CONFIG)
+    assert main(["ci", "--root", str(fleet_dir)]) == 1
+    assert "CI fail" in capsys.readouterr().out
+
+
+def test_ci_without_a_status_url_still_uses_the_forge(fleet_dir: Path, capsys) -> None:
+    # The default scaffold emits status_url: "" — behaviour must be unchanged.
+    make_project(fleet_dir, "alpha")
+    main(["ci", "--root", str(fleet_dir), "--json"])
+    assert json.loads(capsys.readouterr().out)[0]["unit"] == "PR"
+
+
+def _unreachable_forge(_descriptor):
+    raise AssertionError("the forge adapter must not be probed when a status_url is declared")
 
 
 def test_upgrade_plan_offline_renders(fleet_dir: Path, capsys, monkeypatch) -> None:

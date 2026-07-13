@@ -34,6 +34,20 @@ def test_checklist_flags_missing_memory(fleet_dir: Path) -> None:
     assert any(item.category == "memory" for item in report[0].items)
 
 
+def test_missing_memory_action_targets_agents_layout(fleet_dir: Path) -> None:
+    project = make_project(fleet_dir, "alpha", layout=".agents")
+    report = checklist([_descriptor(project)], {})
+    action = next(item.action for item in report[0].items if item.category == "memory")
+    assert action.endswith(".agents/memory with MEMORY.md")
+
+
+def test_missing_memory_action_targets_legacy_layout(fleet_dir: Path) -> None:
+    project = make_project(fleet_dir, "alpha", layout=".claude")
+    report = checklist([_descriptor(project)], {})
+    action = next(item.action for item in report[0].items if item.category == "memory")
+    assert action.endswith(".claude/memory with MEMORY.md")
+
+
 def test_checklist_flags_empty_check_cache(fleet_dir: Path) -> None:
     project = make_project(fleet_dir, "alpha")
     report = checklist([_descriptor(project)], {})

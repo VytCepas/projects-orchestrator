@@ -3,7 +3,7 @@
 # Used by the CI "Secret scan (gitleaks)" job (gitleaks-action@v3).
 #
 # Without this file a fresh scaffold fails its first CI run: project-init writes
-# a `manifest:` map of relpath → sha256 into .claude/config.yaml, and the
+# a `manifest:` map of relpath → sha256 into .agents/config.yaml, and the
 # high-entropy hash next to a "secrets.md" path key trips the default
 # generic-api-key rule. Those are content hashes, not secrets (PI #554).
 
@@ -12,11 +12,24 @@ useDefault = true
 
 [allowlist]
 description = "project-init scaffold record (content hashes, not secrets)."
+# Deliberately NARROW: allowlist only the specific generated file whose content
+# hashes trip the default rules (.agents/config.yaml, PI-554). We do NOT
+# allowlist whole example/config templates by path — that would create a blind
+# spot where a real credential later committed to a `.env.example` / `*.example.*`
+# file goes unscanned by both the pre-commit and CI gitleaks gates. Those example
+# files ship empty or "$VAR" placeholders that don't trip the default ruleset
+# anyway (verified against the governance + multi-model overlays), so no
+# example-path exemption is needed.
 paths = [
+  '''\.agents/config\.yaml''',
+  # The CI secret-scan checks out FULL HISTORY, which still contains the record at
+  # its pre-PI-606 path — the .agents/ rename does not rewrite past commits. Drop
+  # this and every PR fails the gitleaks gate on 3 findings in old commits.
   '''\.claude/config\.yaml''',
-  # Vendored project-init golden fixtures carry the same scaffold record
-  # (relpath → sha256 manifest) that the contract test parses
-  # (tests/test_contract.py); the hash next to a "secrets.md" key trips the
-  # same generic-api-key false positive as a live scaffold config.
-  '''tests/fixtures/project_init/.*\.yaml''',
+  # Our own golden fixtures of that record, carrying the same manifest hashes
+  # (tests/test_contract.py). Same content hashes, same false positive.
+  # Named one by one rather than globbing the fixtures dir: a real credential
+  # committed to some *other* fixture must still trip the gate.
+  '''tests/fixtures/project_init/config\.v[12]\.yaml''',
+  '''tests/fixtures/project_init/config\.v2_ci\.yaml''',
 ]

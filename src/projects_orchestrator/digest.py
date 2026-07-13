@@ -90,16 +90,15 @@ def render_digest(digest: AuditDigest) -> str:
     if not digest.changed:
         return "audit digest: no change since last run"
     lines = [f"audit digest: {len(digest.new)} new, {len(digest.resolved)} resolved"]
-    lines.extend(
-        f"  + [{f.severity}] {f.project}: {f.message} ({f.category})" for f in digest.new
-    )
+    lines.extend(f"  + [{f.severity}] {f.project}: {f.message} ({f.category})" for f in digest.new)
     lines.extend(f"  - resolved {f.project}: {f.message} ({f.category})" for f in digest.resolved)
     return "\n".join(lines)
 
 
 def digest_payload(digest: AuditDigest) -> dict[str, object]:
-    """Build the JSON payload for a digest."""
+    """Build the JSON/webhook payload (Slack-compatible ``text`` + details)."""
     return {
+        "text": render_digest(digest),
         "changed": digest.changed,
         "new": [asdict(f) for f in digest.new],
         "resolved": [asdict(f) for f in digest.resolved],
