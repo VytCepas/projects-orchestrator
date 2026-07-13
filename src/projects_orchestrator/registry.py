@@ -8,7 +8,8 @@ Sources, in precedence order:
    the conventional ``~/projects/<name>`` sibling layout.
 
 Discovery never raises: unreadable directories are skipped, non-projects
-(no ``.claude/config.yaml``) are ignored, duplicates collapse by resolved
+(no ``.agents/config.yaml``, nor a legacy ``.claude/`` one) are ignored,
+duplicates collapse by resolved
 path, and the result is sorted by name for stable rendering.
 """
 

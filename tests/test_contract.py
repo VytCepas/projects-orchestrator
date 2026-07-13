@@ -34,6 +34,8 @@ _CAPABILITIES_V1 = _FIXTURES / "capabilities.v1.md"
 _CONFIG_V2 = _FIXTURES / "config.v2.yaml"
 _SCAFFOLD_RESULT_V2 = _FIXTURES / "scaffold_result.v2.json"
 _CAPABILITIES_V2 = _FIXTURES / "capabilities.v2.md"
+# A current scaffold, which additionally carries the optional `ci:` block (#828).
+_CONFIG_V2_CI = _FIXTURES / "config.v2_ci.yaml"
 
 
 def _descriptor(tmp_path: Path):
@@ -225,3 +227,48 @@ def test_vendored_descriptor_schema_is_the_v2_shape() -> None:
     schema = json.loads(_DESCRIPTOR_SCHEMA.read_text(encoding="utf-8"))
     assert "v2" in schema["title"]
     assert {"deploy", "observability", "hooks"} <= set(schema["properties"])
+
+
+# --- The optional `ci:` block (project-init #828 / PO-100) ---
+# An ADDITIVE field within contract v2: project-init emits it, the contract
+# version does NOT move, and a child that predates it must keep working. The
+# fixture is real `project-init --non-interactive --json` output (see the
+# fixtures README) — hand-writing it would defeat the point of a tripwire.
+
+
+def _descriptor_v2_ci(tmp_path: Path):
+    (tmp_path / ".agents").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".agents" / "config.yaml").write_text(
+        _CONFIG_V2_CI.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    descriptor = load_descriptor(tmp_path)
+    assert descriptor is not None
+    return descriptor
+
+
+def test_producer_emits_the_ci_block() -> None:
+    # The producer really ships it — if project-init drops the block, this fails
+    # here rather than the adapter silently never firing on a real fleet.
+    raw = yaml.safe_load(_CONFIG_V2_CI.read_text(encoding="utf-8"))
+    assert "status_url" in raw["ci"]
+
+
+def test_ci_block_did_not_move_the_contract_version(tmp_path: Path) -> None:
+    # The whole premise of the change: additive, so v2 stays v2.
+    assert _descriptor_v2_ci(tmp_path).contract_version == 2
+
+
+def test_scaffold_default_leaves_ci_unset_so_the_forge_still_probes(tmp_path: Path) -> None:
+    # A fresh scaffold emits status_url: "" — meaning "my CI *is* the forge's".
+    # It must collapse to None, or every existing project would suddenly route
+    # through an adapter with no endpoint to call.
+    assert _descriptor_v2_ci(tmp_path).ci is None
+
+
+def test_ci_fixture_validates_against_descriptor_schema() -> None:
+    _validate(yaml.safe_load(_CONFIG_V2_CI.read_text(encoding="utf-8")), _DESCRIPTOR_SCHEMA)
+
+
+def test_vendored_schema_declares_the_ci_surface() -> None:
+    schema = json.loads(_DESCRIPTOR_SCHEMA.read_text(encoding="utf-8"))
+    assert {"status_url", "status_field"} <= set(schema["properties"]["ci"]["properties"])

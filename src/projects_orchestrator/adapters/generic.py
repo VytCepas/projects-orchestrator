@@ -3,7 +3,8 @@
 The orchestrator is deliberately a *reader* of the project-init descriptor,
 but most people's project directories are a mix. With
 ``include_plain_repos: true`` in ``fleet.yaml``, a scanned directory that
-is a git repo without ``.claude/config.yaml`` gets a conservative inferred
+is a git repo without a project-init descriptor (``.agents/config.yaml``,
+or legacy ``.claude/``) gets a conservative inferred
 descriptor: name from the directory, language from its manifest files, and
 lint/test/run commands from a fixed table of well-known conventions.
 
