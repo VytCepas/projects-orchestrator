@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from projects_orchestrator.cost import RunCost
 from projects_orchestrator.runs import (
     ABANDONED,
     FAILED,
@@ -26,6 +27,7 @@ from projects_orchestrator.runs import (
     load,
     mark_running,
     new_run,
+    record_cost,
     resolve,
     save,
     state_dir,
@@ -347,3 +349,86 @@ def test_latest_open_run_is_none_when_all_settled() -> None:
     a = AgentRun(id="a", project="p", task="t", state=FAILED)
     b = AgentRun(id="b", project="p", task="t", state=ABANDONED)
     assert latest_open_run([a, b]) is None
+
+
+# --- Cost on the record (#146) ------------------------------------------------
+
+
+def test_record_cost_persists_the_cost() -> None:
+    run = new_run("alpha", "t")
+    save(run)
+    record_cost(run, RunCost(usd=0.75, output_tokens=10))
+    assert load(run.id).cost.usd == 0.75
+
+
+def test_record_cost_of_an_unknown_cost_leaves_the_run_unmetered() -> None:
+    run = new_run("alpha", "t")
+    save(run)
+    record_cost(run, None)
+    assert load(run.id).cost is None
+
+
+def test_record_cost_does_not_write_an_unknown_cost_as_zero() -> None:
+    run = new_run("alpha", "t")
+    save(run)
+    assert record_cost(run, None).cost is None
+
+
+def test_a_run_recorded_before_cost_existed_reloads_as_unmetered() -> None:
+    # Back-compat: an old record simply has no `cost` key. It is unmetered, and
+    # must not be resurrected as a $0.00 run.
+    run = new_run("alpha", "t")
+    save(run)
+    path = state_dir() / f"{run.id}.json"
+    raw = json.loads(path.read_text())
+    del raw["cost"]
+    path.write_text(json.dumps(raw))
+    assert load(run.id).cost is None
+
+
+def test_a_cost_survives_a_finish() -> None:
+    run = new_run("alpha", "t")
+    save(run)
+    priced = record_cost(run, RunCost(usd=0.5))
+    finish(priced, PR_OPENED, pr_url="https://x/pr/1")
+    assert load(run.id).cost.usd == 0.5
+
+
+def test_record_cost_does_not_rewind_a_run_another_process_already_stopped() -> None:
+    # THE race: the wrapper holds a stale `running` copy; `work --stop` settled the
+    # same id to `abandoned` meanwhile. Saving our stale copy "just to add a cost"
+    # would bury the operator's stop. First writer wins applies to cost too.
+    run = new_run("alpha", "t")
+    save(run)
+    stale = mark_running(run, 1234)
+    finish(stale, ABANDONED, detail="operator stopped it")  # the racing stop
+    record_cost(stale, RunCost(usd=0.9))
+    assert load(run.id).state == ABANDONED
+
+
+def test_record_cost_still_prices_a_run_another_process_stopped() -> None:
+    # ...and the stopped run's cost is still recorded. It burned money before it
+    # was killed; preserving the state must not mean discarding the price.
+    run = new_run("alpha", "t")
+    save(run)
+    stale = mark_running(run, 1234)
+    finish(stale, ABANDONED, detail="operator stopped it")
+    record_cost(stale, RunCost(usd=0.9))
+    assert load(run.id).cost.usd == 0.9
+
+
+def test_record_cost_preserves_the_stop_reason() -> None:
+    run = new_run("alpha", "t")
+    save(run)
+    stale = mark_running(run, 1234)
+    finish(stale, ABANDONED, detail="operator stopped it")
+    record_cost(stale, RunCost(usd=0.9))
+    assert "operator stopped it" in load(run.id).detail
+
+
+def test_a_run_keeps_its_first_recorded_price() -> None:
+    run = new_run("alpha", "t")
+    save(run)
+    record_cost(run, RunCost(usd=0.5))
+    record_cost(run, RunCost(usd=9.99))
+    assert load(run.id).cost.usd == 0.5

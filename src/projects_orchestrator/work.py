@@ -36,7 +36,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
-from projects_orchestrator import briefing, landing, runs, sandbox
+from projects_orchestrator import briefing, cost, landing, runs, sandbox
 from projects_orchestrator import worktree as wt
 from projects_orchestrator.descriptor import ProjectDescriptor
 from projects_orchestrator.naming import safe_component
@@ -257,6 +257,13 @@ def run_agent(
     marker_before = _read_marker(worktree)
     ok = agent(worktree, prompt, Path(run.log_path))
     marker_after = _read_marker(worktree)
+
+    # Bank the cost here, before any of the three exits below — a failed or
+    # handed-off run costs real money too, and those are the runs whose price an
+    # operator most wants to see. Recorded ahead of `finish` on purpose: `finish`
+    # rebases onto the on-disk record, so this write is carried into the terminal
+    # state, while one made afterwards would be discarded (see runs.record_cost).
+    run = runs.record_cost(run, cost.parse_log(run.log_path))
 
     # The needs-human handoff takes precedence over BOTH landing and failure: an
     # agent that hit an ambiguity and wrote the marker explained itself, so it must

@@ -15,7 +15,16 @@ import sys
 from dataclasses import asdict, replace
 from pathlib import Path
 
-from projects_orchestrator import __version__, cache, campaign, orphans, runs, selector, work
+from projects_orchestrator import (
+    __version__,
+    cache,
+    campaign,
+    cost,
+    orphans,
+    runs,
+    selector,
+    work,
+)
 from projects_orchestrator.adapters import gcp
 from projects_orchestrator.adapters.cloud import (
     DEPLOY_ACTIONS,
@@ -692,10 +701,11 @@ def _cmd_logs(args: argparse.Namespace) -> int:
 
 
 def _render_run(run: runs.AgentRun) -> str:
-    """One line for an agent run: state, project, task, and where to look."""
+    """One line for an agent run: state, project, cost, task, and where to look."""
     where = run.pr_url or run.worktree or ""
     tail = f"  {where}" if where else ""
-    return f"{run.state:<11} {run.project:<18} {run.task[:48]}{tail}"
+    spent = cost.format_usd(run.cost)
+    return f"{run.state:<11} {run.project:<18} {spent:>7} {run.task[:44]}{tail}"
 
 
 def _work_manage(args: argparse.Namespace) -> int | None:
@@ -707,6 +717,7 @@ def _work_manage(args: argparse.Namespace) -> int | None:
             return 0
         for run in found:
             print(_render_run(run))
+        print(f"\ntotal: {cost.format_total(cost.total(run.cost for run in found))}")
         return 0
     if args.logs:
         for line in work.logs(args.logs, lines=args.lines):
@@ -862,6 +873,7 @@ def _outcome_line(outcome: campaign.Outcome) -> str:
 
 
 def _campaign_json(report: campaign.CampaignReport) -> dict[str, object]:
+    spend = report.spend
     return {
         "name": report.name,
         "canary": report.canary,
@@ -874,21 +886,36 @@ def _campaign_json(report: campaign.CampaignReport) -> dict[str, object]:
                 "pr_url": o.run.pr_url,
                 "timed_out": o.timed_out,
                 "detail": o.run.detail,
+                # null, not 0.0 — an unmetered run's cost is unknown, not free.
+                "cost": asdict(o.run.cost) if o.run.cost else None,
             }
             for o in report.outcomes
         ],
+        "spend": asdict(spend),
     }
 
 
 def _render_campaign_report(report: campaign.CampaignReport) -> None:
-    """Print a campaign's outcomes, then the canary's you-still-have-N nudge."""
+    """Print a campaign's outcomes, its spend, then the canary's you-still-have-N nudge."""
     for outcome in report.outcomes:
         print(_outcome_line(outcome))
+
+    spend = report.spend
+    print(f"\nspend: {cost.format_total(spend)}")
     if report.canary and report.remaining:
-        print(
-            f"\ncanary complete — {report.remaining} project(s) still outstanding. "
+        line = (
+            f"canary complete — {report.remaining} project(s) still outstanding. "
             "Review the PR above, then re-run with --apply to fan out to the rest."
         )
+        # The canary's measured cost is the best per-project estimate available, so
+        # quote what the fan-out would add BEFORE the operator authorises it. Only
+        # when something was actually metered: projecting from zero metered runs
+        # would invent a number, and inventing a cheap one is how a fan-out gets
+        # approved on evidence that never existed.
+        if spend.metered:
+            projected = spend.usd / spend.metered * report.remaining
+            line += f"\n--apply would add roughly ${projected:.2f} at the canary's rate."
+        print(line)
 
 
 def _cmd_campaign(args: argparse.Namespace) -> int:
