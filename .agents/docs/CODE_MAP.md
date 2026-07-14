@@ -265,6 +265,12 @@ Read and search the fleet's memory — the "all-knowing" layer.
 - `def load_memory` — Load one project's memory via its tier's retrieval surface; never raises.
 - `def search_memory` — Search all loaded memories for a case-insensitive substring.
 
+### `projects_orchestrator/naming.py`
+
+The project name is not ours — sanitise it before it becomes a path.
+
+- `def safe_component` — Reduce ``name`` to one inert path component (pure).
+
 ### `projects_orchestrator/notify.py`
 
 Threshold alerts and a notifications sink — governance that reaches out.
@@ -358,3 +364,14 @@ Fleet upgrade planning — who is behind upstream project-init, and act on it.
 - `def plan_status` — Classify a scaffold version against the latest upstream (pure).
 - `def build_row` — Build one upgrade-plan row for a project (never raises).
 - `def upgrade_plan` — Build the whole fleet's upgrade plan (pure over its inputs).
+
+### `projects_orchestrator/worktree.py`
+
+Throwaway git worktrees — an agent works here, never in the operator's clone.
+
+- `class Worktree` — One throwaway checkout an agent runs in.
+- `def worktree_root` — Return the worktree state directory, honoring ``$XDG_STATE_HOME``.
+- `def run_slug` — Build a slug that will not collide with a concurrent run on this repo.
+- `def create` — Cut a fresh worktree from ``repo``'s HEAD; ``None`` if git refuses.
+- `def remove` — Remove a worktree and deregister it; report success (never raises).
+- `def prune_expired` — Delete kept worktrees older than ``expiry_days``; return how many went.
