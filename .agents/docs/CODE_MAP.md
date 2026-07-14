@@ -100,6 +100,14 @@ Compose every passive governance probe into one fleet audit.
 - `def audit_project` — Run every governance probe for one project (never raises).
 - `def render_markdown` — Render audit reports as a Markdown document for a scheduled run.
 
+### `projects_orchestrator/briefing.py`
+
+Why the agent was summoned — the context it cannot cheaply discover itself.
+
+- `class Evidence` — One reason the agent was summoned.
+- `def evidence_from_checks` — Turn failing :class:`~projects_orchestrator.checks.CheckResult`s into evidence.
+- `def build_briefing` — Render the prompt handed to a coding agent (pure).
+
 ### `projects_orchestrator/cache.py`
 
 Persistent memory of the last known check results.

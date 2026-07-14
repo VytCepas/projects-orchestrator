@@ -100,7 +100,10 @@ def test_build_heal_prompt_includes_command_and_detail(fleet_dir: Path) -> None:
     prompt = build_heal_prompt(descriptor, failing)
     assert "ruff check ." in prompt
     assert "E501 too long" in prompt
-    assert "do not create a git commit" in prompt.lower()
+    # The RULE, not the wording: the agent must be told not to commit. The
+    # harness commits only after re-verifying, and an agent that commits for
+    # itself has escaped the thing that checks it.
+    assert "do not commit" in prompt.lower()
 
 
 def test_build_heal_prompt_flags_failure_text_as_untrusted_data(fleet_dir: Path) -> None:
