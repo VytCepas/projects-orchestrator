@@ -251,7 +251,9 @@ def test_heal_project_fixes_and_opens_pr_end_to_end(fleet_dir: Path, tmp_path: P
 
     assert result.status == FIXED
     assert result.pr_url == f"https://example/pr/{result.branch}"
-    assert result.branch == "heal/lint-alpha"
+    # Per-RUN, not per project+task: a stable name deadlocks against retention
+    # (a kept worktree holds the branch, and git will not check it out twice).
+    assert result.branch.startswith("heal/lint-alpha-")
 
     current_branch = subprocess.run(
         ["git", "-C", str(project), "rev-parse", "--abbrev-ref", "HEAD"],
@@ -413,3 +415,37 @@ def test_concurrent_runs_on_one_repo_get_distinct_worktrees(fleet_dir: Path) -> 
     heal_project(descriptor, _fail("lint"), agent_run=recording_agent)
     heal_project(descriptor, _fail("test"), agent_run=recording_agent)
     assert paths[0] != paths[1]
+
+
+def test_a_failed_heal_does_not_block_the_next_heal(fleet_dir: Path) -> None:
+    # End-to-end form of the deadlock: heal once, fail (worktree kept), heal
+    # again. The second attempt must still reach the agent, not die at
+    # worktree_failed because the first run's evidence is holding its branch.
+    project = make_project(fleet_dir, "alpha", tooling={"lint": "true"})
+    git_init(project)
+    descriptor = load_descriptor(project)
+    reached: list[str] = []
+
+    def failing_agent(_descriptor: object, _prompt: str) -> AgentOutcome:
+        reached.append("ran")
+        return AgentOutcome(ok=False, summary="gave up")
+
+    first = heal_project(descriptor, _fail("lint"), agent_run=failing_agent)
+    second = heal_project(descriptor, _fail("lint"), agent_run=failing_agent)
+    assert first.status == AGENT_FAILED
+    assert second.status == AGENT_FAILED  # NOT worktree_failed
+    assert len(reached) == 2
+
+
+def test_two_failed_heals_keep_two_separate_pieces_of_evidence(fleet_dir: Path) -> None:
+    project = make_project(fleet_dir, "alpha", tooling={"lint": "true"})
+    git_init(project)
+    descriptor = load_descriptor(project)
+
+    def failing_agent(_descriptor: object, _prompt: str) -> AgentOutcome:
+        return AgentOutcome(ok=False, summary="gave up")
+
+    first = heal_project(descriptor, _fail("lint"), agent_run=failing_agent)
+    second = heal_project(descriptor, _fail("lint"), agent_run=failing_agent)
+    assert first.worktree != second.worktree
+    assert Path(first.worktree).is_dir() and Path(second.worktree).is_dir()

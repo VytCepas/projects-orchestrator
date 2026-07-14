@@ -173,3 +173,44 @@ def test_prune_expired_respects_the_expiry_window(fleet_dir: Path) -> None:
 
 def test_prune_expired_on_a_missing_project_dir_is_zero_not_a_crash(fleet_dir: Path) -> None:
     assert prune_expired(_repo(fleet_dir), "never-healed") == 0
+
+
+# --- The project name is a CHILD repo's, not ours ----------------------------
+
+
+def test_an_absolute_project_name_cannot_escape_the_state_dir(fleet_dir: Path) -> None:
+    # `Path("/state/worktrees") / "/tmp/owned"` IS `/tmp/owned` — an absolute
+    # component discards everything to its left, silently. A child repo naming
+    # itself this would have had its checkout written exactly where it asked.
+    repo = _repo(fleet_dir)
+    tree = create(repo, "/tmp/pwned-by-worktree", "heal/x", run_slug())
+    assert tree is not None
+    assert worktree_root() in tree.path.parents
+
+
+def test_a_traversing_project_name_cannot_escape_the_state_dir(fleet_dir: Path) -> None:
+    repo = _repo(fleet_dir)
+    tree = create(repo, "../../../../tmp/pwned", "heal/x", run_slug())
+    assert tree is not None
+    assert worktree_root() in tree.path.resolve().parents
+
+
+def test_a_traversing_slug_cannot_escape_either(fleet_dir: Path) -> None:
+    repo = _repo(fleet_dir)
+    tree = create(repo, "alpha", "heal/x", "../../../../tmp/pwned")
+    assert tree is not None
+    assert worktree_root() in tree.path.resolve().parents
+
+
+# --- Retention must not deadlock the next run --------------------------------
+
+
+def test_a_kept_worktree_does_not_block_the_next_run(fleet_dir: Path) -> None:
+    # THE deadlock. A failed run's worktree is deliberately kept; git refuses to
+    # check one branch out in two worktrees. With a stable branch name the next
+    # run is refused — forever. Retention must not cost you the retry.
+    repo = _repo(fleet_dir)
+    kept = create(repo, "alpha", "heal/lint-alpha-aaaaaa", run_slug())
+    assert kept is not None  # left on disk, as a failed run's evidence would be
+    again = create(repo, "alpha", "heal/lint-alpha-bbbbbb", run_slug())
+    assert again is not None

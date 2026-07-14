@@ -350,12 +350,21 @@ def heal_project(
     if not failing:
         return HealResult(descriptor.name, NO_FAILURES, detail="no failing lint/test gate cached")
 
-    tasks = tuple(sorted({result.task for result in failing}))
-    branch = f"heal/{'-'.join(tasks)}-{descriptor.name}"
+    # Retention has a clock (ADR-007), and this is what makes it tick. Without a
+    # caller, "expires after N days" is just a function nobody runs, and kept
+    # worktrees would accumulate forever.
+    wt.prune_expired(descriptor.path, descriptor.name)
 
-    tree = wt.create(
-        repo=descriptor.path, project=descriptor.name, branch=branch, slug=wt.run_slug()
-    )
+    tasks = tuple(sorted({result.task for result in failing}))
+    slug = wt.run_slug()
+    # The branch is unique per RUN, not per project+task. A stable name would
+    # deadlock against retention: a failed run's worktree is deliberately kept,
+    # git will not check one branch out in two worktrees, and the next heal of
+    # that project would be refused — permanently, since nothing would clear it.
+    # Keeping the evidence must not cost you the ability to try again.
+    branch = f"heal/{'-'.join(tasks)}-{descriptor.name}-{slug.rsplit('-', 1)[-1]}"
+
+    tree = wt.create(repo=descriptor.path, project=descriptor.name, branch=branch, slug=slug)
     if tree is None:
         return HealResult(
             descriptor.name,

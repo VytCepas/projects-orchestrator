@@ -265,6 +265,12 @@ Read and search the fleet's memory — the "all-knowing" layer.
 - `def load_memory` — Load one project's memory via its tier's retrieval surface; never raises.
 - `def search_memory` — Search all loaded memories for a case-insensitive substring.
 
+### `projects_orchestrator/naming.py`
+
+The project name is not ours — sanitise it before it becomes a path.
+
+- `def safe_component` — Reduce ``name`` to one inert path component (pure).
+
 ### `projects_orchestrator/notify.py`
 
 Threshold alerts and a notifications sink — governance that reaches out.

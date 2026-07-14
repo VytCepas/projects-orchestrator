@@ -39,6 +39,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
+from projects_orchestrator.naming import safe_component
+
 _STATE_DIRNAME = "projects-orchestrator"
 _WORKTREE_SUBDIR = "worktrees"
 
@@ -115,23 +117,28 @@ def create(repo: Path, project: str, branch: str, slug: str) -> Worktree | None:
     mutated: ``git worktree add`` writes only ``.git/worktrees/`` metadata and
     the new directory. That is the whole point of this module.
 
-    ``-B`` resets the branch to HEAD if it already exists (matching the
-    ``checkout -B`` this replaced). Git still refuses when that branch is checked
-    out in *another* live worktree — which is the correct outcome: a kept
-    worktree from an earlier failed run is evidence, and clobbering it to start a
-    new run would destroy exactly what we chose to retain.
+    ``-b`` (create, never reset). The caller must therefore supply a branch name
+    unique to the run — and that is not a limitation, it is the fix for one.
+    A *stable* branch name deadlocks with retention: a failed run's worktree is
+    deliberately kept, git will not check the same branch out twice, and so the
+    next run for that project would be refused forever. Retention must not cost
+    you the ability to try again.
 
     Args:
         repo: The project's clone. Read from, never modified.
-        project: Project name (namespaces the worktree directory).
-        branch: Branch to create/reset and check out in the worktree.
+        project: Project name (namespaces the worktree directory; sanitised).
+        branch: Branch to create and check out — must be unique per run.
         slug: Per-run directory name; see :func:`run_slug`.
 
     Returns:
         The :class:`Worktree`, or ``None`` when the state dir is unwritable, the
         slug is already taken, or git declines.
     """
-    path = worktree_root() / project / slug
+    # `project` comes from a CHILD repo's config.yaml. Joining it raw is not a
+    # style nit: `Path("/state/worktrees") / "/tmp/owned"` is `/tmp/owned` —
+    # an absolute component silently discards everything to its left, and the
+    # checkout lands wherever the child asked. See :mod:`naming`.
+    path = worktree_root() / safe_component(project) / safe_component(slug)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except OSError:
@@ -139,7 +146,7 @@ def create(repo: Path, project: str, branch: str, slug: str) -> Worktree | None:
     if path.exists():
         # Reusing a slug would silently hand the agent a stale checkout.
         return None
-    if not _git(["worktree", "add", "-B", branch, str(path), "HEAD"], cwd=repo):
+    if not _git(["worktree", "add", "-b", branch, str(path), "HEAD"], cwd=repo):
         return None
     return Worktree(project=project, path=path, branch=branch, repo=repo)
 
