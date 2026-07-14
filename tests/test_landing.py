@@ -93,6 +93,32 @@ def test_a_raw_ref_path_is_refused() -> None:
     assert is_protected("origin/main") is True
 
 
+@pytest.mark.parametrize("refspec", ["heal/x:main", "heal/x:refs/heads/main", ":main", "heal/x:"])
+def test_a_refspec_is_refused_before_it_reaches_git(refspec: str) -> None:
+    # P1. `heal/x:main` is a `src:dst` refspec; `git push origin -- heal/x:main`
+    # updates remote `main`, because `--` ends OPTION parsing, not REFSPEC parsing.
+    # The colon must be rejected here, before the value ever reaches git.
+    assert is_protected(refspec) is True
+
+
+@pytest.mark.parametrize("hostile", ["../evil", "a..b", "x.lock", "heal/x main"])
+def test_git_ref_metacharacters_are_refused(hostile: str) -> None:
+    assert is_protected(hostile) is True
+
+
+def test_a_slash_qualified_default_branch_is_recognised_in_full() -> None:
+    # P2. `release/2026` must not be truncated to `2026` — otherwise is_protected
+    # does not recognise the real default and a push to it is allowed.
+    assert is_protected("release/2026", repo_default="release/2026") is True
+
+
+def test_strip_ref_prefix_keeps_a_slashed_branch_whole() -> None:
+    from projects_orchestrator.landing import _strip_ref_prefix
+
+    assert _strip_ref_prefix("refs/remotes/origin/release/2026") == "release/2026"
+    assert _strip_ref_prefix("refs/heads/release/2026") == "release/2026"
+
+
 def test_an_ordinary_agent_branch_is_allowed() -> None:
     # The guard must not refuse everything — one that does gets removed.
     assert is_protected("heal/lint-alpha-abc123", repo_default="main") is False
@@ -211,6 +237,19 @@ def test_the_boundary_never_merges(fleet_dir: Path, monkeypatch: pytest.MonkeyPa
     for args in launched:
         assert "merge" not in args
         assert not any(flag.startswith("--force") for flag in args)
+
+
+def test_the_push_refspec_is_fully_qualified_on_both_sides(
+    fleet_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Defence in depth: even if the guard were bypassed, `refs/heads/x:refs/heads/x`
+    # can only create/update branch `x` — a bare `heal/x:main` updates main.
+    project = make_project(fleet_dir, "alpha")
+    launched: list[list[str]] = []
+    _spy(launched, monkeypatch)
+    push_branch(project, "heal/lint-x", repo_default="main")
+    push_argv = next(a for a in launched if a[:2] == ["git", "push"])
+    assert "refs/heads/heal/lint-x:refs/heads/heal/lint-x" in push_argv
 
 
 def test_the_boundary_never_force_pushes(fleet_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:

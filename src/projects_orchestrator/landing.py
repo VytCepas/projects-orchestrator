@@ -27,6 +27,7 @@ degrades to a typed failure the caller renders.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import time
 from dataclasses import dataclass
@@ -35,6 +36,15 @@ from pathlib import Path
 from projects_orchestrator.runner import RunResult
 
 _GIT_TIMEOUT = 30.0
+
+#: A branch name we are willing to push, defined by ALLOWLIST rather than by
+#: blocklisting the bad shapes we happen to think of — the blocklist approach is
+#: exactly what produced the `-f`-substring flake. Slashes are allowed (agent
+#: branches are `heal/...`, `work/...`), but a COLON is not: `heal/x:main` is a
+#: refspec `src:dst`, and `--` ends git's *option* parsing, not its *refspec*
+#: parsing, so a value with a colon can update an arbitrary remote ref. Nothing
+#: here can be read as a flag, a refspec, a ref path, or whitespace.
+_VALID_BRANCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*\Z")
 
 #: Refs an agent run may never write to, whatever it is asked. `main`/`master` are
 #: the obvious ones; `HEAD` and `@` are the ones someone reaches for when being
@@ -109,35 +119,51 @@ def default_branch(repo: Path) -> str:
     """
     local = _run_argv(["git", "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"], cwd=repo)
     if local.ok and local.stdout.strip():
-        return local.stdout.strip().rsplit("/", 1)[-1]
+        return _strip_ref_prefix(local.stdout.strip())
 
     # origin/HEAD is only populated by `clone` (and by `remote set-head`), so a
     # repo that was `init`-ed and given a remote by hand has none. Ask the remote.
     remote = _run_argv(["git", "ls-remote", "--symref", "origin", "HEAD"], cwd=repo)
     for line in remote.stdout.splitlines():
         if line.startswith("ref:"):
-            return line.split()[1].rsplit("/", 1)[-1]
+            return _strip_ref_prefix(line.split()[1])
     return ""
+
+
+def _strip_ref_prefix(ref: str) -> str:
+    """Drop the fixed ``refs/…/`` prefix, keeping the WHOLE branch name.
+
+    Not ``rsplit('/', 1)`` — a default branch may itself contain a slash
+    (``release/2026``), and taking only the last path component would return
+    ``2026``. :func:`is_protected` would then fail to recognise the real default
+    and let a push to it through. Strip the KNOWN prefix, keep everything after.
+    """
+    for prefix in ("refs/remotes/origin/", "refs/heads/", "refs/remotes/"):
+        if ref.startswith(prefix):
+            return ref[len(prefix) :]
+    return ref
 
 
 def is_protected(branch: str, repo_default: str = "") -> bool:
     """Whether ``branch`` is a ref an agent run may never write to (pure).
 
-    Refuses the always-protected names, the repo's own default branch, and
-    anything that is not a plain branch name — a value containing a slash-prefixed
-    ref path, a flag, or whitespace is not a branch we created, and the only safe
-    response to a ref we do not recognise is *no*.
+    Defined by ALLOWLIST: anything that is not a syntactically valid plain branch
+    name is protected, then the always-protected names and the repo's own default
+    are refused on top. The allowlist is the point — a blocklist of bad shapes is
+    what produced the ``-f``-substring flake, and it is one clever ref syntax away
+    from being wrong again. In particular ``heal/x:main`` is refused here because
+    the colon fails :data:`_VALID_BRANCH`, before it can reach git as a refspec.
     """
     candidate = branch.strip()
-    if not candidate:
-        return True
-    if candidate.startswith("-"):
-        return True  # a flag wearing a branch's clothes
+    if not _VALID_BRANCH.match(candidate):
+        return True  # not a plain branch name → not something we created → no
+    if ".." in candidate or candidate.endswith(".lock"):
+        return True  # git refspec/lock syntax that slips past a char-class check
+    if candidate.startswith(("refs/", "heads/", "remotes/", "origin/")):
+        return True  # a ref PATH, not a branch — slashes are legal, so match by prefix
     if candidate in _ALWAYS_PROTECTED:
         return True
-    if repo_default and candidate == repo_default:
-        return True
-    return candidate.startswith(("refs/", "origin/")) or any(c.isspace() for c in candidate)
+    return bool(repo_default) and candidate == repo_default
 
 
 def push_branch(worktree: Path, branch: str, repo_default: str = "") -> Landing:
@@ -155,21 +181,15 @@ def push_branch(worktree: Path, branch: str, repo_default: str = "") -> Landing:
                 "non-protected branch (ADR-007 §3)"
             ),
         )
-    # Note what is NOT here: a substring scan for "--force"/"-f" in the branch
-    # name. That was the first thing written, and it was wrong — `-f` is a
-    # substring of any branch whose random suffix begins with `f`
-    # (`heal/lint-alpha-f1a2b3c4`), so the boundary refused roughly one in
-    # sixteen of its own legitimate branches. A guard that randomly blocks real
-    # work gets deleted by the third person who hits it, and then there is no
-    # guard at all.
-    #
-    # The concern it was reaching for is real but structural, and is handled
-    # structurally: `is_protected` rejects any name starting with `-` or
-    # containing whitespace (so a flag cannot masquerade as a branch), and `--`
-    # below terminates git's option parsing outright. No `--force` appears in
-    # this argv because none is written — an agent run creates history, it does
-    # not rewrite it.
-    pushed = _run_argv(["git", "push", "--set-upstream", "origin", "--", branch], cwd=worktree)
+    # Defence in depth. `is_protected` already refused anything that is not a
+    # plain branch name, but the refspec is ALSO fully qualified on both sides
+    # rather than passing the bare name: `refs/heads/<b>:refs/heads/<b>` can only
+    # ever create/update the branch `<b>`, whereas a bare `heal/x:main` is a
+    # `src:dst` refspec that updates `main`. `--` ends git's *option* parsing, not
+    # its *refspec* parsing, so it does not help here — the qualification does.
+    # No `--force`: an agent run creates history, it does not rewrite it.
+    refspec = f"refs/heads/{branch}:refs/heads/{branch}"
+    pushed = _run_argv(["git", "push", "--set-upstream", "origin", "--", refspec], cwd=worktree)
     if not pushed.ok:
         return Landing(PUSH_FAILED, detail=pushed.stderr.strip()[-300:] or "git push failed")
     return Landing(LANDED)
