@@ -43,12 +43,21 @@ CI = "ci"
 #: The harness owns the write boundary (ADR-007 §3), and it must own it in one
 #: place: an agent that commits for itself is an agent whose output is no longer
 #: bounded by the thing that verifies it.
+#: The file a blocked agent writes to hand off to a human, instead of guessing.
+#: :mod:`work` detects it after the run and settles the run to ``needs-human``,
+#: keeping the worktree so ``work --attach`` can pick it up (ADR-006 §2).
+NEEDS_HUMAN_MARKER = "NEEDS_HUMAN.md"
+
 _CONTRACT = (
     "Do NOT commit, push, tag, or merge anything, and do not touch the default "
     "branch. You are working in a throwaway checkout. The orchestrator re-runs "
     "the failing gate itself, commits your work only if it now passes, and lands "
     "it as a pull request a human reviews. Your job is the smallest correct "
-    "change; leave unrelated files and working code alone."
+    "change; leave unrelated files and working code alone. "
+    f"If you hit an ambiguity you genuinely cannot resolve from the repository — a "
+    f"decision only a human can make — do NOT guess: write a file named "
+    f"`{NEEDS_HUMAN_MARKER}` in the repo root explaining what you need decided, and "
+    f"stop. A human will take over your checkout from there."
 )
 
 _UNTRUSTED_PREAMBLE = (

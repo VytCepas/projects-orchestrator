@@ -734,10 +734,20 @@ def _work_manage(args: argparse.Namespace) -> int | None:
 
 
 def _cmd_work(args: argparse.Namespace) -> int:
-    """Launch a tracked agent run, or list / tail / stop existing ones."""
+    """Launch a tracked agent run, or list / tail / stop / attach existing ones."""
     managed = _work_manage(args)
     if managed is not None:
         return managed
+
+    if args.attach:
+        if not args.project:
+            print("usage: work <project> --attach", file=sys.stderr)
+            return 2
+        run = work.attach(args.project)
+        if run is None:
+            print(f"no needs-human run for {args.project} to attach to", file=sys.stderr)
+            return 2
+        return 0
 
     if args.where:
         return _cmd_work_fanout(args)
@@ -1089,6 +1099,11 @@ def _add_work_arguments(sub: argparse._SubParsersAction[argparse.ArgumentParser]
         "--clear",
         metavar="RUN_ID",
         help="forget a settled run (e.g. after its PR merged) so it leaves the Work column",
+    )
+    work_sp.add_argument(
+        "--attach",
+        action="store_true",
+        help="open an interactive session in a project's needs-human run worktree",
     )
     work_sp.add_argument(
         "-n", "--lines", type=int, default=work.DEFAULT_LOG_LINES, help="trailing --logs lines"
