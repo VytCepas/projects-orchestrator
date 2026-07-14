@@ -267,3 +267,69 @@ def test_the_state_file_is_json_a_human_can_read() -> None:
 def test_state_dir_honors_xdg_state_home(tmp_path: Path) -> None:
     assert str(tmp_path / "state") in str(state_dir())
     assert os.environ["XDG_STATE_HOME"] in str(state_dir())
+
+
+# --- A corrupt pid must not describe itself as alive --------------------------
+
+
+def test_a_negative_pid_is_not_alive() -> None:
+    # On POSIX these are BROADCAST selectors, not process ids: kill(-1, 0)
+    # addresses every process the caller may signal and returns cleanly, so a
+    # corrupt record claiming pid -1 would read as a live, healthy run forever.
+    from projects_orchestrator.procs import pid_alive
+
+    assert pid_alive(-1) is False
+
+
+def test_pid_zero_is_not_alive() -> None:
+    # 0 means "my whole process group" — no better than -1.
+    from projects_orchestrator.procs import pid_alive
+
+    assert pid_alive(0) is False
+
+
+def test_a_corrupt_running_record_with_a_negative_pid_resolves_to_failed() -> None:
+    run = new_run("alpha", "t")
+    save(run)
+    path = state_dir() / f"{run.id}.json"
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw.update({"state": RUNNING, "pid": -1})
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    assert load(run.id).state == FAILED
+
+
+# --- Terminal states never leave, even against a stale handle ------------------
+
+
+def test_finish_does_not_bury_an_already_recorded_success() -> None:
+    # The caller holds an AgentRun captured at launch. Something else — a cleanup
+    # pass, a second CLI invocation, a --stop racing a natural finish — settled
+    # the same id since. Writing the stale copy would hide a real PR from every
+    # listing. First writer wins.
+    run = new_run("alpha", "t")
+    save(run)
+    finish(run, PR_OPENED, pr_url="https://example/pr/14")
+
+    settled = finish(run, ABANDONED, detail="stopped by the operator")
+    assert settled.state == PR_OPENED
+    assert settled.pr_url == "https://example/pr/14"
+    assert load(run.id).state == PR_OPENED
+
+
+def test_finish_still_records_a_success_after_the_agent_process_has_exited() -> None:
+    # The trap in guarding the above: `resolve` turns a running record whose
+    # process is gone into `failed`, and the agent's process is ALWAYS gone by
+    # the time we record pr-opened. A finish() that consulted the RESOLVED record
+    # would see `failed`, call it terminal, and refuse every real success.
+    proc = _sleeper()
+    run = mark_running(new_run("alpha", "t"), proc.pid)
+    proc.kill()
+    proc.wait()
+
+    settled = finish(run, PR_OPENED, pr_url="https://example/pr/9")
+    assert settled.state == PR_OPENED
+    assert load(run.id).pr_url == "https://example/pr/9"
+
+
+def test_finish_on_a_never_saved_run_still_records() -> None:
+    assert finish(new_run("alpha", "t"), FAILED, detail="boom").state == FAILED

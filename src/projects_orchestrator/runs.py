@@ -161,13 +161,18 @@ def _parse(raw: object) -> AgentRun | None:
         return None
     ticks = raw.get("start_ticks")
     try:
+        # A non-positive pid is not a process id on POSIX, it is a broadcast
+        # selector — see procs.pid_alive. A corrupt record claiming `pid: -1`
+        # must not be able to describe itself as alive, so it is normalised to
+        # "no pid" here as well as being rejected at the probe.
+        pid = int(raw.get("pid", 0))
         return AgentRun(
             id=str(raw["id"]),
             project=str(raw["project"]),
             task=str(raw.get("task", "")),
             state=str(raw.get("state", FAILED)),
             started_at=str(raw.get("started_at", "")),
-            pid=int(raw.get("pid", 0)),
+            pid=pid if pid > 0 else 0,
             start_ticks=int(ticks) if isinstance(ticks, int) else None,
             worktree=str(raw.get("worktree", "")),
             branch=str(raw.get("branch", "")),
@@ -204,13 +209,27 @@ def resolve(run: AgentRun) -> AgentRun:
     )
 
 
-def load(run_id: str) -> AgentRun | None:
-    """Read one run, reconciled against the world; ``None`` if unreadable."""
+def _read(run_id: str) -> AgentRun | None:
+    """Read one run exactly as recorded — **without** reconciling it.
+
+    The distinction is load-bearing, not stylistic. :func:`resolve` turns a
+    ``running`` record whose process is gone into ``failed`` — and by the time a
+    caller records ``pr-opened``, the agent's process is *always* gone. So a
+    ``finish`` that consulted :func:`load` would see ``failed`` (terminal), decide
+    the run had already settled, and refuse to record the success. Reconciliation
+    is for *reporting* what happened; it must not be consulted when *deciding*
+    what happened.
+    """
     try:
         raw = json.loads(_run_file(run_id).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    parsed = _parse(raw)
+    return _parse(raw)
+
+
+def load(run_id: str) -> AgentRun | None:
+    """Read one run, reconciled against the world; ``None`` if unreadable."""
+    parsed = _read(run_id)
     return resolve(parsed) if parsed else None
 
 
@@ -257,10 +276,23 @@ def finish(run: AgentRun, state: str, detail: str = "", pr_url: str = "") -> Age
     Returns:
         The finished run. A non-terminal ``state`` is coerced to ``failed``
         rather than quietly recorded: an unknown outcome is not a good one.
+
+        If the record on disk is **already terminal**, it is returned unchanged
+        and nothing is written. "Terminal states never leave" has to hold against
+        a *stale handle*, not merely against tidy sequential code: the caller here
+        holds an ``AgentRun`` captured at launch, and something else — a cleanup
+        pass, a second CLI invocation, a `--stop` racing a natural finish — may
+        have settled the same id since. Writing our stale copy would let a late
+        `abandoned` bury an already-recorded `pr-opened`, and the PR it names
+        would then be invisible to every listing. First writer wins.
     """
+    persisted = _read(run.id)
+    if persisted is not None and persisted.is_terminal:
+        return persisted
+
     settled = state if state in TERMINAL else FAILED
     ended = replace(
-        run,
+        persisted or run,
         state=settled,
         detail=detail or run.detail,
         pr_url=pr_url or run.pr_url,

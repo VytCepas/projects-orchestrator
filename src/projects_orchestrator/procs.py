@@ -56,7 +56,16 @@ def pid_alive(pid: int) -> bool:
     plain signal-0 probe would report as running; reap it with a non-blocking
     ``waitpid`` first. Non-children (the normal CLI case, where the child was
     reparented at our exit) fall through to the signal-0 probe.
+
+    **Non-positive pids are rejected outright, and this is not a formality.**
+    On POSIX these are broadcast selectors, not process ids: ``waitpid(-1, ...)``
+    reaps *any* exited child rather than ours, and ``kill(-1, 0)`` addresses
+    *every process the caller may signal* — so it returns cleanly, and a
+    corrupted state file claiming ``pid: -1`` would read as a live, healthy run
+    forever. ``0`` is no better: it means "my whole process group".
     """
+    if pid <= 0:
+        return False
     with contextlib.suppress(ChildProcessError, OSError):
         reaped, _ = os.waitpid(pid, os.WNOHANG)
         if reaped == pid:
