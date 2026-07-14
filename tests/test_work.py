@@ -386,3 +386,65 @@ def test_default_land_removes_the_worktree_on_success(
     )
     work._default_land(run)
     assert not Path(run.worktree).exists()
+
+
+# --- #123: clearing a settled run so it leaves the Work column -----------------
+
+
+def test_clear_forgets_a_pr_opened_run() -> None:
+    # The merge case: once a run's PR is dealt with, clearing forgets the record
+    # so the Work column stops showing it.
+    runs.save(runs.AgentRun(id="r1", project="alpha", task="t", state=runs.PR_OPENED))
+    assert work.clear("r1") == work.CLEARED
+    assert runs.load("r1") is None  # gone
+
+
+def test_clear_refuses_a_running_run(fleet_dir: Path) -> None:
+    # THE guard: forgetting a live run would strand the agent and hide open work.
+    # A running run must be stopped, not cleared.
+    run = work.launch(_repo(fleet_dir), "t", spawn=_recording_spawn([]))
+    assert run.state == runs.RUNNING
+    assert work.clear(run.id) == work.CLEAR_ACTIVE  # refused
+    assert runs.load(run.id) is not None  # still tracked
+
+
+def test_clear_an_unknown_run_reports_unknown() -> None:
+    assert work.clear("nope") == work.CLEAR_UNKNOWN
+
+
+def test_clear_reports_failure_when_the_record_cannot_be_removed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # THE guard for the silent-clear bug: if forget() cannot unlink the file, the
+    # record survives and the run reappears next read — so clear() must NOT report
+    # success. It returns CLEAR_FAILED, and the record is still there.
+    runs.save(runs.AgentRun(id="r1", project="alpha", task="t", state=runs.PR_OPENED))
+    monkeypatch.setattr(work.runs, "forget", lambda _run_id: False)
+    assert work.clear("r1") == work.CLEAR_FAILED
+    assert runs.load("r1") is not None  # NOT gone — the failure was honest
+
+
+def test_cli_work_clear(capsys) -> None:
+    from projects_orchestrator.__main__ import main
+
+    runs.save(runs.AgentRun(id="r1", project="alpha", task="t", state=runs.PR_OPENED))
+    assert main(["work", "--clear", "r1"]) == 0
+    assert "cleared r1" in capsys.readouterr().out
+    assert runs.load("r1") is None
+
+
+def test_cli_work_clear_refuses_active_run(fleet_dir: Path, capsys) -> None:
+    from projects_orchestrator.__main__ import main
+
+    run = work.launch(_repo(fleet_dir), "t", spawn=_recording_spawn([]))
+    assert main(["work", "--clear", run.id]) == 2
+    assert "still active" in capsys.readouterr().err
+
+
+def test_cli_work_clear_reports_a_failed_removal(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    from projects_orchestrator.__main__ import main
+
+    runs.save(runs.AgentRun(id="r1", project="alpha", task="t", state=runs.PR_OPENED))
+    monkeypatch.setattr(work.runs, "forget", lambda _run_id: False)
+    assert main(["work", "--clear", "r1"]) == 2
+    assert "could not be removed" in capsys.readouterr().err

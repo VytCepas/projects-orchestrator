@@ -378,6 +378,7 @@ Agent runs — a record whose life is longer than its process.
 - `def resolve` — Reconcile a recorded run against the world; never raises.
 - `def load` — Read one run, reconciled against the world; ``None`` if unreadable.
 - `def list_runs` — Read every run (optionally for one project), newest first.
+- `def latest_open_run` — The most recent run that is still OPEN WORK, or ``None``.
 - `def mark_running` — Record that ``run``'s agent is live under ``pid``, and persist it.
 - `def finish` — Move a run to a terminal state and persist it.
 - `def forget` — Delete one run's record; report whether it is gone (never raises).
@@ -451,6 +452,7 @@ Fleet upgrade planning — who is behind upstream project-init, and act on it.
 - `def list_runs` — Every run (optionally for one project), newest first, reconciled.
 - `def logs` — The tail of a run's captured agent output; ``[]`` when there is none yet.
 - `def stop` — Kill a running run's agent tree and record it ``abandoned``; ``None`` if unknown.
+- `def clear` — Forget a SETTLED run's record so it leaves the fleet's Work column.
 
 ### `projects_orchestrator/worktree.py`
 

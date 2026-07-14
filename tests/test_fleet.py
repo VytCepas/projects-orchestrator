@@ -5,8 +5,10 @@ from __future__ import annotations
 import datetime as dt
 from pathlib import Path
 
+import pytest
 from conftest import add_memory, git_init, make_project
 
+from projects_orchestrator import runs
 from projects_orchestrator.checks import CheckResult
 from projects_orchestrator.descriptor import load_descriptor
 from projects_orchestrator.fleet import (
@@ -20,6 +22,13 @@ from projects_orchestrator.fleet import (
     snapshot_row,
 )
 from projects_orchestrator.registry import FleetConfig, discover
+
+
+@pytest.fixture(autouse=True)
+def _isolate_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The Work column joins the runs store; keep each test's store hermetic so a
+    # real run on the dev machine cannot leak into a snapshot.
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
 
 
 def _snapshot(fleet_dir: Path, cached: dict | None = None, name: str = "alpha"):
@@ -66,6 +75,7 @@ def test_snapshot_row_has_all_columns(fleet_dir: Path) -> None:
         "Cloud",
         "Runnable",
         "Running",
+        "Work",
         "Memory",
         "Checked",
         "Trend",
@@ -255,3 +265,111 @@ def test_fleet_snapshots_reads_history_once(fleet_dir: Path, monkeypatch) -> Non
     fleet = discover(FleetConfig(roots=(fleet_dir,)))
     fleet_snapshots(fleet, fleet_dir / "no-cache.json")
     assert calls["n"] == 1
+
+
+# --- #123: the Work column surfaces open agent runs, and never hides them ------
+
+
+def test_cell_status_pr_opened_warns() -> None:
+    # An unreviewed PR is open work that wants a human — yellow, not neutral.
+    assert cell_status("pr-opened") == "warn"
+
+
+def test_cell_status_needs_human_is_bad() -> None:
+    # A run blocked on a person is the most urgent state the column can show.
+    assert cell_status("needs-human") == "bad"
+
+
+def test_work_cell_is_dash_with_no_runs(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")
+    assert snapshot_row(_snapshot(fleet_dir))["Work"] == "-"
+
+
+@pytest.mark.parametrize(
+    ("state", "shown"),
+    [
+        (runs.PR_OPENED, "pr-opened"),
+        (runs.NEEDS_HUMAN, "needs-human"),
+        (runs.QUEUED, "queued"),
+    ],
+)
+def test_work_cell_shows_open_run_states(fleet_dir: Path, state: str, shown: str) -> None:
+    make_project(fleet_dir, "alpha")
+    runs.save(
+        runs.AgentRun(
+            id="r", project="alpha", task="t", state=state, started_at="2026-01-01T00:00:00+00:00"
+        )
+    )
+    row = fleet_rows(fleet_snapshots(discover(FleetConfig(roots=(fleet_dir,)))))[0]
+    assert row["Work"] == shown
+
+
+def test_work_cell_shows_a_live_running_run(fleet_dir: Path) -> None:
+    # A RUNNING run is only shown while its process is genuinely alive — this test's
+    # own pid stands in for it, so reconciliation (dead pid -> failed, #113) keeps
+    # it running rather than resolving it away.
+    import os
+
+    make_project(fleet_dir, "alpha")
+    runs.mark_running(runs.new_run("alpha", "t"), os.getpid())
+    row = fleet_rows(fleet_snapshots(discover(FleetConfig(roots=(fleet_dir,)))))[0]
+    assert row["Work"] == "running"
+
+
+@pytest.mark.parametrize("settled", [runs.FAILED, runs.ABANDONED])
+def test_work_cell_hides_settled_runs(fleet_dir: Path, settled: str) -> None:
+    # A failed/abandoned run is a seen outcome, not open work; the column reads
+    # "-", so the operator's eye is drawn only to what still needs them.
+    make_project(fleet_dir, "alpha")
+    runs.save(
+        runs.AgentRun(
+            id="r", project="alpha", task="t", state=settled, started_at="2026-01-01T00:00:00+00:00"
+        )
+    )
+    row = fleet_rows(fleet_snapshots(discover(FleetConfig(roots=(fleet_dir,)))))[0]
+    assert row["Work"] == "-"
+
+
+def test_an_unreviewed_pr_is_never_hidden_across_rerenders(fleet_dir: Path) -> None:
+    # THE load-bearing invariant (#123 / ADR-006 §1): the process is long gone,
+    # but the PR is unreviewed, so re-rendering the fleet must keep showing it —
+    # an empty table must never quietly swallow open work.
+    make_project(fleet_dir, "alpha")
+    runs.save(
+        runs.AgentRun(
+            id="r",
+            project="alpha",
+            task="t",
+            state=runs.PR_OPENED,
+            pid=0,
+            started_at="2026-01-01T00:00:00+00:00",
+            pr_url="http://pr/1",
+        )
+    )
+    fleet = discover(FleetConfig(roots=(fleet_dir,)))
+    for _ in range(3):  # nothing changes between renders; the PR stays visible
+        assert fleet_rows(fleet_snapshots(fleet))[0]["Work"] == "pr-opened"
+
+
+def test_work_cell_prefers_the_newest_open_run_over_an_older_settled_one(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")
+    runs.save(
+        runs.AgentRun(
+            id="old",
+            project="alpha",
+            task="t",
+            state=runs.FAILED,
+            started_at="2026-01-01T00:00:00+00:00",
+        )
+    )
+    runs.save(
+        runs.AgentRun(
+            id="new",
+            project="alpha",
+            task="t",
+            state=runs.PR_OPENED,
+            started_at="2026-02-01T00:00:00+00:00",
+        )
+    )
+    row = fleet_rows(fleet_snapshots(discover(FleetConfig(roots=(fleet_dir,)))))[0]
+    assert row["Work"] == "pr-opened"

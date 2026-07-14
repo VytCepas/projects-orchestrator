@@ -20,6 +20,7 @@ from projects_orchestrator.history import load_history, primary_trend
 from projects_orchestrator.memory import ProjectMemory, load_project_memory
 from projects_orchestrator.pool import map_ordered
 from projects_orchestrator.registry import Fleet
+from projects_orchestrator.runs import AgentRun, latest_open_run, list_runs
 from projects_orchestrator.status import ProjectStatus, collect_status
 from projects_orchestrator.supervisor import RunState, running_state
 
@@ -40,6 +41,7 @@ COLUMNS = (
     "Cloud",
     "Runnable",
     "Running",
+    "Work",
     "Memory",
     "Checked",
     "Trend",
@@ -59,6 +61,8 @@ class ProjectSnapshot:
         hooks: Git-hook installation health (``ok``/``partial``/``missing``/``-``).
         run_state: Live supervised-process state, or ``None`` when not running.
         trend: Primary-gate history sparkline (``++x+``); empty when no history.
+        agent_run: The project's latest OPEN-work agent run (in flight, awaiting
+            review, or blocked on a human), or ``None`` when none is outstanding.
     """
 
     descriptor: ProjectDescriptor
@@ -69,12 +73,14 @@ class ProjectSnapshot:
     hooks: str
     run_state: RunState | None = None
     trend: str = ""
+    agent_run: AgentRun | None = None
 
 
 def collect_snapshot(
     descriptor: ProjectDescriptor,
     cached: dict[str, CheckResult] | None = None,
     trend: str = "",
+    agent_run: AgentRun | None = None,
 ) -> ProjectSnapshot:
     """Join all knowledge for one project; never raises.
 
@@ -84,6 +90,8 @@ def collect_snapshot(
         trend: Pre-computed primary-gate history sparkline (the history log is
             read once per fleet render, not once per project — see
             :func:`fleet_snapshots`).
+        agent_run: The project's latest open-work run (the runs store is read once
+            per fleet render, not once per project — see :func:`fleet_snapshots`).
 
     Returns:
         The joined snapshot.
@@ -97,6 +105,7 @@ def collect_snapshot(
         hooks=hook_health(descriptor),
         run_state=running_state(descriptor),
         trend=trend,
+        agent_run=agent_run,
     )
 
 
@@ -115,10 +124,24 @@ def fleet_snapshots(fleet: Fleet, cache_file: Path | None = None) -> list[Projec
     """
     cache = load_results(cache_file)
     history = load_history()  # read once per fleet render, sliced per project below
+    runs_by_project = _runs_by_project()  # likewise: one read of the runs store
     return map_ordered(
-        lambda d: collect_snapshot(d, cache.get(d.name), primary_trend(history, d.name)),
+        lambda d: collect_snapshot(
+            d,
+            cache.get(d.name),
+            primary_trend(history, d.name),
+            latest_open_run(runs_by_project.get(d.name, [])),
+        ),
         fleet.descriptors,
     )
+
+
+def _runs_by_project() -> dict[str, list[AgentRun]]:
+    """Group every recorded agent run by project (newest-first within each)."""
+    grouped: dict[str, list[AgentRun]] = {}
+    for run in list_runs():
+        grouped.setdefault(run.project, []).append(run)
+    return grouped
 
 
 def humanize_age(iso_timestamp: str, now: _dt.datetime | None = None) -> str:
@@ -218,6 +241,19 @@ def _running_cell(snapshot: ProjectSnapshot) -> str:
     return f"up {humanize_age(state.started_at)}"
 
 
+def _work_cell(snapshot: ProjectSnapshot) -> str:
+    """Render the project's open agent-run state (``-`` when none is outstanding).
+
+    This is the run STATE, not the process: a ``pr-opened`` run shows here long
+    after its process exited, because the work — an unreviewed PR — is still open
+    (ADR-006 §1). An empty cell means no open work, never a hidden one: settled
+    runs are filtered out upstream (:func:`~runs.latest_open_run`), so ``-`` is
+    the honest "nothing awaits you here".
+    """
+    run = snapshot.agent_run
+    return run.state if run is not None else "-"
+
+
 def _cloud_cell(snapshot: ProjectSnapshot) -> str:
     """Render the last-known cloud state (``?`` when never probed)."""
     result = snapshot.checks.get("cloud")
@@ -272,6 +308,7 @@ def snapshot_row(
         "Cloud": _cloud_cell(snapshot),
         "Runnable": "yes" if snapshot.descriptor.has_task("run") else "-",
         "Running": _running_cell(snapshot),
+        "Work": _work_cell(snapshot),
         "Memory": f"{memory_files} fact{'s' if memory_files != 1 else ''}",
         "Checked": _checked_cell(snapshot),
         "Trend": snapshot.trend or "-",
@@ -297,8 +334,8 @@ def fleet_rows(
 
 
 _GOOD_CELLS = frozenset({"pass", "clean", "ok", "none", "yes"})
-_BAD_CELLS = frozenset({"fail", "missing", "unhealthy"})
-_WARN_CELLS = frozenset({"dirty", "diverged", "behind", "partial", "outdated"})
+_BAD_CELLS = frozenset({"fail", "missing", "unhealthy", "needs-human"})
+_WARN_CELLS = frozenset({"dirty", "diverged", "behind", "partial", "outdated", "pr-opened"})
 
 GOOD = "good"
 BAD = "bad"

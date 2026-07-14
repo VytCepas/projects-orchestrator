@@ -718,6 +718,18 @@ def _work_manage(args: argparse.Namespace) -> int | None:
             return 2
         print(_render_run(stopped))
         return 0
+    if args.clear:
+        outcome = work.clear(args.clear)
+        if outcome == work.CLEARED:
+            print(f"cleared {args.clear}")
+            return 0
+        reason = {
+            work.CLEAR_UNKNOWN: "unknown run",
+            work.CLEAR_ACTIVE: "it is still active — stop it first",
+            work.CLEAR_FAILED: "its record could not be removed (check the state directory)",
+        }[outcome]
+        print(f"cannot clear {args.clear}: {reason}", file=sys.stderr)
+        return 2
     return None
 
 
@@ -1072,6 +1084,11 @@ def _add_work_arguments(sub: argparse._SubParsersAction[argparse.ArgumentParser]
     work_sp.add_argument("--logs", metavar="RUN_ID", help="tail one run's captured output")
     work_sp.add_argument(
         "--stop", metavar="RUN_ID", help="kill a running agent and mark it abandoned"
+    )
+    work_sp.add_argument(
+        "--clear",
+        metavar="RUN_ID",
+        help="forget a settled run (e.g. after its PR merged) so it leaves the Work column",
     )
     work_sp.add_argument(
         "-n", "--lines", type=int, default=work.DEFAULT_LOG_LINES, help="trailing --logs lines"

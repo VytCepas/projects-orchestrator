@@ -56,6 +56,13 @@ ABANDONED = "abandoned"
 #: even though the *work* is not, and conflating those is how open PRs go unread.
 TERMINAL = frozenset({PR_OPENED, FAILED, NEEDS_HUMAN, ABANDONED})
 
+#: States that represent OPEN WORK an operator still owns: about to start, in
+#: flight, awaiting review, or blocked on a human. A run in one of these is what
+#: the fleet's Work column must never hide (#123). ``failed``/``abandoned`` are
+#: excluded deliberately: they are settled outcomes the operator has already seen
+#: (a failed run even keeps its worktree as evidence), not work still in the air.
+OPEN_WORK = frozenset({QUEUED, RUNNING, PR_OPENED, NEEDS_HUMAN})
+
 _DIED_WITHOUT_OUTCOME = "the run's process exited without recording an outcome"
 
 
@@ -239,6 +246,18 @@ def list_runs(project: str = "") -> list[AgentRun]:
             continue
         runs.append(resolve(parsed))
     return sorted(runs, key=lambda run: run.started_at, reverse=True)
+
+
+def latest_open_run(runs: list[AgentRun]) -> AgentRun | None:
+    """The most recent run that is still OPEN WORK, or ``None``.
+
+    "Open work" is :data:`OPEN_WORK`: queued, running, awaiting review, or blocked
+    on a human. Given runs newest-first (as :func:`list_runs` returns them), this
+    is the run the fleet's Work column should show for a project — and returning
+    ``None`` when every run has settled is how the column reads ``-`` rather than
+    surfacing an old failure as if it were live work.
+    """
+    return next((run for run in runs if run.state in OPEN_WORK), None)
 
 
 def mark_running(run: AgentRun, pid: int) -> AgentRun:

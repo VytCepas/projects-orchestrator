@@ -21,6 +21,7 @@ from projects_orchestrator.runs import (
     AgentRun,
     finish,
     forget,
+    latest_open_run,
     list_runs,
     load,
     mark_running,
@@ -328,3 +329,21 @@ def test_finish_still_records_a_success_after_the_agent_process_has_exited() -> 
 
 def test_finish_on_a_never_saved_run_still_records() -> None:
     assert finish(new_run("alpha", "t"), FAILED, detail="boom").state == FAILED
+
+
+def test_latest_open_run_returns_the_newest_open_run() -> None:
+    newest_open = AgentRun(id="a", project="p", task="t", state=PR_OPENED)
+    older_open = AgentRun(id="b", project="p", task="t", state=RUNNING)
+    assert latest_open_run([newest_open, older_open]) is newest_open
+
+
+def test_latest_open_run_skips_settled_runs_to_find_an_open_one() -> None:
+    settled = AgentRun(id="a", project="p", task="t", state=FAILED)
+    open_run = AgentRun(id="b", project="p", task="t", state=NEEDS_HUMAN)
+    assert latest_open_run([settled, open_run]) is open_run
+
+
+def test_latest_open_run_is_none_when_all_settled() -> None:
+    a = AgentRun(id="a", project="p", task="t", state=FAILED)
+    b = AgentRun(id="b", project="p", task="t", state=ABANDONED)
+    assert latest_open_run([a, b]) is None
