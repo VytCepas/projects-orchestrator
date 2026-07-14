@@ -296,6 +296,14 @@ Bounded thread-pool fan-out for per-project engine work.
 - `def default_jobs` — Return the default worker count: ``min(8, cpu count)``, at least 1.
 - `def map_ordered` — Apply ``fn`` to every item concurrently, preserving input order.
 
+### `projects_orchestrator/procs.py`
+
+Is that pid still ours? — process liveness, shared by every run tracker.
+
+- `def proc_start_ticks` — Read a pid's start time (clock ticks since boot) from ``/proc``.
+- `def pid_alive` — Return whether a pid is a live process (not exited, not a zombie).
+- `def is_our_process` — Return whether ``pid`` is still the process we recorded, not an impostor.
+
 ### `projects_orchestrator/registry.py`
 
 Discover the fleet: which projects the orchestrator governs.
@@ -314,6 +322,22 @@ Bounded subprocess execution shared by every engine module.
 
 - `class RunResult` — Outcome of one shell command.
 - `def run_command` — Run a shell command with a hard timeout; never raises.
+
+### `projects_orchestrator/runs.py`
+
+Agent runs — a record whose life is longer than its process.
+
+- `class AgentRun` — One agent run, as recorded on disk.
+- `def state_dir` — Return the run-state directory, honoring ``$XDG_STATE_HOME``.
+- `def safe_name` — Reduce a project name to something safe to put in a filename.
+- `def new_run` — Mint a queued run. Nothing is launched and nothing is written yet.
+- `def save` — Persist a run; report success (never raises).
+- `def resolve` — Reconcile a recorded run against the world; never raises.
+- `def load` — Read one run, reconciled against the world; ``None`` if unreadable.
+- `def list_runs` — Read every run (optionally for one project), newest first.
+- `def mark_running` — Record that ``run``'s agent is live under ``pid``, and persist it.
+- `def finish` — Move a run to a terminal state and persist it.
+- `def forget` — Delete one run's record; report whether it is gone (never raises).
 
 ### `projects_orchestrator/server.py`
 
