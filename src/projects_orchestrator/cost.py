@@ -38,10 +38,18 @@ from pathlib import Path
 #: ``$0.00`` — see the module docstring.
 UNKNOWN = "—"
 
-#: Cap on how much of a run log we are willing to read to find the terminal
-#: object. A chatty agent's log is mostly tool output; the record we want is the
-#: last thing written, so we read the tail rather than the whole file.
+#: The fast path: a chatty agent's log is mostly tool output and the record we
+#: want is the last thing written, so try the tail before reading the whole file.
 _TAIL_BYTES = 65_536
+
+#: The fallback cap. The result object embeds the agent's entire final answer in
+#: its ``result`` field, so it can itself be far larger than the tail — a long
+#: diff easily clears 64 KiB. A tail-only read would start *inside* that object,
+#: decode only its nested ``usage`` (which carries no ``total_cost_usd``), and
+#: report a perfectly well-metered run as unmetered. That is a false unknown, and
+#: it under-reports spend on exactly the biggest runs — the opposite of this
+#: module's whole purpose. So when the tail yields nothing, widen the read.
+_MAX_BYTES = 16 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -191,6 +199,15 @@ def _scan(text: str) -> RunCost | None:
     return None
 
 
+def _tail(path: Path, limit: int) -> tuple[str, int]:
+    """Read the last ``limit`` bytes of a file, with the file's full size."""
+    with path.open("rb") as handle:
+        handle.seek(0, 2)
+        size = handle.tell()
+        handle.seek(max(0, size - limit))
+        return handle.read().decode("utf-8", errors="replace"), size
+
+
 def parse_log(path: Path | str) -> RunCost | None:
     """Recover a run's cost from its log; ``None`` when it cannot be known.
 
@@ -198,15 +215,25 @@ def parse_log(path: Path | str) -> RunCost | None:
     unreadable, truncated mid-write, or holds no result object because the run
     was killed before it could emit one. Every one of those is *unknown cost*,
     and none of them is *no cost*.
+
+    Read in two stages. The tail almost always holds the result object, so try
+    that first and pay nothing for the common case. But the object embeds the
+    agent's whole final answer, so it can be bigger than the tail window — and a
+    tail-only read would then land inside it and find only its nested ``usage``,
+    reporting a metered run as unmetered. So a miss escalates to a wider read
+    before we are willing to say "unknown", because a *false* unknown here would
+    silently under-report the spend of the largest runs.
     """
+    target = Path(path)
     try:
-        with Path(path).open("rb") as handle:
-            handle.seek(0, 2)
-            handle.seek(max(0, handle.tell() - _TAIL_BYTES))
-            text = handle.read().decode("utf-8", errors="replace")
+        text, size = _tail(target, _TAIL_BYTES)
+        found = _scan(text)
+        if found is None and size > _TAIL_BYTES:
+            text, _ = _tail(target, _MAX_BYTES)
+            found = _scan(text)
     except (OSError, ValueError):
         return None
-    return _scan(text)
+    return found
 
 
 def total(costs: Iterable[RunCost | None]) -> CostTotal:

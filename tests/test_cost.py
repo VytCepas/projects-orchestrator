@@ -136,6 +136,30 @@ def test_parse_log_reads_the_result_from_a_very_chatty_log(tmp_path: Path) -> No
     )
 
 
+def test_parse_log_meters_a_run_whose_result_object_exceeds_the_tail_window(
+    tmp_path: Path,
+) -> None:
+    # The result object embeds the agent's whole final answer, so a long diff makes
+    # the object itself bigger than the tail. A tail-only read lands INSIDE it and
+    # sees only the nested `usage` — which has no total_cost_usd — and would call a
+    # perfectly metered run unmetered. A false unknown under-reports the spend of
+    # the very largest runs, which is precisely backwards. Regression for #147.
+    fat = {**_RESULT, "result": "d" * 200_000}
+    assert parse_log(_log(tmp_path, json.dumps(fat))).usd == pytest.approx(1.2345)
+
+
+def test_parse_log_meters_a_fat_result_that_is_preceded_by_chatter(tmp_path: Path) -> None:
+    fat = {**_RESULT, "result": "d" * 100_000}
+    chatter = "tool output\n" * 5_000
+    assert parse_log(_log(tmp_path, chatter + json.dumps(fat))).usd == pytest.approx(1.2345)
+
+
+def test_parse_log_of_a_killed_run_with_a_huge_log_is_still_unknown(tmp_path: Path) -> None:
+    # The widened read must not invent a cost where there is none — a big log with
+    # no result object is still unmetered.
+    assert parse_log(_log(tmp_path, "y" * 200_000)) is None
+
+
 # --- from_payload / from_record ------------------------------------------------
 
 
