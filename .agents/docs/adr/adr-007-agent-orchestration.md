@@ -228,3 +228,7 @@ the briefing. Nothing else.
   may touch. Read-only, holding no write credentials, degrading to `unknown` when
   unauthenticated; an unauthed scan reporting "zero orphans" would be the worst
   possible lie this system could tell.
+
+  *Since accepted:* this is **built** — `orphans` (#126, `orphans.py` +
+  `adapters/gcp.py`), exactly as specified above, down to refusing an unscoped
+  scan rather than declaring an estate clean it never fully looked at.

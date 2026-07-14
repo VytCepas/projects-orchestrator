@@ -18,6 +18,10 @@ type: project
   **Why:** Trends and digests need durable state the last-known cache can't hold; keeping it under XDG (not the repo) keeps it machine-local.
   **How to apply:** New persisted state goes under the same XDG dir with atomic writes (temp + replace) and never-raise load; isolate `XDG_STATE_HOME` in tests.
 
-- **Fact:** Open follow-up #64 — a sparkline trend column in the fleet table — is deferred because it threads `history` data through the shared snapshot view-model that ADR-004 consolidated.
-  **Why:** It touches every surface, so it deserves its own PR with golden-output tests rather than riding along with the history persistence work.
-  **How to apply:** Read the history log once per fleet render (not per project — avoid N+1), add `Trend` to `COLUMNS` + `snapshot_row`, let every surface inherit it via `fleet_rows`/`cell_status`.
+- **Fact:** The 2026-07-14 arc (PO-112 → PO-127, PRs #125–#145) built ADR-007 end to end: agent runs are isolated in throwaway worktrees, bounded to a draft PR, carry no cloud credentials, and their records outlive their processes. `work`, `campaign`, `heal`, `orphans` and `--attach` are all live. PO-146 then closed ADR-007's one stated deferral — a run now records what it cost.
+  **Why:** The fleet already knew what was wrong and where; the missing verb was one that acts on it. Cost metering came last because a run must be *controllable* before it is worth making *accountable*.
+  **How to apply:** New agent-facing work goes through `runs.AgentRun` + the `landing` write boundary — never a second path that can push. When surfacing cost, an unmetered run (killed/timed-out) renders as an em-dash and is counted, never summed as `$0.00`.
+
+- **Fact:** Still genuinely deferred, each stated in an ADR and none tracked by an issue: **deploy poll-until-settled** (ADR-005 — `trigger_deploy` confirms *queued*, not *succeeded*), a **scheduled `heal` trigger** (ADR-006 — the `HealResult` shape is deliberately reusable by a periodic job that does not exist), and **mutating dashboard actions** (promised in #52/#56, never filed; `server.py` is `do_GET`-only and it needs an auth/CSRF design first). **Live RAG querying** (#70/#74) is blocked upstream on project-init#605/#606 freezing the endpoint contract.
+  **Why:** Recording them here because the ADRs are the only place they exist — an empty issue tracker reads as "nothing left to do", which is false.
+  **How to apply:** Before starting one, re-read its ADR consequence; file the issue first (`create_issue.sh`), since none of them has one.

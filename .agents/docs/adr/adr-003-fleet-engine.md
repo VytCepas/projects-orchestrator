@@ -43,8 +43,14 @@ broken, missing, or half-scaffolded.
    the text table, `--json`, and the Textual TUI identically.
 6. **Deterministic controller, LLM-free.** `controller.py` maps text to a
    typed `Intent` (pure `parse_command`) and dispatches to the engine.
-   `/ask` is a reserved seam that reports "not enabled" — any future
-   natural-language mode may only *select among existing intents*.
+   `/ask` is a seam for an optional natural-language mode that may only
+   *select among existing intents*.
+
+   *Since accepted:* that seam is now filled (`ask.py`), and the constraint
+   held — `/ask` resolves a question to an **existing** intent and the
+   deterministic dispatcher still executes it. It is opt-in and off by
+   default (`ORCHESTRATOR_ASK_MODEL` + `ANTHROPIC_API_KEY`), and it may
+   *propose* a `work` run but is structurally unable to launch one (#124).
 7. **Dependencies:** `pyyaml` (runtime) for robust contract parsing;
    `textual` only as the optional `tui` extra so the core stays light.
 
