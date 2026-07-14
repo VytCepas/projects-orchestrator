@@ -116,6 +116,23 @@ Persistent memory of the last known check results.
 - `def load_results` — Load cached check results; never raises.
 - `def save_results` — Merge new results into the cache and write it back; never raises.
 
+### `projects_orchestrator/campaign.py`
+
+Campaigns — one declarative file that fans an agent across the fleet, safely.
+
+- `class CampaignError` — A campaign file that cannot be honoured — bad schema, field, or selector.
+- `class Policy` — How a campaign is allowed to run.
+- `class Campaign` — A declarative fleet task: who to run on, what to do, and under what policy.
+- `def parse_campaign` — Build a :class:`Campaign` from a decoded document; raise on anything off.
+- `def load_campaign` — Read and validate a campaign file; raise :class:`CampaignError` on any fault.
+- `def outstanding` — The projects still needing work: matched by the selector, not yet handled.
+- `class Outcome` — What became of one launched run.
+- `class Seams` — The side-effecting operations execution depends on, injected for testing.
+- `def default_seams` — The production wiring: real launches, reconciled polls, real time.
+- `def execute` — Run every descriptor under the policy; return each one's outcome.
+- `class CampaignReport` — The result of one campaign invocation, ready to render.
+- `def summarize` — Fold a batch's outcomes into a report.
+
 ### `projects_orchestrator/capabilities.py`
 
 Read each project's capability inventory — the "who exposes what" layer.
