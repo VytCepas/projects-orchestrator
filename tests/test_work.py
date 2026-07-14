@@ -252,6 +252,43 @@ def test_the_default_agent_runs_with_a_scrubbed_environment(
     assert env["HOME"] != "/home/me"
 
 
+def test_no_cloud_credential_reaches_the_agent_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # #127, criterion 1: an agent cannot gcloud/gsutil/flyctl its way to
+    # production. Blocking the `deploy` verb is not enough — the SHELL under it
+    # must carry no cloud credential of any provider. Set one token per platform
+    # in the operator env and prove NONE survive into the real agent launch env,
+    # and that HOME is redirected so file-backed creds (~/.config/gcloud, ~/.aws)
+    # are unreachable too.
+    families = {
+        "GOOGLE_APPLICATION_CREDENTIALS": "/keys/gcp.json",
+        "CLOUDSDK_CORE_PROJECT": "prod",
+        "GOOGLE_CLOUD_PROJECT": "prod",
+        "AWS_SECRET_ACCESS_KEY": "leak",
+        "AWS_SESSION_TOKEN": "leak",
+        "FLY_API_TOKEN": "leak",
+        "GH_TOKEN": "leak",
+        "GITHUB_TOKEN": "leak",
+    }
+    for key, value in families.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("HOME", "/home/operator")
+    seen: dict[str, object] = {}
+
+    def spy(*_args: object, **kwargs: object) -> object:
+        seen.update(kwargs)
+        raise OSError("stop before a real claude runs")
+
+    monkeypatch.setattr(work.subprocess, "run", spy)
+    work._default_agent(tmp_path, "deploy me to prod", tmp_path / "log")
+
+    env = seen["env"]
+    for key in families:
+        assert key not in env, f"{key} leaked into the agent environment"
+    assert env["HOME"] != "/home/operator"  # file-backed creds unreachable too
+
+
 def test_the_default_spawn_starts_a_detached_session(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
