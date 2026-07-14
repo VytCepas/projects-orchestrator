@@ -941,7 +941,18 @@ def _cmd_orphans(args: argparse.Namespace) -> int:
     that was never looked at (ADR-003).
     """
     fleet = _discover(args)
-    report = orphans.find_orphans(fleet, gcp.search_resources())
+    if not args.scope:
+        # No scope means gcloud would inventory only the configured project — a
+        # partial scan a multi-project fleet must not mistake for a complete one.
+        # Refuse rather than declare a clean estate we never fully looked at.
+        print(
+            "orphans: a --scope is required (projects/<id>, folders/<id>, or "
+            "organizations/<id>) — an unscoped scan covers only the configured "
+            "project and cannot declare the fleet's estate clean.",
+            file=sys.stderr,
+        )
+        return 2
+    report = orphans.find_orphans(fleet, gcp.search_resources(args.scope))
     if report.is_unknown:
         print(
             "orphans: unknown — could not read the GCP inventory "
@@ -1297,6 +1308,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub.choices["logs"].add_argument(
         "-n", "--lines", type=int, default=40, help="trailing lines to show (default 40)"
+    )
+    sub.choices["orphans"].add_argument(
+        "--scope",
+        help="GCP scope to inventory: projects/<id>, folders/<id>, or organizations/<id>",
     )
     _add_work_arguments(sub)
     campaign_sp = sub.choices["campaign"]

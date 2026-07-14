@@ -5,12 +5,15 @@ accounts for: a service someone deployed and forgot, or one whose repo was never
 brought under management. It is the raw material for the project-init rollout
 (#122) — an orphan gets a repo, gets project-init, and becomes fleet.
 
-The join is by name: a resource is accounted for when its display name matches a
-fleet project's deploy app (the Cloud Run service name it ships) or the project's
-own name. Matching is deliberately exact and case-insensitive rather than fuzzy —
-a substring rule would let a project named ``api`` silently "account for" every
-resource with ``api`` in its name, hiding real orphans, which is the one failure
-this report exists to prevent.
+The join is by name AND region. A resource is accounted for when either its
+display name matches a fleet project's own name (region-agnostic — a repo governs
+resources it named, wherever they run), or its (display name, location) matches a
+service project's (deploy app, deploy region). The region is part of the key
+because Cloud Run service names are not unique across regions: a stray ``web-svc``
+in another region must not be hidden by the fleet's legitimate ``web-svc`` in its
+declared one. Matching is exact and case-insensitive rather than fuzzy — a
+substring rule would let a project named ``api`` silently "account for" every
+resource with ``api`` in its name, hiding real orphans.
 
 **Unknown is not empty (ADR-003).** When the scan could not run, the report says
 so; it does not claim zero orphans. A blank estate and an unauthenticated scan
@@ -46,19 +49,34 @@ class OrphanReport:
         return not self.scanned
 
 
-def accounted_names(fleet: Fleet) -> frozenset[str]:
-    """Every name the fleet accounts for: each project's name and its deploy app.
+#: The sentinel region for a match that ignores location — a bare project-name
+#: match, which governs a resource wherever it runs.
+_ANY_REGION = ""
 
-    Lower-cased so the match is case-insensitive. Blank apps (non-service projects)
-    contribute nothing — they own no cloud resource to match against.
+
+def accounted_keys(fleet: Fleet) -> frozenset[tuple[str, str]]:
+    """Every (name, region) the fleet accounts for, lower-cased.
+
+    Each project contributes ``(name, _ANY_REGION)`` — its repo name governs any
+    same-named resource regardless of region. A service project ALSO contributes
+    ``(deploy app, deploy region)``, a region-qualified key: the app name only
+    accounts for a resource in the declared region. Blank apps (non-service
+    projects) add no app key — they own no cloud service to match against.
     """
-    names: set[str] = set()
+    keys: set[tuple[str, str]] = set()
     for descriptor in fleet.descriptors:
-        names.add(descriptor.name.lower())
+        keys.add((descriptor.name.lower(), _ANY_REGION))
         deploy = descriptor.deploy
         if deploy is not None and deploy.app.strip():
-            names.add(deploy.app.strip().lower())
-    return frozenset(names)
+            keys.add((deploy.app.strip().lower(), deploy.region.strip().lower()))
+    return frozenset(keys)
+
+
+def _is_accounted(resource: GcpResource, keys: frozenset[tuple[str, str]]) -> bool:
+    """Whether ``keys`` accounts for ``resource`` — by bare name, or name+region."""
+    name = resource.display_name.strip().lower()
+    location = resource.location.strip().lower()
+    return (name, _ANY_REGION) in keys or (name, location) in keys
 
 
 def find_orphans(fleet: Fleet, resources: list[GcpResource] | None) -> OrphanReport:
@@ -71,6 +89,6 @@ def find_orphans(fleet: Fleet, resources: list[GcpResource] | None) -> OrphanRep
     """
     if resources is None:
         return OrphanReport(orphans=(), scanned=False)
-    accounted = accounted_names(fleet)
-    orphans = tuple(r for r in resources if r.display_name.strip().lower() not in accounted)
+    keys = accounted_keys(fleet)
+    orphans = tuple(r for r in resources if not _is_accounted(r, keys))
     return OrphanReport(orphans=orphans, scanned=True)

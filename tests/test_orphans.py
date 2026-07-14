@@ -21,9 +21,16 @@ def _fleet(fleet_dir: Path):
     return discover(FleetConfig(roots=(fleet_dir,)))
 
 
-def _resource(display_name: str, asset_type: str = "run.googleapis.com/Service") -> GcpResource:
+def _resource(
+    display_name: str,
+    asset_type: str = "run.googleapis.com/Service",
+    location: str = "",
+) -> GcpResource:
     return GcpResource(
-        name=f"//run/{display_name}", asset_type=asset_type, display_name=display_name
+        name=f"//run/{display_name}",
+        asset_type=asset_type,
+        display_name=display_name,
+        location=location,
     )
 
 
@@ -57,23 +64,52 @@ def test_a_resource_named_for_a_project_is_accounted_for(fleet_dir: Path) -> Non
     assert report.orphans == ()
 
 
-def test_a_resource_matching_a_deploy_app_is_accounted_for(fleet_dir: Path) -> None:
-    # A service project ships a deploy.app that is its Cloud Run service name (the
-    # v2 template renders it as `<name>-svc`); a resource by that name is governed,
-    # even though it differs from the repo name.
+def test_a_resource_matching_a_deploy_app_and_region_is_accounted_for(fleet_dir: Path) -> None:
+    # A service project ships a deploy.app (the v2 template renders `<name>-svc`)
+    # in a deploy.region (`fra`); a resource by that name IN THAT REGION is governed.
     make_project_v2(fleet_dir, "web", deploy_target="cloud-run")
-    report = orphans.find_orphans(_fleet(fleet_dir), [_resource("web-svc")])
+    report = orphans.find_orphans(_fleet(fleet_dir), [_resource("web-svc", location="fra")])
     assert report.orphans == ()
 
 
-def test_accounted_names_includes_project_and_app(fleet_dir: Path) -> None:
+def test_a_same_named_resource_in_another_region_is_an_orphan(fleet_dir: Path) -> None:
+    # THE P2 guard: Cloud Run names are not unique across regions. The fleet owns
+    # `web-svc` in `fra`; a stray `web-svc` in `us-central1` is a DIFFERENT service
+    # and must not be hidden by the name alone.
     make_project_v2(fleet_dir, "web", deploy_target="cloud-run")
-    names = orphans.accounted_names(_fleet(fleet_dir))
-    assert "web" in names
-    assert "web-svc" in names
+    report = orphans.find_orphans(_fleet(fleet_dir), [_resource("web-svc", location="us-central1")])
+    assert [o.display_name for o in report.orphans] == ["web-svc"]
+
+
+def test_accounted_keys_includes_project_and_app_region(fleet_dir: Path) -> None:
+    make_project_v2(fleet_dir, "web", deploy_target="cloud-run")
+    keys = orphans.accounted_keys(_fleet(fleet_dir))
+    assert ("web", "") in keys  # repo name, any region
+    assert ("web-svc", "fra") in keys  # app, its declared region
 
 
 # --- The CLI surface -----------------------------------------------------------
+
+
+_SCOPE = ("--scope", "projects/p")
+
+
+def test_cli_orphans_without_a_scope_refuses_and_does_not_claim_zero(
+    fleet_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    # THE P1 guard: an unscoped scan covers only the configured project. It must
+    # NOT run and declare a clean estate — it refuses (exit 2), and never calls the
+    # scan at all.
+    from projects_orchestrator.__main__ import gcp, main
+
+    make_project(fleet_dir, "alpha")
+    scanned: list[int] = []
+    monkeypatch.setattr(gcp, "search_resources", lambda *_a, **_k: scanned.append(1) or [])
+    assert main(["orphans", "--root", str(fleet_dir)]) == 2
+    assert scanned == []  # never scanned
+    err = capsys.readouterr()
+    assert "scope is required" in err.err
+    assert "no orphans" not in err.out
 
 
 def test_cli_orphans_unknown_exits_nonzero_and_does_not_claim_zero(
@@ -84,7 +120,7 @@ def test_cli_orphans_unknown_exits_nonzero_and_does_not_claim_zero(
 
     make_project(fleet_dir, "alpha")
     monkeypatch.setattr(gcp, "search_resources", lambda *_a, **_k: None)
-    assert main(["orphans", "--root", str(fleet_dir)]) == 1
+    assert main(["orphans", "--root", str(fleet_dir), *_SCOPE]) == 1
     err = capsys.readouterr()
     assert "unknown" in err.err.lower()
     assert "no orphans" not in err.out
@@ -99,7 +135,7 @@ def test_cli_orphans_lists_unaccounted_resources(
     monkeypatch.setattr(
         gcp, "search_resources", lambda *_a, **_k: [_resource("stray"), _resource("alpha")]
     )
-    assert main(["orphans", "--root", str(fleet_dir)]) == 0
+    assert main(["orphans", "--root", str(fleet_dir), *_SCOPE]) == 0
     out = capsys.readouterr().out
     assert "stray" in out
     assert "1 orphan" in out
@@ -112,7 +148,7 @@ def test_cli_orphans_clean_estate_says_so(
 
     make_project(fleet_dir, "alpha")
     monkeypatch.setattr(gcp, "search_resources", lambda *_a, **_k: [_resource("alpha")])
-    assert main(["orphans", "--root", str(fleet_dir)]) == 0
+    assert main(["orphans", "--root", str(fleet_dir), *_SCOPE]) == 0
     assert "no orphans" in capsys.readouterr().out
 
 
@@ -123,6 +159,6 @@ def test_cli_orphans_json(fleet_dir: Path, monkeypatch: pytest.MonkeyPatch, caps
 
     make_project(fleet_dir, "alpha")
     monkeypatch.setattr(gcp, "search_resources", lambda *_a, **_k: [_resource("stray")])
-    assert main(["orphans", "--root", str(fleet_dir), "--json"]) == 0
+    assert main(["orphans", "--root", str(fleet_dir), "--json", *_SCOPE]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload[0]["display_name"] == "stray"
