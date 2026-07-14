@@ -558,3 +558,60 @@ def test_cli_work_attach_without_a_needs_human_run_exits_two(fleet_dir: Path, ca
     _repo(fleet_dir)  # a project, but no needs-human run
     assert main(["work", "alpha", "--attach", "--root", str(fleet_dir)]) == 2
     assert "no needs-human run" in capsys.readouterr().err
+
+
+def test_a_pre_existing_marker_left_untouched_is_not_a_handoff(fleet_dir: Path) -> None:
+    # A repo that already ships a NEEDS_HUMAN.md (a tracked doc, or one left from a
+    # prior handoff) must NOT wedge every successful run into needs-human.
+    run = _launched(fleet_dir)
+    (Path(run.worktree) / work.briefing.NEEDS_HUMAN_MARKER).write_text("old doc", encoding="utf-8")
+    result = work.run_agent(
+        run.id,
+        agent=lambda *_: True,  # a clean run that never touches the marker
+        land=lambda r: runs.finish(r, runs.PR_OPENED, pr_url="https://x/1"),
+    )
+    assert result.state == runs.PR_OPENED  # landed, not falsely handed off
+
+
+def test_a_pre_existing_marker_the_agent_changes_is_a_handoff(fleet_dir: Path) -> None:
+    run = _launched(fleet_dir)
+    marker = Path(run.worktree) / work.briefing.NEEDS_HUMAN_MARKER
+    marker.write_text("old doc", encoding="utf-8")
+
+    def agent(worktree: Path, _p: str, _l: Path) -> bool:
+        (worktree / work.briefing.NEEDS_HUMAN_MARKER).write_text(
+            "now I am blocked", encoding="utf-8"
+        )
+        return True
+
+    result = work.run_agent(run.id, agent=agent, land=lambda r: r)
+    assert result.state == runs.NEEDS_HUMAN
+    assert "now I am blocked" in result.detail
+
+
+def test_attach_returns_none_when_the_session_cannot_start(fleet_dir: Path) -> None:
+    # `claude` missing or the worktree pruned raises OSError; attach must degrade
+    # to None (ADR-003), not crash.
+    run = _launched(fleet_dir)
+    runs.finish(run, runs.NEEDS_HUMAN, detail="which db?")
+
+    def broken_session(*_a: object) -> None:
+        raise OSError("claude: command not found")
+
+    assert work.attach("alpha", session=broken_session) is None
+
+
+def test_cli_work_attach_reports_a_session_failure(
+    fleet_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    from projects_orchestrator.__main__ import main
+
+    run = _launched(fleet_dir)
+    runs.finish(run, runs.NEEDS_HUMAN, detail="which db?")
+
+    def broken(*_a: object) -> None:
+        raise OSError("no claude")
+
+    monkeypatch.setattr(work, "_default_session", broken)
+    assert main(["work", "alpha", "--attach", "--root", str(fleet_dir)]) == 2
+    assert "could not open a session" in capsys.readouterr().err

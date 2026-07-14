@@ -743,9 +743,15 @@ def _cmd_work(args: argparse.Namespace) -> int:
         if not args.project:
             print("usage: work <project> --attach", file=sys.stderr)
             return 2
-        run = work.attach(args.project)
-        if run is None:
+        if work.needs_human_run(args.project) is None:
             print(f"no needs-human run for {args.project} to attach to", file=sys.stderr)
+            return 2
+        if work.attach(args.project) is None:
+            print(
+                f"could not open a session for {args.project} "
+                "(is `claude` installed, and the run's worktree still present?)",
+                file=sys.stderr,
+            )
             return 2
         return 0
 

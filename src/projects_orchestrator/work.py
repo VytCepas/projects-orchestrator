@@ -249,31 +249,33 @@ def run_agent(
     if prompt is None:
         return runs.finish(run, runs.FAILED, detail="the staged briefing was missing")
 
-    ok = agent(Path(run.worktree), prompt, Path(run.log_path))
+    worktree = Path(run.worktree)
+    # Snapshot the marker BEFORE the run: a repo may already ship a `NEEDS_HUMAN.md`
+    # (a tracked doc, or one committed after a previous handoff). Without this, that
+    # pre-existing file would make EVERY successful run read as needs-human and
+    # wedge the project. Only a marker the agent newly wrote or changed is a handoff.
+    marker_before = _read_marker(worktree)
+    ok = agent(worktree, prompt, Path(run.log_path))
+    marker_after = _read_marker(worktree)
+
     # The needs-human handoff takes precedence over BOTH landing and failure: an
     # agent that hit an ambiguity and wrote the marker explained itself, so it must
     # not be buried as a generic failure, and its (uncommitted) work must not be
     # landed unreviewed. The worktree is kept for `work --attach` to pick up.
-    reason = _needs_human_reason(Path(run.worktree))
-    if reason is not None:
+    if marker_after is not None and marker_after != marker_before:
+        reason = marker_after or "the agent stopped and asked for a human (no reason given)"
         return runs.finish(run, runs.NEEDS_HUMAN, detail=reason)
     if not ok:
         return runs.finish(run, runs.FAILED, detail="the agent did not complete (see the run log)")
     return land(run)
 
 
-def _needs_human_reason(worktree: Path) -> str | None:
-    """The blocked agent's handoff note, or ``None`` when it did not write one.
-
-    An empty marker still counts as a handoff — the agent stopped and asked, which
-    is the signal that matters — so it degrades to a generic reason rather than
-    being read as "no marker" and landed anyway.
-    """
+def _read_marker(worktree: Path) -> str | None:
+    """The NEEDS_HUMAN marker's stripped content, or ``None`` when it is absent."""
     try:
-        text = (worktree / briefing.NEEDS_HUMAN_MARKER).read_text(encoding="utf-8").strip()
+        return (worktree / briefing.NEEDS_HUMAN_MARKER).read_text(encoding="utf-8").strip()
     except OSError:
         return None
-    return text or "the agent stopped and asked for a human (no reason given)"
 
 
 def _read_prompt(run_id: str) -> str | None:
@@ -374,7 +376,13 @@ def attach(project: str, *, session: AttachSession | None = None) -> runs.AgentR
     if run is None:
         return None
     prompt = _read_prompt(run.id) or ""
-    session(Path(run.worktree), prompt, run.detail)
+    try:
+        session(Path(run.worktree), prompt, run.detail)
+    except OSError:
+        # `claude` is not on PATH, or the worktree was pruned. Never raise (ADR-003):
+        # return None so the CLI reports a clean error instead of a traceback. The
+        # caller distinguishes this from "no run" by having checked needs_human_run.
+        return None
     return run
 
 
