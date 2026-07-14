@@ -34,6 +34,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from projects_orchestrator import landing
 from projects_orchestrator import worktree as wt
 from projects_orchestrator.briefing import build_briefing, evidence_from_checks
 from projects_orchestrator.checks import CheckResult, collect_checks
@@ -276,18 +277,21 @@ def _default_agent_run(descriptor: ProjectDescriptor, prompt: str) -> AgentOutco
 def _default_open_pr(
     descriptor: ProjectDescriptor, branch: str, tasks: tuple[str, ...]
 ) -> PrOutcome:
-    """Open a PR for a pushed heal branch via ``gh``."""
+    """Open a DRAFT PR for a pushed heal branch, via the write boundary.
+
+    Draft, not ready-for-review: a ready PR is one click — or one auto-merge-on-
+    green rule — away from landing an agent's work with no human in the loop, which
+    is the one thing this system promises not to do.
+    """
     title = f"fix: repair failing {', '.join(tasks)} (automated)"
     body = (
         "Opened automatically by projects-orchestrator's heal command after a scoped "
         f"agent fixed and verified: {', '.join(tasks)}. Review before merging."
     )
-    args = ["gh", "pr", "create", "--title", title, "--body", body, "--head", branch]
-    result = _run_argv(args, cwd=descriptor.path, timeout=GIT_TIMEOUT)
-    if not result.ok:
-        return PrOutcome(ok=False, detail=result.stderr.strip()[-300:] or "gh pr create failed")
-    url = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
-    return PrOutcome(ok=True, url=url)
+    landed = landing.open_draft_pr(descriptor.path, branch, title, body)
+    if not landed.ok:
+        return PrOutcome(ok=False, detail=landed.detail)
+    return PrOutcome(ok=True, url=landed.pr_url)
 
 
 def _commit_and_land(
@@ -305,11 +309,15 @@ def _commit_and_land(
         return HealResult(
             descriptor.name, BRANCH_FAILED, branch=branch, detail=commit.stderr.strip()[-300:]
         )
-    push = _run_argv(["git", "push", "-u", "origin", branch], cwd=descriptor.path)
-    if not push.ok:
-        return HealResult(
-            descriptor.name, PUSH_FAILED, branch=branch, detail=push.stderr.strip()[-300:]
-        )
+    # Every write leaves through the boundary (ADR-007 §3): a non-protected branch
+    # and a draft PR, or nothing. Enforced HERE and not by the child's pre-push
+    # hook, because the projects this system most needs to touch are the ones that
+    # do not have that hook yet.
+    pushed = landing.push_branch(
+        descriptor.path, branch, repo_default=landing.default_branch(descriptor.path)
+    )
+    if not pushed.ok:
+        return HealResult(descriptor.name, PUSH_FAILED, branch=branch, detail=pushed.detail)
     pr = open_pr(descriptor, branch, tasks)
     if not pr.ok:
         return HealResult(descriptor.name, PR_FAILED, branch=branch, detail=pr.detail)
