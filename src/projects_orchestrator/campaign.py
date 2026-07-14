@@ -35,7 +35,7 @@ from typing import Any
 
 import yaml
 
-from projects_orchestrator import runs, selector
+from projects_orchestrator import cost, runs, selector
 from projects_orchestrator.descriptor import ProjectDescriptor
 from projects_orchestrator.fleet import ProjectSnapshot
 
@@ -495,6 +495,22 @@ class CampaignReport:
     def ok(self) -> bool:
         """Whether every attempted run opened a PR (an empty attempt is ok)."""
         return all(o.run.state == runs.PR_OPENED for o in self.outcomes)
+
+    @property
+    def spend(self) -> cost.CostTotal:
+        """What this invocation cost, with the unmetered runs counted, not summed.
+
+        This is the number a canary exists to inform: the canary's spend is the
+        per-project estimate for the fan-out that ``--apply`` would authorise, so
+        an operator can multiply by ``remaining`` before committing to it.
+
+        Timed-out runs are the ones that matter here. A campaign kills a run at
+        ``policy.timeout``, and a killed agent never reports its spend — so it
+        lands in ``unmetered``. Those runs are typically the *most* expensive
+        (they burned the full timeout), which is precisely why they are surfaced
+        as a known-unknown instead of being folded in as zero.
+        """
+        return cost.total(o.run.cost for o in self.outcomes)
 
 
 def summarize(

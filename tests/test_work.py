@@ -8,6 +8,7 @@ individual internals (those have their own suites).
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -652,3 +653,84 @@ def test_cli_work_attach_reports_a_session_failure(
     monkeypatch.setattr(work, "_default_session", broken)
     assert main(["work", "alpha", "--attach", "--root", str(fleet_dir)]) == 2
     assert "could not open a session" in capsys.readouterr().err
+
+
+# --- Cost accounting (#146) ---------------------------------------------------
+
+_COST_RESULT = {
+    "type": "result",
+    "num_turns": 4,
+    "total_cost_usd": 0.42,
+    "usage": {"input_tokens": 100, "output_tokens": 50},
+}
+
+
+def _agent_writing_cost(payload: dict[str, object]) -> work.Agent:
+    """An agent that ends the way the real CLI does: a result object on its log."""
+
+    def agent(_tree: Path, _prompt: str, log_path: Path) -> bool:
+        log_path.write_text(json.dumps(payload), encoding="utf-8")
+        return True
+
+    return agent
+
+
+def _silent_agent(_tree: Path, _prompt: str, _log: Path) -> bool:
+    """An agent killed before it could report anything — the unmetered case."""
+    return False
+
+
+def test_run_agent_records_the_cost_from_the_log(fleet_dir: Path) -> None:
+    run = _launched(fleet_dir)
+    result = work.run_agent(run.id, agent=_agent_writing_cost(_COST_RESULT), land=lambda r: r)
+    assert result.cost.usd == pytest.approx(0.42)
+
+
+def test_run_agent_records_the_token_counts_from_the_log(fleet_dir: Path) -> None:
+    run = _launched(fleet_dir)
+    result = work.run_agent(run.id, agent=_agent_writing_cost(_COST_RESULT), land=lambda r: r)
+    assert result.cost.output_tokens == 50
+
+
+def test_a_recorded_cost_survives_into_the_terminal_record(fleet_dir: Path) -> None:
+    # The ordering guard: `finish` rebases onto the on-disk record, so a cost
+    # banked before it must be carried through — not dropped by first-writer-wins.
+    run = _launched(fleet_dir)
+    work.run_agent(
+        run.id,
+        agent=_agent_writing_cost(_COST_RESULT),
+        land=lambda r: runs.finish(r, runs.PR_OPENED, pr_url="https://x/pr/1"),
+    )
+    assert runs.load(run.id).cost.usd == pytest.approx(0.42)
+
+
+def test_a_failed_run_still_records_what_it_cost(fleet_dir: Path) -> None:
+    # A run that burned money and then failed is exactly the one you want priced.
+    run = _launched(fleet_dir)
+    failing = _agent_writing_cost({**_COST_RESULT, "is_error": True})
+
+    def agent(tree: Path, prompt: str, log_path: Path) -> bool:
+        failing(tree, prompt, log_path)
+        return False
+
+    result = work.run_agent(run.id, agent=agent, land=lambda r: r)
+    assert result.cost.usd == pytest.approx(0.42)
+
+
+def test_a_needs_human_run_still_records_what_it_cost(fleet_dir: Path) -> None:
+    run = _launched(fleet_dir)
+    marker = _agent_writes_marker("which db?")
+
+    def agent(tree: Path, prompt: str, log_path: Path) -> bool:
+        log_path.write_text(json.dumps(_COST_RESULT), encoding="utf-8")
+        return marker(tree, prompt, log_path)
+
+    result = work.run_agent(run.id, agent=agent, land=lambda r: r)
+    assert result.cost.usd == pytest.approx(0.42)
+
+
+def test_a_killed_run_is_unmetered_not_free(fleet_dir: Path) -> None:
+    # The whole point: no result object on the log means UNKNOWN cost, not $0.00.
+    run = _launched(fleet_dir)
+    result = work.run_agent(run.id, agent=_silent_agent, land=lambda r: r)
+    assert result.cost is None

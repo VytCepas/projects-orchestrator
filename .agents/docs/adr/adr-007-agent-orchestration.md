@@ -204,9 +204,17 @@ the briefing. Nothing else.
   agent's worktree is the only forensic record of what it was thinking, and
   deleting it on failure would destroy the evidence at the exact moment it is
   needed. Retention is bounded by an expiry, not by discarding on sight.
-- Bad: cost is bounded but not metered. Concurrency caps, a wall-clock timeout,
+- ~~Bad: cost is bounded but not metered. Concurrency caps, a wall-clock timeout,
   and canary-first put a leash on spend; none of them report what a run actually
-  cost. Per-run cost accounting is deferred.
+  cost. Per-run cost accounting is deferred.~~
+  **Closed by #146.** A run now records what it cost, parsed from the result
+  object the CLI was already writing to its log, and a campaign totals its spend
+  — so a canary reports not just whether the work landed but what the fan-out
+  would cost at that rate. The consequence this leaves behind is narrower: a run
+  that is killed or times out never reports its spend, so it is *unmetered*. That
+  is surfaced as a known-unknown (an em-dash, and a count on every total) rather
+  than summed as zero — a timeout is the priciest way to fail, and totalling it
+  as free would under-report spend at exactly the moment it spiked.
 - Bad: dispatch is fire-and-forget in the same sense ADR-005 is. A run confirms a
   PR was *opened*, not that the change was *correct*. Correctness is established
   by the child's CI and by the human reading the PR — which is the point, but it

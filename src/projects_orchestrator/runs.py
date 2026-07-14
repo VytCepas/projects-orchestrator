@@ -39,6 +39,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from uuid import uuid4
 
+from projects_orchestrator.cost import RunCost, from_record
 from projects_orchestrator.naming import safe_component
 from projects_orchestrator.procs import is_our_process, proc_start_ticks
 
@@ -84,6 +85,9 @@ class AgentRun:
         pr_url: The PR it opened, only when ``state == PR_OPENED``.
         detail: Human-readable explanation — why it failed, or what it needs.
         ended_at: UTC ISO timestamp of the terminal transition, when recorded.
+        cost: What the run cost, or ``None`` when it could not be metered — a
+            killed or timed-out agent never reports its spend, and ``None`` says
+            *we do not know*, which is not the same as free (:mod:`cost`).
     """
 
     id: str
@@ -99,6 +103,7 @@ class AgentRun:
     pr_url: str = ""
     detail: str = ""
     ended_at: str = ""
+    cost: RunCost | None = None
 
     @property
     def is_terminal(self) -> bool:
@@ -171,6 +176,7 @@ def _parse(raw: object) -> AgentRun | None:
             pr_url=str(raw.get("pr_url", "")),
             detail=str(raw.get("detail", "")),
             ended_at=str(raw.get("ended_at", "")),
+            cost=from_record(raw.get("cost")),
         )
     except (KeyError, TypeError, ValueError):
         return None
@@ -265,6 +271,24 @@ def mark_running(run: AgentRun, pid: int) -> AgentRun:
     started = replace(run, state=RUNNING, pid=pid, start_ticks=proc_start_ticks(pid))
     save(started)
     return started
+
+
+def record_cost(run: AgentRun, spent: RunCost | None) -> AgentRun:
+    """Attach a run's metered cost and persist it; ``None`` leaves it unmetered.
+
+    Call this **before** :func:`finish`. ``finish`` rebuilds the run from the
+    record on disk (first writer wins), so a cost written afterwards would be
+    dropped on the floor — whereas one written first is read back and carried
+    into the terminal record.
+
+    An unknown cost is *not written as zero*. It is not written at all, and the
+    run stays unmetered, which is the truth (:mod:`cost`).
+    """
+    if spent is None:
+        return run
+    priced = replace(run, cost=spent)
+    save(priced)
+    return priced
 
 
 def finish(run: AgentRun, state: str, detail: str = "", pr_url: str = "") -> AgentRun:

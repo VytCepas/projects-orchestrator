@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from projects_orchestrator.cost import RunCost
 from projects_orchestrator.runs import (
     ABANDONED,
     FAILED,
@@ -26,6 +27,7 @@ from projects_orchestrator.runs import (
     load,
     mark_running,
     new_run,
+    record_cost,
     resolve,
     save,
     state_dir,
@@ -347,3 +349,46 @@ def test_latest_open_run_is_none_when_all_settled() -> None:
     a = AgentRun(id="a", project="p", task="t", state=FAILED)
     b = AgentRun(id="b", project="p", task="t", state=ABANDONED)
     assert latest_open_run([a, b]) is None
+
+
+# --- Cost on the record (#146) ------------------------------------------------
+
+
+def test_record_cost_persists_the_cost() -> None:
+    run = new_run("alpha", "t")
+    save(run)
+    record_cost(run, RunCost(usd=0.75, output_tokens=10))
+    assert load(run.id).cost.usd == 0.75
+
+
+def test_record_cost_of_an_unknown_cost_leaves_the_run_unmetered() -> None:
+    run = new_run("alpha", "t")
+    save(run)
+    record_cost(run, None)
+    assert load(run.id).cost is None
+
+
+def test_record_cost_does_not_write_an_unknown_cost_as_zero() -> None:
+    run = new_run("alpha", "t")
+    save(run)
+    assert record_cost(run, None).cost is None
+
+
+def test_a_run_recorded_before_cost_existed_reloads_as_unmetered() -> None:
+    # Back-compat: an old record simply has no `cost` key. It is unmetered, and
+    # must not be resurrected as a $0.00 run.
+    run = new_run("alpha", "t")
+    save(run)
+    path = state_dir() / f"{run.id}.json"
+    raw = json.loads(path.read_text())
+    del raw["cost"]
+    path.write_text(json.dumps(raw))
+    assert load(run.id).cost is None
+
+
+def test_a_cost_survives_a_finish() -> None:
+    run = new_run("alpha", "t")
+    save(run)
+    priced = record_cost(run, RunCost(usd=0.5))
+    finish(priced, PR_OPENED, pr_url="https://x/pr/1")
+    assert load(run.id).cost.usd == 0.5
