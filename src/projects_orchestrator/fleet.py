@@ -278,9 +278,21 @@ def snapshot_row(
     }
 
 
-def fleet_rows(snapshots: list[ProjectSnapshot]) -> list[dict[str, str]]:
-    """Build all table rows (pure); resolves scaffold freshness fleet-wide."""
-    newest = newest_scaffold_version(snapshots)
+def fleet_rows(
+    snapshots: list[ProjectSnapshot],
+    reference: list[ProjectSnapshot] | None = None,
+) -> list[dict[str, str]]:
+    """Build all table rows (pure); resolves scaffold freshness fleet-wide.
+
+    ``reference`` is the set the newest scaffold version is measured against —
+    the WHOLE fleet, even when ``snapshots`` is a filtered subset. Without it, a
+    filtered view (``status --where name=alpha``) would compute "newest" over
+    only the rows it is about to show, so a selected project that is behind the
+    rest of the fleet renders as current — hiding the very drift an operator
+    filters down to inspect. Defaults to ``snapshots`` when the rows already are
+    the whole fleet.
+    """
+    newest = newest_scaffold_version(reference if reference is not None else snapshots)
     return [snapshot_row(s, newest) for s in snapshots]
 
 
