@@ -15,7 +15,7 @@ import sys
 from dataclasses import asdict, replace
 from pathlib import Path
 
-from projects_orchestrator import __version__, cache, runs, work
+from projects_orchestrator import __version__, cache, runs, selector, work
 from projects_orchestrator.adapters.cloud import (
     DEPLOY_ACTIONS,
     DISPATCH_DISPATCHED,
@@ -56,7 +56,7 @@ from projects_orchestrator.digest import (
 )
 from projects_orchestrator.doctor import diagnose
 from projects_orchestrator.drift import compute_drift
-from projects_orchestrator.fleet import fleet_rows, fleet_snapshots, render_table
+from projects_orchestrator.fleet import ProjectSnapshot, fleet_rows, fleet_snapshots, render_table
 from projects_orchestrator.hardening import checklist as hardening_checklist
 from projects_orchestrator.hardening import render_text as render_hardening
 from projects_orchestrator.history import DEFAULT_TREND_WIDTH as HISTORY_TREND_WIDTH
@@ -139,9 +139,15 @@ def _cmd_status(args: argparse.Namespace) -> int:
         print(f"{status.project}: {status.health} on {status.branch or '?'}")
         return 0
     snapshots = fleet_snapshots(fleet)
+    selected = _select(args, snapshots)
+    if selected is None:
+        return 2
     if args.json:
-        return _emit_json([asdict(s.status) for s in snapshots])
-    print(render_table(fleet_rows(snapshots)))
+        return _emit_json([asdict(s.status) for s in selected])
+    if not selected:
+        print("no projects match")
+        return 0
+    print(render_table(fleet_rows(selected)))
     return 0
 
 
@@ -689,8 +695,8 @@ def _render_run(run: runs.AgentRun) -> str:
     return f"{run.state:<11} {run.project:<18} {run.task[:48]}{tail}"
 
 
-def _cmd_work(args: argparse.Namespace) -> int:
-    """Launch a tracked agent run, or list / tail / stop existing ones."""
+def _work_manage(args: argparse.Namespace) -> int | None:
+    """Handle --list / --logs / --stop; ``None`` when none was asked for."""
     if args.list:
         found = work.list_runs(args.project or "")
         if not found:
@@ -710,11 +716,24 @@ def _cmd_work(args: argparse.Namespace) -> int:
             return 2
         print(_render_run(stopped))
         return 0
+    return None
 
-    # Launch. Requires a project and a task.
+
+def _cmd_work(args: argparse.Namespace) -> int:
+    """Launch a tracked agent run, or list / tail / stop existing ones."""
+    managed = _work_manage(args)
+    if managed is not None:
+        return managed
+
+    if args.where:
+        return _cmd_work_fanout(args)
+
+    # Launch on one project. Requires a project and a task.
     if not args.project or not args.task:
         print(
-            'usage: work <project> "<task>"  (or --list / --logs ID / --stop ID)', file=sys.stderr
+            'usage: work <project> "<task>"  (or --where FIELD=VALUE "<task>", '
+            "--list / --logs ID / --stop ID)",
+            file=sys.stderr,
         )
         return 2
     descriptor = _resolve_project(args)
@@ -725,6 +744,46 @@ def _cmd_work(args: argparse.Namespace) -> int:
     # A run that failed to even start (no worktree, no wrapper) is a nonzero exit;
     # a launched run is success — its OUTCOME is observed later via --list.
     return 1 if run.state == runs.FAILED else 0
+
+
+def _cmd_work_fanout(args: argparse.Namespace) -> int:
+    """Launch one agent run per project matching ``--where``.
+
+    **Dry-run by default.** A `--where` that matches forty projects would launch
+    forty agents and spend forty agents' worth of money, and the most likely
+    reason it matches forty projects is that the filter is wrong. So the default
+    prints the target list and launches nothing; ``--apply`` commits to it. Same
+    discipline as ``deploy`` (ADR-005), for the same reason.
+    """
+    # With --where there is no project positional, so the single positional the
+    # operator typed IS the task: `work --where ci=fail "fix the CI"`. argparse
+    # binds it to `project` (the first positional), so move it across — otherwise
+    # the documented invocation is the one that does not work.
+    task = args.task or args.project
+    if not task:
+        print('usage: work --where FIELD=VALUE "<task>"', file=sys.stderr)
+        return 2
+
+    selected = _select(args, fleet_snapshots(_discover(args)))
+    if selected is None:
+        return 2
+    if not selected:
+        print("no projects match — nothing to do")
+        return 0
+
+    if not args.apply:
+        print(f"would launch an agent on {len(selected)} project(s):")
+        for snapshot in selected:
+            print(f"  {snapshot.descriptor.name}")
+        print(f'\nre-run with --apply to launch: work --where ... "{task}" --apply')
+        return 0
+
+    failures = 0
+    for snapshot in selected:
+        run = work.launch(snapshot.descriptor, task)
+        print(_render_run(run))
+        failures += run.state == runs.FAILED
+    return 1 if failures else 0
 
 
 def _cmd_run_agent(args: argparse.Namespace) -> int:
@@ -861,6 +920,58 @@ def _add_common(parser: argparse.ArgumentParser, json_flag: bool = True) -> None
     parser.add_argument("--root", help="directory scanned one level deep for projects")
     if json_flag:
         parser.add_argument("--json", action="store_true", help="emit JSON instead of text")
+
+
+def _add_where(parser: argparse.ArgumentParser) -> None:
+    """Attach the repeatable ``--where`` selector (AND across repeats)."""
+    parser.add_argument(
+        "--where",
+        action="append",
+        metavar="FIELD=VALUE",
+        help=(
+            "filter the fleet on what it already knows (repeatable, AND). "
+            f"e.g. ci=fail, scaffold=none, drift>0. Fields: {', '.join(selector.FIELDS)}"
+        ),
+    )
+
+
+def _select(
+    args: argparse.Namespace, snapshots: list[ProjectSnapshot]
+) -> list[ProjectSnapshot] | None:
+    """Apply ``--where``; print the error and return ``None`` when it is nonsense.
+
+    A mistyped filter must never quietly select nothing (which looks like a
+    healthy fleet) or everything (which is worse). The caller exits 2.
+    """
+    try:
+        return selector.select(snapshots, getattr(args, "where", None) or [])
+    except selector.SelectorError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return None
+
+
+def _add_work_arguments(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Wire `work`'s own flags (and the hidden runner's) onto the subparsers."""
+    # --where filters on what the fleet table already knows; it probes nothing.
+    for name in ("status", "work"):
+        _add_where(sub.choices[name])
+    work_sp = sub.choices["work"]
+    work_sp.add_argument("project", nargs="?", help="project to launch a run on (or filter --list)")
+    work_sp.add_argument("task", nargs="?", help="what the agent should do")
+    work_sp.add_argument(
+        "--apply",
+        action="store_true",
+        help="with --where: actually launch the fan-out (default: print the targets only)",
+    )
+    work_sp.add_argument("--list", action="store_true", help="list agent runs instead of launching")
+    work_sp.add_argument("--logs", metavar="RUN_ID", help="tail one run's captured output")
+    work_sp.add_argument(
+        "--stop", metavar="RUN_ID", help="kill a running agent and mark it abandoned"
+    )
+    work_sp.add_argument(
+        "-n", "--lines", type=int, default=work.DEFAULT_LOG_LINES, help="trailing --logs lines"
+    )
+    sub.choices[work.RUNNER_SUBCOMMAND].add_argument("run_id")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -1002,18 +1113,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.choices["logs"].add_argument(
         "-n", "--lines", type=int, default=40, help="trailing lines to show (default 40)"
     )
-    work_sp = sub.choices["work"]
-    work_sp.add_argument("project", nargs="?", help="project to launch a run on (or filter --list)")
-    work_sp.add_argument("task", nargs="?", help="what the agent should do")
-    work_sp.add_argument("--list", action="store_true", help="list agent runs instead of launching")
-    work_sp.add_argument("--logs", metavar="RUN_ID", help="tail one run's captured output")
-    work_sp.add_argument(
-        "--stop", metavar="RUN_ID", help="kill a running agent and mark it abandoned"
-    )
-    work_sp.add_argument(
-        "-n", "--lines", type=int, default=work.DEFAULT_LOG_LINES, help="trailing --logs lines"
-    )
-    sub.choices[work.RUNNER_SUBCOMMAND].add_argument("run_id")
+    _add_work_arguments(sub)
     sub.choices["register"].add_argument(
         "result", help="path to `scaffold --json` output, or '-' for stdin"
     )

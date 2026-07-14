@@ -370,6 +370,16 @@ The environment an agent run is allowed to see — the data plane, scrubbed out.
 
 - `def agent_env` — Build the environment an agent subprocess may see (pure).
 
+### `projects_orchestrator/selector.py`
+
+``--where ci=fail`` — filter the fleet on what it already knows.
+
+- `class SelectorError` — A selector that cannot be honoured — an unknown field or bad syntax.
+- `class Term` — One ``field op value`` predicate.
+- `def parse_term` — Parse one ``--where`` expression; raise :class:`SelectorError` on nonsense.
+- `def parse` — Parse every ``--where`` expression; raises on the first bad one.
+- `def select` — Return the snapshots matching every expression (AND); raises on a bad one.
+
 ### `projects_orchestrator/server.py`
 
 Live fleet dashboard — a read-only HTTP view that refreshes itself.
