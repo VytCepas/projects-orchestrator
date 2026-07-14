@@ -92,5 +92,7 @@ only_mutate = [
     "*/freshness.py",
     "*/selector.py",
     "*/campaign.py",
+    "*/orphans.py",
     "*/adapters/status_url.py",
+    "*/adapters/gcp.py",
 ]

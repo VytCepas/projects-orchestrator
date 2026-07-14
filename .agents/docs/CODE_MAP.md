@@ -35,6 +35,14 @@ Per-project deploy/runtime status, driven by the contract-v2 deploy block.
 - `class DeployDispatch` — The outcome of one cloud action for one project (ADR-005).
 - `def trigger_deploy` — Dispatch a child's deploy workflow for a cloud action; never raises.
 
+### `projects_orchestrator/adapters/gcp.py`
+
+Read-only GCP inventory — list what is live, and never touch it.
+
+- `class GcpResource` — One live GCP resource, as returned by the asset inventory.
+- `def search_command` — The exact read-only command for a scope (scope is shell-quoted).
+- `def search_resources` — List live GCP resources in ``scope`` via the read-only asset inventory.
+
 ### `projects_orchestrator/adapters/generic.py`
 
 Infer a minimal descriptor for plain git repos — no contract required.
@@ -331,6 +339,14 @@ Read guard/usage events across the fleet — the observability layer.
 - `def load_events` — Read one project's usage log; never raises.
 - `def filter_since` — Keep events at or after an ISO-8601 instant (pure).
 - `def count_unparseable_timestamps` — Count events carrying a non-empty timestamp that does not parse (pure).
+
+### `projects_orchestrator/orphans.py`
+
+Diff the live GCP inventory against the fleet — what does no repo govern?
+
+- `class OrphanReport` — The result of an orphan scan.
+- `def accounted_keys` — Every (name, region) the fleet accounts for, lower-cased.
+- `def find_orphans` — Report resources no fleet project accounts for; never raises.
 
 ### `projects_orchestrator/pool.py`
 
