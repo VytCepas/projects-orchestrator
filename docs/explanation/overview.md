@@ -42,7 +42,7 @@ meaningful (`checks` exits non-zero on a failed gate, `drift` on divergence,
 
 | Command | Does | Module |
 |---|---|---|
-| `projects` | List discovered projects. Membership comes from `fleet.yaml` (scan roots + explicit paths) or the `~/projects/<name>` sibling convention — anything with a `.claude/config.yaml` counts. | `registry.py` |
+| `projects` | List discovered projects. Membership comes from `fleet.yaml` (scan roots + explicit paths) or the `~/projects/<name>` sibling convention — anything with a descriptor counts (`.agents/config.yaml` on a current scaffold, `.claude/config.yaml` on a pre-PI-627 one). | `registry.py` |
 | `status` | The signature fleet table: health · branch · sync · scaffold version & freshness · contract version · drift · hook-install state · lint · tests · CI · open PRs · cloud · memory facts · check freshness. | `fleet.py`, `status.py` |
 | `snapshot --json / --html` | Full machine-readable fleet state, or one self-contained HTML dashboard. | `html.py` |
 | `serve` | Live, auto-refreshing web dashboard (`--host`, `--port`). | `server.py` |
@@ -74,8 +74,27 @@ meaningful (`checks` exits non-zero on a failed gate, `drift` on divergence,
 | `ci [project]` | Latest CI conclusion + open PR/MR count via `gh` (or `glab` for GitLab hosts). Cached so the status table reads it offline. | `adapters/github.py`, `adapters/gitlab.py` |
 | `cloud-status [project]` | Deploy/runtime state for `delivery: service` projects — Fly / Cloud Run / k8s revision + a bounded health-URL probe, all read-only (contract-v2 deploy block). | `adapters/cloud.py` |
 | `events [project] --since` | Guard/usage events from each project's observability log (`usage.jsonl`), tolerant of field/timestamp aliases. | `observability.py` |
-| `memory <query>` | Search every project's `.claude/memory/*.md` fact files at once — the "all-knowing" layer that makes the fleet's remembered context queryable from one prompt. | `memory.py` |
-| `controller` / `/ask` | A deterministic command REPL — one control point, no LLM. `/ask` is an opt-in seam: a model may only *select among existing intents*; the dispatcher still executes them. | `controller.py`, `ask.py` |
+| `memory <query>` | Search every project's memory fact files at once (`.agents/memory/*.md`, or `.claude/memory/*.md` on a legacy scaffold) — the "all-knowing" layer that makes the fleet's remembered context queryable from one prompt. A tier-3 project's declared `rag_endpoint` is reported but **not yet queried** — the endpoint contract is not frozen upstream (project-init#605/#606). | `memory.py` |
+| `controller` / `/ask` | A deterministic command REPL — one control point, no LLM. `/ask` is an opt-in seam (set `ORCHESTRATOR_ASK_MODEL` + `ANTHROPIC_API_KEY`): a model may only *select among existing intents*, and it may **propose** a `work` run but never launch one; the dispatcher still executes them. | `controller.py`, `ask.py` |
+| `capabilities [project] --kind` | Aggregate every child's `CAPABILITIES.md` — who exposes which skill / MCP server / hook. `--kind` inverts the fleet: list each capability and who has it. | `capabilities.py` |
+
+### 5. Put an agent to work (ADR-007)
+
+This is the group that makes the rest *actionable*: a red CI or a missing scaffold
+stops being a row in a table and becomes a draft PR you review. Every run is
+isolated in a throwaway git worktree, can only ever emit a **draft PR** (never a
+push to `main`, never a merge), and holds **no cloud credentials** — the data
+plane is unreachable from an agent. Code is reversible; state is not.
+
+| Command | Does | Module |
+|---|---|---|
+| `work <project> "<task>"` | Launch a tracked, headless agent run. It gets an id, a worktree, a briefing, a captured log, and a state record that **outlives its process** — its terminal states are `pr-opened` / `failed` / `needs-human` / `abandoned`, not an exit code. | `work.py`, `runs.py`, `briefing.py`, `worktree.py` |
+| `work --list` | Every run: state, **what it cost**, and where to look. A killed or timed-out run never reports its spend, so it reads `—` and is counted separately — never summed as `$0.00`. Unknown is not free. | `runs.py`, `cost.py` |
+| `work <project> --attach` | Take over a `needs-human` run interactively, in the same worktree with the same context loaded. A headless agent that hits an ambiguity must not guess — it stops and asks. | `work.py` |
+| `campaign <file> --apply` | A declarative fleet campaign: task + selector (`ci=fail`, `scaffold=none`, `drift>0`) + policy. Canaries one project, reports what the fan-out would cost at that rate, and terminates when its selector empties. `--apply` fans out. | `campaign.py`, `selector.py` |
+| `heal <project>` *(controller)* | The narrow preset: spawn a scoped agent to fix a cached lint/test failure and open a PR. Its `Bash` allow-list covers only the declared gate commands — an unattended run fails closed rather than getting a wider shell. | `heal.py` |
+| `orphans --scope` | Read-only GCP inventory diffed against the fleet. Anything without a repo is invisible to everything above — no descriptor, no CI, no review — so this makes the unmanaged estate *enumerable*, the first step to giving it a repo. An unauthenticated scan reports `unknown`, never "no orphans". | `orphans.py`, `adapters/gcp.py` |
+| `register <json>` | Register a freshly scaffolded project from `project-init scaffold --json` output. | `registry.py` |
 
 ## How it interacts with project-init
 
