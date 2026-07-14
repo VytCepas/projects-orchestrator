@@ -37,6 +37,10 @@ DISABLED_MESSAGE = (
 NO_KEY_MESSAGE = f"/ask is configured but {API_KEY_ENV} is not set — export it to enable the call"
 
 # The only verbs the model may select; everything else in the reply is rejected.
+# ``work`` is included so a request like "have an agent fix alpha's CI" resolves —
+# but resolving is all it does: the controller's work handler is plan-only and
+# LAUNCHES NOTHING (see controller._dispatch_work), so no model reply, and no
+# typo, can start an agent from here (ADR-005 discipline, #124).
 ALLOWED_VERBS = frozenset(
     {
         "status",
@@ -54,6 +58,7 @@ ALLOWED_VERBS = frozenset(
         "projects",
         "refresh",
         "help",
+        "work",
     }
 )
 
@@ -88,7 +93,10 @@ def build_prompt(question: str, project_names: tuple[str, ...]) -> str:
         f"Allowed verbs: {verbs}. Known projects: {projects}.\n"
         'Verb notes: "check" runs gates (args = task names, e.g. ["lint","test"]); '
         '"run" runs one declared task (args = [task]); "memory" searches memories '
-        "(args = [query]). Omit target/args when not applicable.\n"
+        '(args = [query]); "work" proposes an agent coding run on a project '
+        "(target = project, args = [the task in plain words]) — it is only ever "
+        "proposed for the operator to launch, never started here. "
+        "Omit target/args when not applicable.\n"
         f"Request: {question}"
     )
 
@@ -130,7 +138,7 @@ def parse_intent_reply(text: str) -> Intent | None:
     )
 
 
-_ARGS_REQUIRED = frozenset({"memory", "run"})
+_ARGS_REQUIRED = frozenset({"memory", "run", "work"})
 
 
 def _api_complete(model: str, prompt: str, api_key: str) -> str:

@@ -45,6 +45,7 @@ from projects_orchestrator.registry import FleetConfig
         ("logs alpha", "logs"),
         ("deploy alpha", "deploy"),
         ("deploy alpha rollback", "deploy"),
+        ("work alpha fix the ci", "work"),
         ("heal alpha", "heal"),
         ("frobnicate", "unknown"),
     ],
@@ -329,3 +330,74 @@ def test_dispatch_heal_no_cached_failure_is_a_no_op(fleet_dir: Path) -> None:
     git_init(project)
     lines = list(dispatch(parse_command("heal alpha"), _ctx(fleet_dir)))
     assert lines == ["alpha: no_action — no failing lint/test gate cached"]
+
+
+# --- #124: the controller may PROPOSE a work run, but never launch one ----------
+
+
+def test_parse_work_keeps_the_whole_tail_as_the_task() -> None:
+    intent = parse_command("work alpha fix the flaky ci test")
+    assert intent.verb == "work"
+    assert intent.target == "alpha"
+    assert intent.args == ("fix", "the", "flaky", "ci", "test")
+
+
+def test_dispatch_work_proposes_the_exact_cli_command(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha", tooling={"lint": "true"})
+    lines = list(dispatch(parse_command("work alpha fix the ci"), _ctx(fleet_dir)))
+    joined = "\n".join(lines)
+    assert 'work alpha "fix the ci"' in joined  # the exact command to run
+    assert "Nothing was dispatched" in joined
+
+
+def test_dispatch_work_on_unknown_project_errors(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")
+    lines = list(dispatch(parse_command("work nope do a thing"), _ctx(fleet_dir)))
+    assert any("nope" in line for line in lines)
+    assert not any('work nope "' in line for line in lines)  # no proposal for a phantom
+
+
+def test_dispatch_work_without_a_task_shows_usage(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")
+    lines = list(dispatch(parse_command("work alpha"), _ctx(fleet_dir)))
+    assert any("usage: work" in line for line in lines)
+
+
+def test_dispatch_work_launches_no_agent(fleet_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # THE guard (criterion 2): asserted on BEHAVIOUR, not a returned status. Even
+    # if a future edit wired a launcher in, this spy would catch it — the shortest
+    # path from a typo (or the /ask model) to a running agent must end at a string.
+    from projects_orchestrator import work
+
+    launches: list[str] = []
+    monkeypatch.setattr(work, "launch", lambda *_a, **_k: launches.append("launch") or None)
+    monkeypatch.setattr(
+        work.subprocess, "Popen", lambda *_a, **_k: pytest.fail("a subprocess was spawned")
+    )
+
+    make_project(fleet_dir, "alpha", tooling={"lint": "true"})
+    list(dispatch(parse_command("work alpha fix the ci"), _ctx(fleet_dir)))
+    assert launches == []  # nothing launched
+
+
+def test_ask_resolving_to_work_proposes_but_launches_nothing(
+    fleet_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The /ask model may route "have an agent fix alpha" to a work intent — and
+    # the controller must still only PROPOSE it. End to end: ask -> work -> string.
+    from projects_orchestrator import work
+
+    monkeypatch.setenv("ORCHESTRATOR_ASK_MODEL", "claude-test")
+    launches: list[str] = []
+    monkeypatch.setattr(work, "launch", lambda *_a, **_k: launches.append("launch") or None)
+
+    make_project(fleet_dir, "alpha", tooling={"lint": "true"})
+    ctx = ControllerContext(
+        config=FleetConfig(roots=(fleet_dir,)),
+        cache_file=fleet_dir / "checks.json",
+        ask_complete=lambda _m, _p: '{"verb": "work", "target": "alpha", "args": ["fix the ci"]}',
+    )
+    lines = list(dispatch(parse_command("/ask have an agent fix alpha's ci"), ctx))
+    joined = "\n".join(lines)
+    assert 'work alpha "fix the ci"' in joined  # proposed
+    assert launches == []  # but never launched

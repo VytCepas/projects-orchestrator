@@ -98,6 +98,22 @@ def _parse_task_verb(verb: str, rest: list[str]) -> Intent:
     return Intent(verb="check", target=target, args=_TASK_VERBS[verb])
 
 
+def _parse_arg_verb(verb: str, rest: list[str]) -> Intent | None:
+    """Parse the verbs that carry arguments beyond a bare target; else ``None``.
+
+    ``run`` and ``memory`` have their own arg shapes; ``work`` takes a project and
+    the whole remaining tail as a (multi-word) task — unlike the ``_PROJECT_VERBS``
+    below, which keep only a single trailing token.
+    """
+    if verb == "run" and rest:
+        return Intent(verb="run", target=rest[1] if len(rest) > 1 else "all", args=(rest[0],))
+    if verb == "memory" and rest:
+        return Intent(verb="memory", args=(" ".join(rest),))
+    if verb == "work":
+        return Intent(verb="work", target=rest[0] if rest else None, args=tuple(rest[1:]))
+    return None
+
+
 def parse_command(text: str) -> Intent:
     """Map one input line to an intent (pure; never raises).
 
@@ -119,10 +135,9 @@ def parse_command(text: str) -> Intent:
         return _parse_task_verb(verb, rest)
     if verb == "status":
         return Intent(verb="status", target=rest[0] if rest else None)
-    if verb == "run" and rest:
-        return Intent(verb="run", target=rest[1] if len(rest) > 1 else "all", args=(rest[0],))
-    if verb == "memory" and rest:
-        return Intent(verb="memory", args=(" ".join(rest),))
+    arg_verb = _parse_arg_verb(verb, rest)
+    if arg_verb is not None:
+        return arg_verb
     if verb in _TARGET_VERBS:
         return Intent(verb=verb, target=rest[0] if rest else "all")
     if verb in _PROJECT_VERBS:
@@ -379,6 +394,34 @@ def _dispatch_deploy(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
     yield f"{result.project}: {result.action} {result.status} — {result.detail}"
 
 
+def _dispatch_work(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
+    """Propose an agent run — and never, ever launch one (#124).
+
+    Launching an agent is a write action with a token budget and a real blast
+    radius (a branch and a draft PR per project). The controller — reachable by
+    the ``/ask`` model and by a mistyped line — must be unable to start one, for
+    the same reason it is plan-only for ``deploy`` (ADR-005). So this prints the
+    exact CLI command that WOULD launch it and dispatches nothing: the shortest
+    path from a typo to twelve running agents ends here, at a printed string.
+    """
+    if intent.target is None or intent.target == "all":
+        yield "usage: work <project> <task>"
+        return
+    selected = _select_projects(ctx, intent.target)
+    if isinstance(selected, str):
+        yield selected
+        return
+    task = " ".join(intent.args).strip()
+    if not task:
+        yield "usage: work <project> <task>"
+        return
+    project = selected[0].name
+    yield (
+        f'{project}: would launch an agent — run `work {project} "{task}"` on the '
+        "CLI to start it. Nothing was dispatched here."
+    )
+
+
 def _dispatch_heal(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
     """Attempt an autonomous fix for one project's cached lint/test failure."""
     if intent.target is None or intent.target == "all":
@@ -441,6 +484,7 @@ _ENGINE = {
     "stop": _dispatch_supervise,
     "logs": _dispatch_supervise,
     "deploy": _dispatch_deploy,
+    "work": _dispatch_work,
     "heal": _dispatch_heal,
     "ask": _dispatch_ask,
     "upgrade": _dispatch_upgrade,

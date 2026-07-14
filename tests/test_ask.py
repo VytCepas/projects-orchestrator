@@ -75,6 +75,25 @@ def test_parse_intent_reply_rejects_run_with_blank_arg() -> None:
     assert parse_intent_reply(json.dumps({"verb": "run", "args": ["  "]})) is None
 
 
+def test_work_is_a_selectable_verb() -> None:
+    # The model may ROUTE a request to a work run (the controller then only
+    # proposes it — see test_controller). Without this the intent is unreachable.
+    assert "work" in ALLOWED_VERBS
+
+
+def test_parse_intent_reply_accepts_work_with_a_task() -> None:
+    intent = parse_intent_reply(
+        json.dumps({"verb": "work", "target": "alpha", "args": ["fix the ci"]})
+    )
+    assert intent == Intent(verb="work", target="alpha", args=("fix the ci",))
+
+
+def test_parse_intent_reply_rejects_work_without_a_task() -> None:
+    # A work proposal with no task is useless; reject it rather than propose a
+    # command with an empty quoted task.
+    assert parse_intent_reply(json.dumps({"verb": "work", "target": "alpha"})) is None
+
+
 def test_parse_intent_reply_accepts_memory_with_args() -> None:
     intent = parse_intent_reply(json.dumps({"verb": "memory", "args": ["postgres"]}))
     assert intent == Intent(verb="memory", args=("postgres",))
