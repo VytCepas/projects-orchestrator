@@ -7,7 +7,15 @@ reaches — an MCP server, a hook, a tool nobody foresaw — can find them.
 
 from __future__ import annotations
 
-from projects_orchestrator.sandbox import agent_env
+from projects_orchestrator.sandbox import agent_env as _agent_env
+
+_HOME = "/sandbox/home"
+
+
+def agent_env(base):
+    """Test wrapper: every call supplies the required fresh HOME."""
+    return _agent_env(base, home=_HOME)
+
 
 # A representative slice of the real thing. The point of the allowlist is that it
 # does not matter whether these exact names were predicted — anything not
@@ -29,12 +37,12 @@ _CREDENTIALS = {
     "PGPASSWORD": "swordfish",
 }
 
+# HOME and XDG_* are deliberately NOT here: they are set fresh under the sandbox
+# home, not copied from the operator (whose HOME points at ~/.config/gcloud).
 _HARMLESS = {
     "PATH": "/usr/bin:/bin",
-    "HOME": "/home/me",
     "LANG": "en_US.UTF-8",
     "LC_TIME": "en_GB.UTF-8",
-    "XDG_CONFIG_HOME": "/home/me/.config",
     "TERM": "xterm-256color",
 }
 
@@ -71,9 +79,18 @@ def test_the_agents_own_key_survives() -> None:
     assert agent_env({"ANTHROPIC_API_KEY": "sk-ant-xxx"})["ANTHROPIC_API_KEY"] == "sk-ant-xxx"
 
 
-def test_locale_and_xdg_families_pass_by_prefix() -> None:
-    env = agent_env({"LC_NUMERIC": "C", "XDG_CACHE_HOME": "/c", "LC_MESSAGES": "en"})
-    assert env == {"LC_NUMERIC": "C", "XDG_CACHE_HOME": "/c", "LC_MESSAGES": "en"}
+def test_the_locale_family_passes_by_prefix() -> None:
+    env = agent_env({"LC_NUMERIC": "C", "LC_MESSAGES": "en"})
+    assert env["LC_NUMERIC"] == "C"
+    assert env["LC_MESSAGES"] == "en"
+
+
+def test_the_operators_xdg_config_home_is_not_inherited() -> None:
+    # ~/.config is the gcloud/aws credential search path. Inheriting the
+    # operator's XDG_CONFIG_HOME re-opens exactly what the HOME redirect closed.
+    env = agent_env({"XDG_CONFIG_HOME": "/home/me/.config"})
+    assert env["XDG_CONFIG_HOME"] == f"{_HOME}/.config"
+    assert "/home/me" not in env["XDG_CONFIG_HOME"]
 
 
 def test_the_result_is_a_fresh_dict_not_a_view_of_the_source() -> None:
@@ -83,12 +100,45 @@ def test_the_result_is_a_fresh_dict_not_a_view_of_the_source() -> None:
     assert "INJECTED" not in source
 
 
-def test_an_empty_environment_yields_an_empty_scrub() -> None:
-    assert agent_env({}) == {}
+def test_an_empty_environment_still_gets_an_isolated_home() -> None:
+    # Even from nothing, HOME and the XDG base dirs are set — under the sandbox,
+    # never the operator's home.
+    env = agent_env({})
+    assert env["HOME"] == _HOME
+    assert env["XDG_CONFIG_HOME"] == f"{_HOME}/.config"
+    assert "GOOGLE_APPLICATION_CREDENTIALS" not in env
 
 
 def test_a_prefix_lookalike_that_is_not_the_prefix_is_scrubbed() -> None:
-    # "LCD_BRIGHTNESS" starts with "LC" but not "LC_"; "XDGSECRET" starts with
-    # "XDG" but not "XDG_". Neither is a locale/XDG var, so neither is kept.
+    # "LCD_BRIGHTNESS" starts with "LC" but not "LC_". Not a locale var, not kept.
     env = agent_env({"LCD_BRIGHTNESS": "5", "XDGSECRET": "leak"})
-    assert env == {}
+    assert "LCD_BRIGHTNESS" not in env
+    assert "XDGSECRET" not in env
+
+
+# --- The file-backed credential leak (the P1) ---------------------------------
+
+
+def test_home_is_isolated_so_file_backed_creds_are_unreachable() -> None:
+    # THE P1. Scrubbing GOOGLE_APPLICATION_CREDENTIALS the VAR is not enough:
+    # Google ADC falls back to $HOME/.config/gcloud/application_default_credentials.json,
+    # AWS reads ~/.aws/credentials, flyctl reads ~/.config/fly. Preserving the
+    # operator's HOME re-opens all of them. It must point at the fresh sandbox.
+    env = agent_env({"HOME": "/home/me"})
+    assert env["HOME"] == _HOME
+    assert env["HOME"] != "/home/me"
+
+
+def test_all_xdg_base_dirs_are_redirected_under_the_sandbox_home() -> None:
+    env = agent_env({})
+    for var in ("XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"):
+        assert env[var].startswith(_HOME), f"{var} escaped the sandbox home"
+
+
+def test_home_is_required_and_has_no_default() -> None:
+    # There is no "reuse the operator's HOME" fallback — that was the bug. A
+    # caller must supply a fresh directory explicitly.
+    import pytest
+
+    with pytest.raises(TypeError):
+        _agent_env({})  # missing the required keyword-only `home`

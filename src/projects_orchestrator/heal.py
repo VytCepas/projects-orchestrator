@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -266,21 +267,24 @@ def _default_agent_run(descriptor: ProjectDescriptor, prompt: str) -> AgentOutco
         "--max-budget-usd",
         _MAX_BUDGET_USD,
     ]
+    # ADR-007 §4: the agent runs with the data plane scrubbed OUT of its
+    # environment. The --allowedTools list stops the CLI from running gcloud;
+    # this stops the credentials existing at all, so nothing the agent reaches —
+    # an MCP server, a hook, a tool we did not foresee — can find them. A fresh,
+    # per-run HOME is part of that: scrubbing GOOGLE_APPLICATION_CREDENTIALS is
+    # useless if HOME still points at ~/.config/gcloud. The directory is
+    # ephemeral — nothing the agent writes to its config home is worth keeping.
     try:
-        proc = subprocess.run(  # noqa: S603 — fixed argv, no shell; scoped to the project's own directory
-            command,
-            cwd=descriptor.path,
-            capture_output=True,
-            text=True,
-            timeout=AGENT_TIMEOUT,
-            check=False,
-            # ADR-007 §4: the agent runs with the data plane scrubbed OUT of its
-            # environment. The --allowedTools list stops the CLI from running
-            # gcloud; this stops the credentials existing at all, so nothing the
-            # agent reaches — an MCP server, a hook, a tool we did not foresee —
-            # can find them. A key never handed over cannot be leaked.
-            env=sandbox.agent_env(),
-        )
+        with tempfile.TemporaryDirectory(prefix="po-agent-home-") as home:
+            proc = subprocess.run(  # noqa: S603 — fixed argv, no shell; scoped to the project's own directory
+                command,
+                cwd=descriptor.path,
+                capture_output=True,
+                text=True,
+                timeout=AGENT_TIMEOUT,
+                check=False,
+                env=sandbox.agent_env(home=home),
+            )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return AgentOutcome(ok=False, summary=str(exc))
     if proc.returncode != 0:

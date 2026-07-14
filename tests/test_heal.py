@@ -505,6 +505,7 @@ def test_the_agent_launches_with_a_scrubbed_environment(
 
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/home/me/key.json")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "wJalr")
+    monkeypatch.setenv("HOME", "/home/me")
     project = make_project(fleet_dir, "alpha", tooling={"lint": "true"})
     descriptor = load_descriptor(project)
     seen: dict[str, object] = {}
@@ -520,3 +521,7 @@ def test_the_agent_launches_with_a_scrubbed_environment(
     assert "GOOGLE_APPLICATION_CREDENTIALS" not in env
     assert "AWS_SECRET_ACCESS_KEY" not in env
     assert "PATH" in env  # but the agent can still find its tools
+    # HOME is a fresh sandbox dir, not the operator's — else ~/.config/gcloud and
+    # ~/.aws re-open every file-backed credential the var scrub just closed.
+    assert env["HOME"] != "/home/me"
+    assert env["XDG_CONFIG_HOME"].startswith(env["HOME"])

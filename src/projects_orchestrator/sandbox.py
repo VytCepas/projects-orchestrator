@@ -23,14 +23,29 @@ copied in — the ones a coding agent genuinely needs to function (a ``PATH`` to
 find ``git``, a ``HOME`` for tool config, locale). Anything not on that list does
 not exist, whether or not anyone predicted it.
 
-Pure and testable: :func:`agent_env` is a function of an input mapping, so the
-scrub can be asserted without spawning anything.
+**Scrubbing the variables is not enough — the FILES they point at leak too.**
+This is the subtle half. Google Application Default Credentials do not only read
+``GOOGLE_APPLICATION_CREDENTIALS``; they fall back to
+``$HOME/.config/gcloud/application_default_credentials.json``. The AWS SDKs read
+``~/.aws/credentials``. ``flyctl`` reads ``~/.config/fly``. So preserving the
+operator's ``HOME`` re-opens every file-backed credential the env scrub just
+closed — and copying ``XDG_CONFIG_HOME`` (``~/.config``) points *straight back*
+at the gcloud directory even if ``HOME`` were redirected. The scrub therefore
+gives the agent a **fresh, empty ``HOME``** with every XDG base dir redirected
+underneath it: the credential *files* are as absent as the credential *vars*.
+A clean HOME also means the agent does not inherit the operator's globally
+configured MCP servers — isolation we want anyway.
+
+Pure and testable: :func:`agent_env` is a function of an input mapping and an
+explicit home path, so the scrub can be asserted without spawning anything or
+touching the real filesystem.
 """
 
 from __future__ import annotations
 
 import os
 from collections.abc import Mapping
+from pathlib import Path
 
 #: The ONLY variables an agent subprocess inherits. Each is here because a coding
 #: agent cannot function without it, and none of them is a credential:
@@ -43,10 +58,13 @@ from collections.abc import Mapping
 #: - the agent's OWN key: it must be able to call the model it IS. This is the
 #:   agent's credential, not the operator's cloud/production credentials — the
 #:   distinction ADR-012 draws — and without it the agent cannot run at all.
+#: NOTE what is NOT here: HOME. It is set fresh under the sandbox home rather than
+#: copied, because the operator's HOME is the search path for every file-backed
+#: credential (see the module docstring). USER/LOGNAME are copied for git identity
+#: discovery, which reads them but not HOME.
 _ALLOWED = frozenset(
     {
         "PATH",
-        "HOME",
         "USER",
         "LOGNAME",
         "SHELL",
@@ -60,30 +78,42 @@ _ALLOWED = frozenset(
     }
 )
 
-#: Prefixes copied wholesale — locale (LC_TIME, LC_NUMERIC, …) and XDG base dirs
-#: (XDG_CONFIG_HOME, XDG_CACHE_HOME) that tools read for config/cache locations.
-#: Deliberately NOT a general escape hatch: neither family carries credentials,
-#: and both are needed for a tool to behave the way it does in the operator's
-#: own shell.
-_ALLOWED_PREFIXES = ("LC_", "XDG_")
+#: Locale prefix, copied wholesale — LC_TIME, LC_NUMERIC, … carry no credentials
+#: and a wrong locale corrupts text. XDG_ is deliberately NOT here: XDG_CONFIG_HOME
+#: (``~/.config``) points straight back at the gcloud/aws credential directories,
+#: so the XDG base dirs are set fresh under the sandbox home instead of inherited.
+_ALLOWED_PREFIXES = ("LC_",)
 
 
-def agent_env(base: Mapping[str, str] | None = None) -> dict[str, str]:
+def agent_env(base: Mapping[str, str] | None = None, *, home: str) -> dict[str, str]:
     """Build the environment an agent subprocess may see (pure).
 
-    Starts from **nothing** and copies in only :data:`_ALLOWED` and the
-    :data:`_ALLOWED_PREFIXES` families. Everything else — every cloud credential,
-    API token, and CI secret in the operator's shell — is simply absent.
+    Starts from **nothing**, copies in only :data:`_ALLOWED` and the
+    :data:`_ALLOWED_PREFIXES` families, then points ``HOME`` and every XDG base
+    dir at ``home`` — a fresh, empty directory. Everything else — every cloud
+    credential and API token in the operator's shell, and every credential FILE
+    their real HOME points at — is simply absent.
 
     Args:
         base: The environment to scrub. Defaults to the real ``os.environ``.
+        home: The agent's ``HOME`` — a fresh, empty, per-run directory. Required,
+            because "reuse the operator's HOME" is precisely the mistake: it is
+            the search path for ``~/.config/gcloud``, ``~/.aws``, ``~/.config/fly``
+            and friends, and re-opens every file-backed credential the variable
+            scrub just closed.
 
     Returns:
-        A fresh dict containing only the audited, credential-free subset.
+        A fresh dict: the audited, credential-free subset, with HOME/XDG isolated.
     """
     source = os.environ if base is None else base
-    return {
+    env = {
         name: value
         for name, value in source.items()
         if name in _ALLOWED or name.startswith(_ALLOWED_PREFIXES)
     }
+    env["HOME"] = home
+    env["XDG_CONFIG_HOME"] = str(Path(home) / ".config")
+    env["XDG_CACHE_HOME"] = str(Path(home) / ".cache")
+    env["XDG_DATA_HOME"] = str(Path(home) / ".local" / "share")
+    env["XDG_STATE_HOME"] = str(Path(home) / ".local" / "state")
+    return env
