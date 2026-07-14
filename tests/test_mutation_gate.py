@@ -126,3 +126,27 @@ def test_main_exits_nonzero_on_a_real_failing_run(tmp_path: Path) -> None:
     stats = tmp_path / "s.json"
     stats.write_text(json.dumps({"total": 873, "killed": 100}), encoding="utf-8")
     assert main(["--stats", str(stats), "--floor", "60"]) == 1
+
+
+# --- The coupling that only breaks at 3am --------------------------------------
+
+
+def test_the_gate_script_is_copied_into_mutmuts_test_tree() -> None:
+    """mutmut runs pytest from a COPY of the tree (`mutants/`), so this test file
+    can only find the gate script if `[tool.mutmut] also_copy` brings it along.
+
+    Without it, collection dies with FileNotFoundError and the whole nightly run
+    fails — the fix that made the gate honest would have been the thing that
+    stopped it running at all. That failure would surface only at 3am, in a
+    non-blocking job, which is to say: never. So it is pinned here, where it
+    breaks in the PR that breaks it.
+
+    Note it must be the DIRECTORY, not the file: mutmut's `copy_also_copy_files`
+    does `shutil.copy2` for a file entry and never creates the parent dirs.
+    """
+    import tomllib
+
+    pyproject = Path(__file__).parent.parent / "pyproject.toml"
+    config = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    also_copy = config["tool"]["mutmut"]["also_copy"]
+    assert str(_GATE.parent.relative_to(pyproject.parent)) in also_copy
