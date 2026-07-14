@@ -169,6 +169,19 @@ Deterministic command controller — the single control point.
 - `class ControllerContext` — Mutable state the dispatcher works against.
 - `def dispatch` — Execute one intent against the engine, yielding output lines.
 
+### `projects_orchestrator/cost.py`
+
+What a run actually cost — and the honest admission when we do not know.
+
+- `class RunCost` — The metered cost of one agent run, as the CLI reported it.
+- `class CostTotal` — Aggregate spend across many runs, keeping the unmetered ones visible.
+- `def from_payload` — Build a :class:`RunCost` from a decoded CLI result object.
+- `def from_record` — Rebuild a :class:`RunCost` from its own persisted form; ``None`` if absent.
+- `def parse_log` — Recover a run's cost from its log; ``None`` when it cannot be known.
+- `def total` — Aggregate run costs, counting the unmetered instead of summing them as 0.
+- `def format_usd` — Render one run's cost for a table cell; :data:`UNKNOWN` when unmetered.
+- `def format_total` — Render an aggregate, naming the unmetered runs rather than hiding them.
+
 ### `projects_orchestrator/descriptor.py`
 
 Read a child project's machine-readable self-description.
@@ -396,6 +409,7 @@ Agent runs — a record whose life is longer than its process.
 - `def list_runs` — Read every run (optionally for one project), newest first.
 - `def latest_open_run` — The most recent run that is still OPEN WORK, or ``None``.
 - `def mark_running` — Record that ``run``'s agent is live under ``pid``, and persist it.
+- `def record_cost` — Attach a run's metered cost and persist it; ``None`` leaves it unmetered.
 - `def finish` — Move a run to a terminal state and persist it.
 - `def forget` — Delete one run's record; report whether it is gone (never raises).
 
