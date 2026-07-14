@@ -11,6 +11,7 @@ deterministic.
 from __future__ import annotations
 
 import datetime as _dt
+import shlex
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -416,9 +417,14 @@ def _dispatch_work(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
         yield "usage: work <project> <task>"
         return
     project = selected[0].name
+    # shlex.quote both fields: the task comes from the /ask model or a typed line
+    # and may carry shell metacharacters. A naive `"..."` would NOT stop `$(...)`
+    # substitution, so an operator pasting the hint could execute an injected
+    # command — the exact harm this plan-only surface exists to prevent.
+    command = f"work {shlex.quote(project)} {shlex.quote(task)}"
     yield (
-        f'{project}: would launch an agent — run `work {project} "{task}"` on the '
-        "CLI to start it. Nothing was dispatched here."
+        f"{project}: would launch an agent — run `{command}` on the CLI to start it. "
+        "Nothing was dispatched here."
     )
 
 

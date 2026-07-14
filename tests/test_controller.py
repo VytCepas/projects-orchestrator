@@ -346,8 +346,21 @@ def test_dispatch_work_proposes_the_exact_cli_command(fleet_dir: Path) -> None:
     make_project(fleet_dir, "alpha", tooling={"lint": "true"})
     lines = list(dispatch(parse_command("work alpha fix the ci"), _ctx(fleet_dir)))
     joined = "\n".join(lines)
-    assert 'work alpha "fix the ci"' in joined  # the exact command to run
+    assert "work alpha 'fix the ci'" in joined  # the exact, shell-quoted command
     assert "Nothing was dispatched" in joined
+
+
+def test_dispatch_work_shell_quotes_a_malicious_task(fleet_dir: Path) -> None:
+    # THE injection guard: the task may carry shell metacharacters (from /ask or a
+    # typed line). The printed command must be safe to paste — command
+    # substitution must NOT survive, which naive double-quoting would allow.
+    make_project(fleet_dir, "alpha", tooling={"lint": "true"})
+    lines = list(dispatch(parse_command("work alpha fix $(touch /tmp/pwn)"), _ctx(fleet_dir)))
+    joined = "\n".join(lines)
+    # single-quoted, so a shell treats the substitution as literal text; the
+    # unsafe double-quoted form (where $() would still run) must NOT appear.
+    assert "'fix $(touch /tmp/pwn)'" in joined
+    assert '"fix $(touch /tmp/pwn)"' not in joined
 
 
 def test_dispatch_work_on_unknown_project_errors(fleet_dir: Path) -> None:
@@ -399,5 +412,5 @@ def test_ask_resolving_to_work_proposes_but_launches_nothing(
     )
     lines = list(dispatch(parse_command("/ask have an agent fix alpha's ci"), ctx))
     joined = "\n".join(lines)
-    assert 'work alpha "fix the ci"' in joined  # proposed
+    assert "work alpha 'fix the ci'" in joined  # proposed (shell-quoted)
     assert launches == []  # but never launched
