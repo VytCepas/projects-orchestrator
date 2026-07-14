@@ -22,15 +22,14 @@ import contextlib
 import datetime as _dt
 import json
 import os
-import signal
 import subprocess
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from projects_orchestrator.descriptor import ProjectDescriptor
 from projects_orchestrator.procs import pid_alive as _pid_alive
 from projects_orchestrator.procs import proc_start_ticks as _proc_start_ticks
+from projects_orchestrator.procs import terminate_group as _terminate_group
 
 _STATE_DIRNAME = "projects-orchestrator"
 _RUN_SUBDIR = "run"
@@ -211,40 +210,6 @@ def start(descriptor: ProjectDescriptor) -> str:
     except OSError as exc:
         return f"{descriptor.name}: failed to start — {exc}"
     return f"{descriptor.name}: started (pid {state.pid}, log {log_path})"
-
-
-def _terminate_group(pid: int, grace: float) -> None:
-    """SIGTERM a process group, escalating to SIGKILL after ``grace``.
-
-    Supervised processes are launched with ``start_new_session=True``, so a
-    legitimate target is always its own group leader (``pgid == pid``). A
-    recycled pid that joined some other group is provably not our process —
-    fall back to signalling only the pid rather than killing an unrelated
-    group.
-    """
-    try:
-        group = os.getpgid(pid)
-    except OSError:
-        group = None
-    if group is not None and group != pid:
-        group = None
-    try:
-        if group is not None:
-            os.killpg(group, signal.SIGTERM)
-        else:
-            os.kill(pid, signal.SIGTERM)
-    except OSError:
-        return
-    deadline = time.monotonic() + grace
-    while time.monotonic() < deadline:
-        if not _pid_alive(pid):
-            return
-        time.sleep(0.05)
-    with contextlib.suppress(OSError):
-        if group is not None:
-            os.killpg(group, signal.SIGKILL)
-        else:
-            os.kill(pid, signal.SIGKILL)
 
 
 def stop(descriptor: ProjectDescriptor, grace: float = _STOP_GRACE_SECONDS) -> str:

@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import contextlib
 import os
+import signal
+import time
 from pathlib import Path
 
 
@@ -104,3 +106,37 @@ def is_our_process(pid: int, start_ticks: int | None) -> bool:
         # live run.
         return True
     return current == start_ticks
+
+
+def terminate_group(pid: int, grace: float) -> None:
+    """SIGTERM a process group, escalating to SIGKILL after ``grace`` (never raises).
+
+    Both supervisor and work launch their children with ``start_new_session=True``,
+    so a legitimate target is always its own group leader (``pgid == pid``). A
+    recycled pid that joined some *other* group is provably not our process — fall
+    back to signalling only the pid rather than killing an unrelated group, which
+    is the same pid-reuse caution the rest of this module exists for.
+    """
+    try:
+        group = os.getpgid(pid)
+    except OSError:
+        group = None
+    if group is not None and group != pid:
+        group = None
+    try:
+        if group is not None:
+            os.killpg(group, signal.SIGTERM)
+        else:
+            os.kill(pid, signal.SIGTERM)
+    except OSError:
+        return
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline:
+        if not pid_alive(pid):
+            return
+        time.sleep(0.05)
+    with contextlib.suppress(OSError):
+        if group is not None:
+            os.killpg(group, signal.SIGKILL)
+        else:
+            os.kill(pid, signal.SIGKILL)

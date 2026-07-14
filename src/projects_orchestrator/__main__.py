@@ -15,7 +15,7 @@ import sys
 from dataclasses import asdict, replace
 from pathlib import Path
 
-from projects_orchestrator import __version__, cache
+from projects_orchestrator import __version__, cache, runs, work
 from projects_orchestrator.adapters.cloud import (
     DEPLOY_ACTIONS,
     DISPATCH_DISPATCHED,
@@ -682,6 +682,63 @@ def _cmd_logs(args: argparse.Namespace) -> int:
     return 0
 
 
+def _render_run(run: runs.AgentRun) -> str:
+    """One line for an agent run: state, project, task, and where to look."""
+    where = run.pr_url or run.worktree or ""
+    tail = f"  {where}" if where else ""
+    return f"{run.state:<11} {run.project:<18} {run.task[:48]}{tail}"
+
+
+def _cmd_work(args: argparse.Namespace) -> int:
+    """Launch a tracked agent run, or list / tail / stop existing ones."""
+    if args.list:
+        found = work.list_runs(args.project or "")
+        if not found:
+            print("no agent runs")
+            return 0
+        for run in found:
+            print(_render_run(run))
+        return 0
+    if args.logs:
+        for line in work.logs(args.logs, lines=args.lines):
+            print(line)
+        return 0
+    if args.stop:
+        stopped = work.stop(args.stop)
+        if stopped is None:
+            print(f"unknown run: {args.stop}", file=sys.stderr)
+            return 2
+        print(_render_run(stopped))
+        return 0
+
+    # Launch. Requires a project and a task.
+    if not args.project or not args.task:
+        print(
+            'usage: work <project> "<task>"  (or --list / --logs ID / --stop ID)', file=sys.stderr
+        )
+        return 2
+    descriptor = _resolve_project(args)
+    if descriptor is None:
+        return 2
+    run = work.launch(descriptor, args.task)
+    print(_render_run(run))
+    # A run that failed to even start (no worktree, no wrapper) is a nonzero exit;
+    # a launched run is success — its OUTCOME is observed later via --list.
+    return 1 if run.state == runs.FAILED else 0
+
+
+def _cmd_run_agent(args: argparse.Namespace) -> int:
+    """Hidden: the detached wrapper body. Not a verb an operator types.
+
+    ``work.launch`` spawns ``projects-orchestrator _run-agent <run-id>`` as its
+    detached process; this is what that process runs. It executes the agent and
+    lands (or fails) the run, then exits — its exit code is incidental, because
+    the run's terminal STATE, not this process's return, is the source of truth.
+    """
+    result = work.run_agent(args.run_id)
+    return 0 if result.state == runs.PR_OPENED else 1
+
+
 def _cmd_snapshot(args: argparse.Namespace) -> int:
     """Dump the full joined fleet view (text, JSON, or standalone HTML)."""
     fleet = _discover(args)
@@ -865,6 +922,13 @@ def _build_parser() -> argparse.ArgumentParser:
         ("stop", "terminate a project's supervised process", _cmd_stop, False),
         ("logs", "tail a project's captured run output", _cmd_logs, False),
         (
+            "work",
+            "launch a tracked agent run on a project (or --list / --logs / --stop)",
+            _cmd_work,
+            False,
+        ),
+        (work.RUNNER_SUBCOMMAND, argparse.SUPPRESS, _cmd_run_agent, False),
+        (
             "upgrade-plan",
             "scaffold version vs upstream project-init (--apply triggers upgrades)",
             _cmd_upgrade_plan,
@@ -938,6 +1002,18 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.choices["logs"].add_argument(
         "-n", "--lines", type=int, default=40, help="trailing lines to show (default 40)"
     )
+    work_sp = sub.choices["work"]
+    work_sp.add_argument("project", nargs="?", help="project to launch a run on (or filter --list)")
+    work_sp.add_argument("task", nargs="?", help="what the agent should do")
+    work_sp.add_argument("--list", action="store_true", help="list agent runs instead of launching")
+    work_sp.add_argument("--logs", metavar="RUN_ID", help="tail one run's captured output")
+    work_sp.add_argument(
+        "--stop", metavar="RUN_ID", help="kill a running agent and mark it abandoned"
+    )
+    work_sp.add_argument(
+        "-n", "--lines", type=int, default=work.DEFAULT_LOG_LINES, help="trailing --logs lines"
+    )
+    sub.choices[work.RUNNER_SUBCOMMAND].add_argument("run_id")
     sub.choices["register"].add_argument(
         "result", help="path to `scaffold --json` output, or '-' for stdin"
     )

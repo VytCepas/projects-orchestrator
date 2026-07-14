@@ -327,6 +327,7 @@ Is that pid still ours? — process liveness, shared by every run tracker.
 - `def proc_start_ticks` — Read a pid's start time (clock ticks since boot) from ``/proc``.
 - `def pid_alive` — Return whether a pid is a live process (not exited, not a zombie).
 - `def is_our_process` — Return whether ``pid`` is still the process we recorded, not an impostor.
+- `def terminate_group` — SIGTERM a process group, escalating to SIGKILL after ``grace`` (never raises).
 
 ### `projects_orchestrator/registry.py`
 
@@ -411,6 +412,16 @@ Fleet upgrade planning — who is behind upstream project-init, and act on it.
 - `def plan_status` — Classify a scaffold version against the latest upstream (pure).
 - `def build_row` — Build one upgrade-plan row for a project (never raises).
 - `def upgrade_plan` — Build the whole fleet's upgrade plan (pure over its inputs).
+
+### `projects_orchestrator/work.py`
+
+``work`` — put an agent to work on a project, as a tracked, detached run.
+
+- `def launch` — Start a tracked, detached agent run against ``descriptor``; never raises.
+- `def run_agent` — The detached wrapper body: run the agent, then land or fail; never raises.
+- `def list_runs` — Every run (optionally for one project), newest first, reconciled.
+- `def logs` — The tail of a run's captured agent output; ``[]`` when there is none yet.
+- `def stop` — Kill a running run's agent tree and record it ``abandoned``; ``None`` if unknown.
 
 ### `projects_orchestrator/worktree.py`
 
