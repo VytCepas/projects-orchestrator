@@ -29,6 +29,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from projects_orchestrator.descriptor import ProjectDescriptor
+from projects_orchestrator.procs import pid_alive as _pid_alive
+from projects_orchestrator.procs import proc_start_ticks as _proc_start_ticks
 
 _STATE_DIRNAME = "projects-orchestrator"
 _RUN_SUBDIR = "run"
@@ -77,27 +79,6 @@ def _state_file(project: str) -> Path:
     return state_dir() / f"{project}.json"
 
 
-def _proc_start_ticks(pid: int) -> int | None:
-    """Read a pid's start time (clock ticks since boot) from ``/proc``.
-
-    Returns ``None`` when ``/proc`` is unavailable (non-Linux) or the pid is
-    gone. Two processes that reuse the same pid across a reboot or pid wrap
-    have different start times, so comparing this against the value recorded
-    at launch distinguishes our process from a recycled impostor.
-    """
-    try:
-        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
-    except OSError:
-        return None
-    try:
-        # Field 22 (1-indexed) is starttime. comm (field 2) is parenthesized and
-        # may contain spaces/parens, so parse the fields after the final ')'.
-        after_comm = stat.rsplit(")", 1)[1].split()
-        return int(after_comm[19])
-    except (IndexError, ValueError):
-        return None
-
-
 def _mem_available_bytes(meminfo: Path = Path("/proc/meminfo")) -> int | None:
     """Read ``MemAvailable`` (bytes) from ``/proc/meminfo``.
 
@@ -115,31 +96,6 @@ def _mem_available_bytes(meminfo: Path = Path("/proc/meminfo")) -> int | None:
             if len(fields) >= 2 and fields[1].isdigit():
                 return int(fields[1]) * 1024  # meminfo reports kibibytes
     return None
-
-
-def _pid_alive(pid: int) -> bool:
-    """Return whether a pid is a live process (not exited, not a zombie).
-
-    When the pid is our own child (the launching orchestrator process is
-    still alive — controller REPL, TUI, tests), an exited child lingers as
-    a zombie that a plain signal-0 probe would report as running; reap it
-    with a non-blocking ``waitpid`` first. Non-children (the normal CLI
-    case, where the child was reparented at our exit) fall through to the
-    signal-0 probe.
-    """
-    with contextlib.suppress(ChildProcessError, OSError):
-        reaped, _ = os.waitpid(pid, os.WNOHANG)
-        if reaped == pid:
-            return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
 
 
 def _load_state(project: str) -> RunState | None:
