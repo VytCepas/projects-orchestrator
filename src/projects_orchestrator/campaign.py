@@ -205,6 +205,14 @@ def _coerce_positive_float(value: object, field_name: str) -> float:
     return result
 
 
+def _targets_unscaffolded(select: tuple[str, ...]) -> bool:
+    """Whether the selector asks for repos with no scaffold (``scaffold=none``)."""
+    return any(
+        term.field == "scaffold" and term.op == "=" and term.value == "none"
+        for term in selector.parse(select)  # already validated by _parse_selectors
+    )
+
+
 def parse_campaign(raw: object) -> Campaign:
     """Build a :class:`Campaign` from a decoded document; raise on anything off."""
     if not isinstance(raw, dict):
@@ -215,13 +223,22 @@ def parse_campaign(raw: object) -> Campaign:
     if version not in SUPPORTED_VERSIONS:
         message = f"unsupported campaign version {version}; this build understands {sorted(SUPPORTED_VERSIONS)}"
         raise CampaignError(message)
-    return Campaign(
-        name=str(_require(raw, "name")),
-        select=_parse_selectors(_require(raw, "select")),
-        task=str(_require(raw, "task")),
-        policy=_parse_policy(raw.get("policy")),
-        version=version,
-    )
+    name = str(_require(raw, "name"))
+    select = _parse_selectors(_require(raw, "select"))
+    task = str(_require(raw, "task"))
+    policy = _parse_policy(raw.get("policy"))
+    # A `scaffold=none` campaign targets repos with no project-init — which are
+    # exactly the repos discovery hides unless `include_plain_repos` is set. Left
+    # unset, the campaign matches nothing and reports "done", a silent no-op on
+    # the rollout's whole point. Refuse it here rather than let it lie later.
+    if _targets_unscaffolded(select) and not policy.include_plain_repos:
+        message = (
+            "a campaign selecting 'scaffold=none' must set 'policy.include_plain_repos: true' — "
+            "the unscaffolded repos it targets are invisible to discovery otherwise, so it "
+            "would silently match nothing and report done"
+        )
+        raise CampaignError(message)
+    return Campaign(name=name, select=select, task=task, policy=policy, version=version)
 
 
 def load_campaign(path: Path) -> Campaign:

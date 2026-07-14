@@ -87,8 +87,25 @@ def test_a_valid_campaign_parses_with_all_fields(tmp_path: Path) -> None:
 
 
 def test_policy_defaults_when_omitted(tmp_path: Path) -> None:
-    camp = campaign.load_campaign(_write(tmp_path / "c.yml", _valid_body()))
+    # A non-plain selector, so omitting the policy is legal (a scaffold=none
+    # campaign would require include_plain_repos — see the coherence test below).
+    camp = campaign.load_campaign(_write(tmp_path / "c.yml", _valid_body(select="ci=fail")))
     assert camp.policy == campaign.Policy()  # max_concurrent=1: canary-safe default
+
+
+def test_scaffold_none_without_include_plain_repos_is_refused(tmp_path: Path) -> None:
+    # THE coherence guard. A campaign that targets unscaffolded repos but does not
+    # opt discovery into seeing them would silently match nothing and report done —
+    # a no-op on the rollout's whole purpose. It must fail loudly at load instead.
+    with pytest.raises(campaign.CampaignError, match="include_plain_repos"):
+        campaign.load_campaign(_write(tmp_path / "c.yml", _valid_body(select="scaffold=none")))
+
+
+def test_scaffold_none_with_include_plain_repos_is_accepted(tmp_path: Path) -> None:
+    camp = campaign.load_campaign(
+        _write(tmp_path / "c.yml", _valid_body(select="scaffold=none", include_plain_repos="true"))
+    )
+    assert camp.policy.include_plain_repos is True
 
 
 @pytest.mark.parametrize("missing", ["name", "select", "task"])
@@ -537,6 +554,31 @@ def test_cli_json_output(fleet_dir: Path, monkeypatch: pytest.MonkeyPatch, capsy
     payload = json.loads(capsys.readouterr().out)
     assert payload["name"] == "rollout"
     assert payload["outcomes"][0]["pr_url"] == "http://pr/1"
+
+
+def test_cli_json_failure_still_exits_one(
+    fleet_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    # THE guard for the JSON exit-code bug: a failed run reported as JSON must not
+    # look like success to automation just because the render format changed.
+    from projects_orchestrator.__main__ import main
+
+    _plain_repo(fleet_dir, "alpha")
+    monkeypatch.setattr(
+        campaign,
+        "execute",
+        lambda camp, descriptors, _s: [
+            campaign.Outcome(
+                run=runs.AgentRun(id="r", project=d.name, task=camp.task, state=runs.FAILED)
+            )
+            for d in descriptors
+        ],
+    )
+    monkeypatch.setattr(campaign, "default_seams", lambda: None)
+    cfile = _campaign_file(fleet_dir, include_plain_repos="true")
+
+    assert main(["campaign", str(cfile), "--json", "--root", str(fleet_dir)]) == 1
+    capsys.readouterr()  # drain the JSON so it does not leak into other tests' output
 
 
 def test_cli_a_failing_canary_exits_one(fleet_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -892,10 +892,15 @@ def _cmd_campaign(args: argparse.Namespace) -> int:
     report = campaign.summarize(
         camp, outcomes, remaining=len(targets) - len(batch), canary=not args.apply
     )
+    # The exit code carries the outcome to automation and must survive the render
+    # format: `_emit_json` always returns 0, so a failed run reported as JSON would
+    # otherwise look like success while the text path correctly fails.
+    exit_code = 0 if report.ok else 1
     if args.json or camp.policy.output == "json":
-        return _emit_json(_campaign_json(report))
+        _emit_json(_campaign_json(report))
+        return exit_code
     _render_campaign_report(report)
-    return 0 if report.ok else 1
+    return exit_code
 
 
 def _cmd_snapshot(args: argparse.Namespace) -> int:
