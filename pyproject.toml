@@ -52,3 +52,30 @@ asyncio_mode = "auto"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/projects_orchestrator"]
+
+# Mutation testing (#132). The CI `mutation-tests` job scores test QUALITY: it
+# breaks the code on purpose and asks how many broken versions the suite catches.
+# Coverage cannot answer that — a suite can execute every line and assert nothing.
+#
+# Without this section mutmut mutated nothing, the job's gate computed
+# `100.0` for an empty run, and the check that exists to catch tests which cannot
+# fail was itself a check that could not fail.
+#
+# `only_mutate` is deliberately narrow and deliberately not "everything". Mutating
+# I/O-heavy code (subprocess wrappers, the HTTP server, the TUI) produces mutants
+# that survive for reasons unrelated to test quality — a timeout constant nudged
+# by one is not a bug anyone can catch — and the noise is how a mutation score
+# gets ignored. These are the deterministic modules whose guards actually
+# load-bear: the path-traversal guard, the prompt-injection fencing, the
+# never-lie run invariant, the pid-reuse guard, and the status/contract parsers.
+[tool.mutmut]
+source_paths = ["src/projects_orchestrator"]
+only_mutate = [
+    "*/naming.py",
+    "*/briefing.py",
+    "*/runs.py",
+    "*/procs.py",
+    "*/digest.py",
+    "*/freshness.py",
+    "*/adapters/status_url.py",
+]
