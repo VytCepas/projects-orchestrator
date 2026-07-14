@@ -298,18 +298,30 @@ def stop(run_id: str, grace: float = _STOP_GRACE_SECONDS) -> runs.AgentRun | Non
     return runs.finish(run, runs.ABANDONED, detail="stopped by the operator")
 
 
-def clear(run_id: str) -> runs.AgentRun | None:
+CLEARED = "cleared"
+CLEAR_UNKNOWN = "unknown"
+CLEAR_ACTIVE = "active"
+CLEAR_FAILED = "failed"
+
+
+def clear(run_id: str) -> str:
     """Forget a SETTLED run's record so it leaves the fleet's Work column.
 
     This is how a merged (or closed) PR clears its run: once the operator has
-    dealt with the outcome, the record has served its purpose. Only a terminal
-    run is cleared — a queued or running one is still open work, and forgetting it
-    would strand a live agent and hide exactly what the Work column exists to
-    show. Returns the forgotten run, or ``None`` when it is unknown or still live
-    (stop it first).
+    dealt with the outcome, the record has served its purpose. Only a terminal run
+    is cleared — a queued or running one is still open work, and forgetting it
+    would strand a live agent and hide exactly what the Work column exists to show.
+
+    Returns one of :data:`CLEARED`, :data:`CLEAR_UNKNOWN` (no such run),
+    :data:`CLEAR_ACTIVE` (still live — stop it first), or :data:`CLEAR_FAILED`
+    (the record could not be removed). ``CLEAR_FAILED` is its own outcome, not a
+    quiet success: if :func:`runs.forget` cannot unlink the file — an unwritable
+    state dir — the record survives and the run would reappear on the next read,
+    so reporting "cleared" would be a lie.
     """
     run = runs.load(run_id)
-    if run is None or not run.is_terminal:
-        return None
-    runs.forget(run.id)
-    return run
+    if run is None:
+        return CLEAR_UNKNOWN
+    if not run.is_terminal:
+        return CLEAR_ACTIVE
+    return CLEARED if runs.forget(run.id) else CLEAR_FAILED

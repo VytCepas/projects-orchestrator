@@ -719,15 +719,17 @@ def _work_manage(args: argparse.Namespace) -> int | None:
         print(_render_run(stopped))
         return 0
     if args.clear:
-        cleared = work.clear(args.clear)
-        if cleared is None:
-            print(
-                f"cannot clear {args.clear}: unknown, or still active (stop it first)",
-                file=sys.stderr,
-            )
-            return 2
-        print(f"cleared {cleared.id}")
-        return 0
+        outcome = work.clear(args.clear)
+        if outcome == work.CLEARED:
+            print(f"cleared {args.clear}")
+            return 0
+        reason = {
+            work.CLEAR_UNKNOWN: "unknown run",
+            work.CLEAR_ACTIVE: "it is still active — stop it first",
+            work.CLEAR_FAILED: "its record could not be removed (check the state directory)",
+        }[outcome]
+        print(f"cannot clear {args.clear}: {reason}", file=sys.stderr)
+        return 2
     return None
 
 
