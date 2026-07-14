@@ -37,7 +37,7 @@ def _isolate_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _no_live_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+def _no_live_agent(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """Make it impossible for a test to spawn a real ``claude`` process.
 
     This is not hypothetical. The old checkout-failure test relied on heal
@@ -45,7 +45,13 @@ def _no_live_agent(monkeypatch: pytest.MonkeyPatch) -> None:
     quietly fell through to ``_default_agent_run`` and launched a live agent
     with a real budget. A test must never be one refactor away from doing that,
     so the default is fused shut: a test that wants agent behaviour injects it.
+
+    A test that exercises ``_default_agent_run`` itself (to inspect *how* it
+    launches, e.g. its scrubbed env) marks itself ``inspects_agent_launch`` and
+    is exempt — it must stub ``subprocess.run`` so no real process starts.
     """
+    if "inspects_agent_launch" in request.keywords:
+        return
 
     def _explode(*_args: object, **_kwargs: object) -> AgentOutcome:
         message = "a test reached the REAL coding agent — inject agent_run instead"
@@ -452,3 +458,70 @@ def test_two_failed_heals_keep_two_separate_pieces_of_evidence(fleet_dir: Path) 
     second = heal_project(descriptor, _fail("lint"), agent_run=failing_agent)
     assert first.worktree != second.worktree
     assert Path(first.worktree).is_dir() and Path(second.worktree).is_dir()
+
+
+# --- ADR-007 §4: the data plane is unreachable from an agent run ---------------
+
+
+def test_a_deploy_command_is_never_in_the_agents_allowed_tools(fleet_dir: Path) -> None:
+    # Even if a future HEALABLE_TASKS included "deploy", the scoped-Bash builder
+    # must refuse it — an agent must never be handed a production deploy.
+    from projects_orchestrator import heal as heal_mod
+
+    project = make_project(
+        fleet_dir,
+        "alpha",
+        tooling={"lint": "ruff check .", "deploy": "gcloud run deploy prod"},
+    )
+    descriptor = load_descriptor(project)
+    tools = heal_mod._agent_allowed_tools(descriptor)
+    assert "gcloud run deploy prod" not in tools
+    assert "ruff check ." in tools  # the legitimate one still gets through
+
+
+def test_forbidden_tasks_are_refused_even_if_added_to_healable(fleet_dir: Path) -> None:
+    # Guards the guard: if someone widens HEALABLE_TASKS to include a data-plane
+    # task, _FORBIDDEN_AGENT_TASKS still keeps it out of the agent's shell.
+    from projects_orchestrator import heal as heal_mod
+
+    monkeypatched = (*heal_mod.HEALABLE_TASKS, "deploy")
+    project = make_project(fleet_dir, "alpha", tooling={"deploy": "flyctl deploy --now"})
+    descriptor = load_descriptor(project)
+    original = heal_mod.HEALABLE_TASKS
+    try:
+        heal_mod.HEALABLE_TASKS = monkeypatched
+        assert "flyctl deploy --now" not in heal_mod._agent_allowed_tools(descriptor)
+    finally:
+        heal_mod.HEALABLE_TASKS = original
+
+
+@pytest.mark.inspects_agent_launch
+def test_the_agent_launches_with_a_scrubbed_environment(
+    fleet_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The real launch path: assert the env handed to subprocess.run carries no
+    # cloud credential, whatever is in the parent environment.
+    from projects_orchestrator import heal as heal_mod
+
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/home/me/key.json")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "wJalr")
+    monkeypatch.setenv("HOME", "/home/me")
+    project = make_project(fleet_dir, "alpha", tooling={"lint": "true"})
+    descriptor = load_descriptor(project)
+    seen: dict[str, object] = {}
+
+    def spy(*_args: object, **kwargs: object) -> object:
+        seen.update(kwargs)
+        raise OSError("stop before a real claude runs")
+
+    monkeypatch.setattr(heal_mod.subprocess, "run", spy)
+    heal_mod._default_agent_run(descriptor, "fix it")
+
+    env = seen["env"]
+    assert "GOOGLE_APPLICATION_CREDENTIALS" not in env
+    assert "AWS_SECRET_ACCESS_KEY" not in env
+    assert "PATH" in env  # but the agent can still find its tools
+    # HOME is a fresh sandbox dir, not the operator's — else ~/.config/gcloud and
+    # ~/.aws re-open every file-backed credential the var scrub just closed.
+    assert env["HOME"] != "/home/me"
+    assert env["XDG_CONFIG_HOME"].startswith(env["HOME"])
