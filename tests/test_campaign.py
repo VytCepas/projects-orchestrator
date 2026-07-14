@@ -45,11 +45,17 @@ def _valid_body(select: str = "scaffold=none", **policy: object) -> str:
 
 
 def _plain_repo(fleet_dir: Path, name: str) -> Path:
-    """A git repo with NO project-init scaffold — what a rollout targets."""
+    """A git repo with NO project-init scaffold — what a rollout targets.
 
+    A committer identity is configured in the repo (not globally), so a worktree
+    cut from it can commit even on a CI runner with no global git identity — the
+    default there, unlike a developer's machine.
+    """
     repo = fleet_dir / name
     repo.mkdir(parents=True)
     subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True)
     return repo
 
 
@@ -681,7 +687,7 @@ def test_project_init_boundary_holds_on_a_hookless_plain_repo(
     repo = _plain_repo(fleet_dir, "legacy")
     (repo / "README.md").write_text("legacy app\n", encoding="utf-8")
     _git(repo, "add", "-A")
-    _git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init")
+    _git(repo, "commit", "-qm", "init")  # identity is configured in _plain_repo
     remote = tmp_path / "origin.git"
     subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
     _git(repo, "remote", "add", "origin", str(remote))
