@@ -80,9 +80,16 @@ agent against one project and bounds what it can do (ADR-007):
   `main`, never merges, never tags. That boundary is enforced here, in the run
   harness — not by the child's hooks, which are missing in exactly the projects a
   rollout targets.
-- Its environment carries **no cloud credentials** and `deploy` is not on its
-  tool allow-list, so the data plane is unreachable. Code is reversible; state is
-  not.
+- Its environment carries **no cloud credentials** — no
+  `GOOGLE_APPLICATION_CREDENTIALS`, no `GH_TOKEN`, nothing. *That* is what puts
+  the data plane out of reach, and it is worth being precise about why, because
+  the comfortable version of this sentence is false: a `work` agent **does** get
+  general `Bash` (it has to — running the project's own build and tests is most
+  of a coding task). So it can invoke `gcloud`, or even `projects-orchestrator
+  deploy`, and find nothing to authenticate with. The containment is the scrubbed
+  environment and the draft-PR output boundary, **not** a narrow tool list. (Only
+  `heal`, which is unattended and needs no shell beyond the declared gates, scopes
+  `Bash` down to them.) Code is reversible; state is not.
 - An agent that hits an ambiguity does not guess — it stops as `needs-human`, and
   `work <project> --attach` drops you into an interactive session in that same
   worktree with the context already loaded.
