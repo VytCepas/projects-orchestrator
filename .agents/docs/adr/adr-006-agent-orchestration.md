@@ -88,12 +88,30 @@ projects that do not have that hook yet**. The child's guard is absent precisely
 where the blast radius is highest. A guard that is missing whenever it matters is
 not a guard.
 
-### 4. `deploy` is unreachable from an agent run
+### 4. The data plane is unreachable from an agent run
 
 The orchestrator can dispatch deploys (ADR-005). An agent running inside the
 orchestrator therefore sits one call away from production. It does not get that
 call: the agent runner exposes a strict allow-list of verbs, and `deploy` is not
 on it, whatever the agent asks for. Deploys stay human-initiated.
+
+Blocking the *verb* is not sufficient, and saying otherwise would be the kind of
+half-true safety story ADR-005 warns against. An agent that cannot call `deploy`
+can still find `gcloud`, `gsutil`, or `flyctl` on the PATH and reach production
+underneath us. So the run's **environment is scrubbed of cloud credentials**: the
+agent cannot mutate a Cloud Run service, a bucket, a database, or a secret,
+because it never holds anything that would let it. This is ADR-012 turned on the
+agent — *it cannot leak, or wreck, what it does not have.*
+
+The asymmetry is what justifies the severity. A bad code change is a PR you
+reject. A bad `gsutil rm` is gone. **Code is reversible; state is not**, and an
+agent's whole world is therefore a git worktree — never the data plane.
+
+This also settles what happens to a GCP-hosted project: nothing. The repo is the
+unit and GCP is merely where it lands. The agent edits code and opens a PR; the
+child's CI holds the cloud credentials and does the deploying. Whether a project
+runs on Cloud Run, writes to a bucket, or talks to a Cloud SQL is invisible to
+the agent, and must stay that way.
 
 This is a narrower claim than ADR-005's, and deliberately so. ADR-005 is explicit
 that its plan-only cockpit "does not contain an agent: an agent with shell access
@@ -166,3 +184,20 @@ the briefing. Nothing else.
   PR was *opened*, not that the change was *correct*. Correctness is established
   by the child's CI and by the human reading the PR — which is the point, but it
   means a campaign's green completion is not evidence its work was good.
+- Bad, and load-bearing: **anything without a repo is invisible to this system.**
+  A Cloud Function pasted into the console, an unowned bucket, a service deployed
+  from someone's laptop — none of them have a descriptor, so none of them are in
+  the fleet, and no agent can be pointed at them.
+
+  This is treated as a *signal*, not a defect to engineer around. If a thing
+  cannot be `work`ed on, that is because it has no repo, no CI, no gates and no
+  review — there is nothing about it that could be changed safely. The remedy is
+  to give it a repo, not to widen the agent's reach into GCP.
+
+  What is needed is therefore *discovery*, not orchestration: a read-only cloud
+  inventory (`gcloud asset search-all-resources`) diffed against the fleet, so the
+  unmanaged estate is at least *enumerable* — an orphan gets a repo, gets
+  project-init, becomes a fleet member, and only then becomes something an agent
+  may touch. Read-only, holding no write credentials, degrading to `unknown` when
+  unauthenticated; an unauthed scan reporting "zero orphans" would be the worst
+  possible lie this system could tell.
