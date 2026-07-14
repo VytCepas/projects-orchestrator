@@ -49,6 +49,9 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+markers = [
+    "inspects_agent_launch: exercises _default_agent_run itself (must stub subprocess.run); exempt from the no-live-agent fixture",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/projects_orchestrator"]

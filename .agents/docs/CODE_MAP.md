@@ -362,6 +362,12 @@ Agent runs — a record whose life is longer than its process.
 - `def finish` — Move a run to a terminal state and persist it.
 - `def forget` — Delete one run's record; report whether it is gone (never raises).
 
+### `projects_orchestrator/sandbox.py`
+
+The environment an agent run is allowed to see — the data plane, scrubbed out.
+
+- `def agent_env` — Build the environment an agent subprocess may see (pure).
+
 ### `projects_orchestrator/server.py`
 
 Live fleet dashboard — a read-only HTTP view that refreshes itself.

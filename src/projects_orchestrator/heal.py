@@ -34,7 +34,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from projects_orchestrator import landing
+from projects_orchestrator import landing, sandbox
 from projects_orchestrator import worktree as wt
 from projects_orchestrator.briefing import build_briefing, evidence_from_checks
 from projects_orchestrator.checks import CheckResult, collect_checks
@@ -45,6 +45,13 @@ from projects_orchestrator.runner import RunResult
 # commands. ci/cloud are deliberately excluded — they probe remote state a
 # local agent run can't reproduce or re-verify.
 HEALABLE_TASKS = ("lint", "test")
+
+# Tasks whose scoped Bash an agent run may NEVER be granted, whatever
+# HEALABLE_TASKS grows to include (ADR-007 §4). `deploy` mutates production;
+# `cloud` reaches the data plane. The scoped-Bash builder refuses these by name,
+# so a future well-meaning `HEALABLE_TASKS = ("lint", "test", "deploy")` cannot
+# silently hand an agent a production deploy — it is caught here, not in review.
+_FORBIDDEN_AGENT_TASKS = frozenset({"deploy", "cloud", "release", "publish"})
 
 AGENT_TIMEOUT = 900.0  # a real fix may take several tool calls
 GIT_TIMEOUT = 30.0
@@ -220,6 +227,7 @@ def _agent_allowed_tools(descriptor: ProjectDescriptor) -> str:
     scoped_bash = tuple(
         f"Bash({command})"
         for task in HEALABLE_TASKS
+        if task not in _FORBIDDEN_AGENT_TASKS
         if (command := descriptor.tooling.get(task, "").strip())
     )
     return ",".join((*_BASE_TOOLS, *scoped_bash))
@@ -266,6 +274,12 @@ def _default_agent_run(descriptor: ProjectDescriptor, prompt: str) -> AgentOutco
             text=True,
             timeout=AGENT_TIMEOUT,
             check=False,
+            # ADR-007 §4: the agent runs with the data plane scrubbed OUT of its
+            # environment. The --allowedTools list stops the CLI from running
+            # gcloud; this stops the credentials existing at all, so nothing the
+            # agent reaches — an MCP server, a hook, a tool we did not foresee —
+            # can find them. A key never handed over cannot be leaked.
+            env=sandbox.agent_env(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return AgentOutcome(ok=False, summary=str(exc))
