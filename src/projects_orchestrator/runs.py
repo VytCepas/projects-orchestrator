@@ -281,12 +281,26 @@ def record_cost(run: AgentRun, spent: RunCost | None) -> AgentRun:
     dropped on the floor — whereas one written first is read back and carried
     into the terminal record.
 
+    **Cost is written onto the record on disk, never onto the caller's copy.** The
+    caller here is the detached wrapper, holding an ``AgentRun`` it loaded before
+    the agent ran; meanwhile a racing ``work --stop`` may already have settled the
+    same id to ``abandoned``. Saving our stale copy — even "just to add a cost" —
+    would rewind that terminal record to ``running`` and bury the operator's stop,
+    which is precisely the clobber :func:`finish` refuses to make. So we re-read,
+    attach the cost to whatever is *actually* recorded, and let its state stand.
+
+    A run that is already priced keeps its first price: same first-writer-wins
+    rule, applied to the number as well as the state.
+
     An unknown cost is *not written as zero*. It is not written at all, and the
     run stays unmetered, which is the truth (:mod:`cost`).
     """
     if spent is None:
         return run
-    priced = replace(run, cost=spent)
+    base = _read(run.id) or run
+    if base.cost is not None:
+        return base
+    priced = replace(base, cost=spent)
     save(priced)
     return priced
 

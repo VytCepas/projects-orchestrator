@@ -392,3 +392,43 @@ def test_a_cost_survives_a_finish() -> None:
     priced = record_cost(run, RunCost(usd=0.5))
     finish(priced, PR_OPENED, pr_url="https://x/pr/1")
     assert load(run.id).cost.usd == 0.5
+
+
+def test_record_cost_does_not_rewind_a_run_another_process_already_stopped() -> None:
+    # THE race: the wrapper holds a stale `running` copy; `work --stop` settled the
+    # same id to `abandoned` meanwhile. Saving our stale copy "just to add a cost"
+    # would bury the operator's stop. First writer wins applies to cost too.
+    run = new_run("alpha", "t")
+    save(run)
+    stale = mark_running(run, 1234)
+    finish(stale, ABANDONED, detail="operator stopped it")  # the racing stop
+    record_cost(stale, RunCost(usd=0.9))
+    assert load(run.id).state == ABANDONED
+
+
+def test_record_cost_still_prices_a_run_another_process_stopped() -> None:
+    # ...and the stopped run's cost is still recorded. It burned money before it
+    # was killed; preserving the state must not mean discarding the price.
+    run = new_run("alpha", "t")
+    save(run)
+    stale = mark_running(run, 1234)
+    finish(stale, ABANDONED, detail="operator stopped it")
+    record_cost(stale, RunCost(usd=0.9))
+    assert load(run.id).cost.usd == 0.9
+
+
+def test_record_cost_preserves_the_stop_reason() -> None:
+    run = new_run("alpha", "t")
+    save(run)
+    stale = mark_running(run, 1234)
+    finish(stale, ABANDONED, detail="operator stopped it")
+    record_cost(stale, RunCost(usd=0.9))
+    assert "operator stopped it" in load(run.id).detail
+
+
+def test_a_run_keeps_its_first_recorded_price() -> None:
+    run = new_run("alpha", "t")
+    save(run)
+    record_cost(run, RunCost(usd=0.5))
+    record_cost(run, RunCost(usd=9.99))
+    assert load(run.id).cost.usd == 0.5
