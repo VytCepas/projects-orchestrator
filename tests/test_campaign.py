@@ -22,6 +22,7 @@ import pytest
 from conftest import make_project
 
 from projects_orchestrator import campaign, runs
+from projects_orchestrator.cost import RunCost
 from projects_orchestrator.descriptor import ProjectDescriptor
 from projects_orchestrator.fleet import fleet_snapshots
 from projects_orchestrator.registry import FleetConfig, discover
@@ -747,3 +748,54 @@ def test_cli_campaign_project_init_by_name_canaries_one(
     # No --root file needed for the campaign itself: the built-in name resolves it.
     assert main(["campaign", "project-init", "--root", str(fleet_dir)]) == 0
     assert len(seen[0]) == 1  # canary of one, drawn from the two plain repos
+
+
+# --- Campaign spend (#146) ----------------------------------------------------
+
+
+def _priced_outcome(
+    name: str, spent: RunCost | None, *, timed_out: bool = False
+) -> campaign.Outcome:
+    return campaign.Outcome(
+        run=runs.AgentRun(
+            id=f"r-{name}",
+            project=name,
+            task="t",
+            state=runs.FAILED if timed_out else runs.PR_OPENED,
+            cost=spent,
+        ),
+        timed_out=timed_out,
+    )
+
+
+def _report(*outcomes: campaign.Outcome, remaining: int = 0, canary: bool = False):
+    camp = campaign.Campaign(name="c", task="t", select=("ci=fail",), policy=campaign.Policy())
+    return campaign.summarize(camp, list(outcomes), remaining=remaining, canary=canary)
+
+
+def test_a_campaign_totals_the_spend_across_its_runs() -> None:
+    report = _report(
+        _priced_outcome("alpha", RunCost(usd=1.00)),
+        _priced_outcome("beta", RunCost(usd=0.50)),
+    )
+    assert report.spend.usd == pytest.approx(1.50)
+
+
+def test_a_campaign_counts_an_unmetered_run_rather_than_summing_it_as_zero() -> None:
+    report = _report(
+        _priced_outcome("alpha", RunCost(usd=1.00)),
+        _priced_outcome("beta", None, timed_out=True),
+    )
+    assert report.spend.unmetered == 1
+
+
+def test_a_timed_out_run_does_not_make_a_campaign_look_complete() -> None:
+    # A killed run reports no cost. The campaign must say so rather than imply
+    # its total is the whole story — a timeout is the priciest way to fail.
+    report = _report(_priced_outcome("alpha", None, timed_out=True))
+    assert not report.spend.is_complete
+
+
+def test_a_fully_metered_campaign_reports_a_complete_total() -> None:
+    report = _report(_priced_outcome("alpha", RunCost(usd=1.00)))
+    assert report.spend.is_complete
