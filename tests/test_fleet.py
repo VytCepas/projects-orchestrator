@@ -107,6 +107,25 @@ def test_fleet_rows_flags_project_behind_newest(fleet_dir: Path) -> None:
     assert by_name["alpha"]["Latest"] == "behind"
 
 
+def test_fleet_rows_measures_newest_against_the_reference_not_the_subset(
+    fleet_dir: Path,
+) -> None:
+    # THE guard for the filtered-status bug: alpha (older) is the only row shown,
+    # but the reference is the whole fleet where beta is newer. Passing only the
+    # subset would compute "newest" as alpha's own version and render "=" — the
+    # false all-clear that hides a selected project being behind the real fleet.
+    make_project(fleet_dir, "alpha")
+    make_project(fleet_dir, "beta", config_text="project:\n  project_init_version: 0.6.0\n")
+    alpha = _snapshot(fleet_dir, name="alpha")
+    beta = _snapshot(fleet_dir, name="beta")
+
+    rows_subset_only = fleet_rows([alpha])
+    assert {r["Project"]: r for r in rows_subset_only}["alpha"]["Latest"] == "="  # the trap
+
+    rows_with_reference = fleet_rows([alpha], [alpha, beta])
+    assert {r["Project"]: r for r in rows_with_reference}["alpha"]["Latest"] == "behind"
+
+
 def test_fleet_rows_marks_newest_project_current(fleet_dir: Path) -> None:
     make_project(fleet_dir, "alpha")
     make_project(fleet_dir, "beta", config_text="project:\n  project_init_version: 0.6.0\n")

@@ -239,6 +239,23 @@ def test_cli_status_filters_with_where(fleet_dir: Path, capsys) -> None:
     assert "alpha" not in out
 
 
+def test_cli_status_where_still_flags_behind_against_the_full_fleet(
+    fleet_dir: Path, capsys
+) -> None:
+    # Filtering the table must not hide that a shown project is behind a project
+    # the filter excluded. `status --where name=alpha` renders alpha's Latest as
+    # `behind`, because beta (newer, filtered out) is still the version reference.
+    from projects_orchestrator.__main__ import main
+
+    make_project(fleet_dir, "alpha")
+    make_project(fleet_dir, "beta", config_text="project:\n  project_init_version: 0.6.0\n")
+    assert main(["status", "--root", str(fleet_dir), "--where", "name=alpha"]) == 0
+    out = capsys.readouterr().out
+    assert "alpha" in out
+    assert "beta" not in out  # filtered out of the rows
+    assert "behind" in out  # ...but still the version reference
+
+
 def test_cli_an_unknown_field_exits_two(fleet_dir: Path, capsys) -> None:
     # It must NOT exit 0 with an empty table, which reads as "all healthy".
     from projects_orchestrator.__main__ import main

@@ -147,7 +147,9 @@ def _cmd_status(args: argparse.Namespace) -> int:
     if not selected:
         print("no projects match")
         return 0
-    print(render_table(fleet_rows(selected)))
+    # Pass the FULL fleet as the version reference so a filtered row still shows
+    # "behind" when a project the filter hid is newer — not a false "=".
+    print(render_table(fleet_rows(selected, snapshots)))
     return 0
 
 
