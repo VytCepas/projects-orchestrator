@@ -162,6 +162,49 @@ def remove(worktree: Worktree) -> bool:
     return not worktree.path.exists()
 
 
+def origin_repo(worktree_path: Path) -> Path | None:
+    """Find the clone a worktree was cut from; ``None`` if it cannot be resolved.
+
+    A caller that has only a checkout path (a detached run holds the path, not the
+    originating clone) still needs the clone to deregister the worktree — you
+    cannot ``git worktree remove`` a worktree from *inside itself*. A linked
+    worktree's ``--git-common-dir`` is the main repo's ``.git``, whose parent is
+    the clone.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],  # noqa: S607 — `git` resolved from PATH, as everywhere here
+            cwd=worktree_path,
+            capture_output=True,
+            text=True,
+            timeout=_GIT_TIMEOUT,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return None
+    common = Path(proc.stdout.strip())
+    if not common.is_absolute():
+        common = (worktree_path / common).resolve()
+    return common.parent
+
+
+def remove_path(worktree_path: Path) -> bool:
+    """Remove a worktree given only its path; resolve the origin repo itself.
+
+    The path-only counterpart to :func:`remove`, for callers (a landed :mod:`work`
+    run) that recorded the checkout but not the clone.
+    """
+    repo = origin_repo(worktree_path)
+    if repo is None:
+        # Cannot deregister cleanly, but the directory must still go — a leaked
+        # checkout is worse than a dangling admin entry, which `prune` mops up.
+        shutil.rmtree(worktree_path, ignore_errors=True)
+        return not worktree_path.exists()
+    return remove(Worktree(project="", path=worktree_path, branch="", repo=repo))
+
+
 def prune_expired(repo: Path, project: str, expiry_days: int = DEFAULT_EXPIRY_DAYS) -> int:
     """Delete kept worktrees older than ``expiry_days``; return how many went.
 

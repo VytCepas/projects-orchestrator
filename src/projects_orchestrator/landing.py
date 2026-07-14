@@ -53,6 +53,8 @@ _VALID_BRANCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*\Z")
 _ALWAYS_PROTECTED = frozenset({"main", "master", "trunk", "develop", "HEAD", "@"})
 
 REFUSED = "refused"
+COMMIT_FAILED = "commit_failed"
+NOTHING_TO_COMMIT = "nothing_to_commit"
 PUSH_FAILED = "push_failed"
 PR_FAILED = "pr_failed"
 LANDED = "landed"
@@ -220,3 +222,28 @@ def open_draft_pr(worktree: Path, branch: str, title: str, body: str) -> Landing
         return Landing(PR_FAILED, detail=result.stderr.strip()[-300:] or "gh pr create failed")
     url = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
     return Landing(LANDED, pr_url=url)
+
+
+def commit_all(worktree: Path, message: str) -> Landing:
+    """Stage and commit everything the agent changed; report the outcome.
+
+    The briefing tells the agent NOT to commit — the harness commits after it has
+    re-verified the work — so the agent's edits sit uncommitted in the worktree.
+    Skipping this and pushing straight away sends only the branch ref cut from
+    ``HEAD``: an empty diff, and a PR with nothing in it (or a ``gh pr create``
+    that fails for having no commits). The commit is not optional plumbing; it is
+    how the agent's work actually reaches the branch.
+
+    A worktree with no changes returns :data:`NOTHING_TO_COMMIT` rather than a
+    misleading success — an agent that changed nothing has not produced a PR-worthy
+    result, and committing ``--allow-empty`` would paper over that.
+    """
+    if not _run_argv(["git", "add", "-A"], cwd=worktree).ok:
+        return Landing(COMMIT_FAILED, detail="git add failed")
+    status = _run_argv(["git", "status", "--porcelain"], cwd=worktree)
+    if status.ok and not status.stdout.strip():
+        return Landing(NOTHING_TO_COMMIT, detail="the agent made no changes")
+    committed = _run_argv(["git", "commit", "-m", message], cwd=worktree)
+    if not committed.ok:
+        return Landing(COMMIT_FAILED, detail=committed.stderr.strip()[-300:] or "git commit failed")
+    return Landing(LANDED)

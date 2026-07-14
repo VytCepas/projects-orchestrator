@@ -269,6 +269,7 @@ The write boundary — an agent run's work leaves here as a draft PR, or not at 
 - `def is_protected` — Whether ``branch`` is a ref an agent run may never write to (pure).
 - `def push_branch` — Push one agent branch to ``origin``; refuse anything else.
 - `def open_draft_pr` — Open a **draft** PR from ``branch``; never a ready-for-review one.
+- `def commit_all` — Stage and commit everything the agent changed; report the outcome.
 
 ### `projects_orchestrator/memory.py`
 
@@ -432,4 +433,6 @@ Throwaway git worktrees — an agent works here, never in the operator's clone.
 - `def run_slug` — Build a slug that will not collide with a concurrent run on this repo.
 - `def create` — Cut a fresh worktree from ``repo``'s HEAD; ``None`` if git refuses.
 - `def remove` — Remove a worktree and deregister it; report success (never raises).
+- `def origin_repo` — Find the clone a worktree was cut from; ``None`` if it cannot be resolved.
+- `def remove_path` — Remove a worktree given only its path; resolve the origin repo itself.
 - `def prune_expired` — Delete kept worktrees older than ``expiry_days``; return how many went.

@@ -139,20 +139,37 @@ def _default_agent(worktree: Path, prompt: str, log_path: Path) -> bool:
 
 
 def _default_land(run: runs.AgentRun) -> runs.AgentRun:
-    """Push the run's branch and open a draft PR through the write boundary."""
-    pushed = landing.push_branch(
-        Path(run.worktree), run.branch, repo_default=landing.default_branch(Path(run.worktree))
-    )
+    """Commit the agent's edits, push the branch, open a draft PR; then clean up.
+
+    The commit is the step it is easy to forget and fatal to skip: the agent is
+    told NOT to commit (the briefing's contract), so its edits sit uncommitted in
+    the worktree. Pushing without committing sends only the branch ref cut from
+    HEAD — an empty PR, or a ``gh pr create`` that fails for having no commits.
+    """
+    tree = Path(run.worktree)
+
+    committed = landing.commit_all(tree, f"agent: {run.task[:72]}")
+    if committed.status == landing.NOTHING_TO_COMMIT:
+        return runs.finish(run, runs.FAILED, detail="the agent changed nothing — nothing to land")
+    if not committed.ok:
+        return runs.finish(run, runs.FAILED, detail=committed.detail)
+
+    pushed = landing.push_branch(tree, run.branch, repo_default=landing.default_branch(tree))
     if not pushed.ok:
         return runs.finish(run, runs.FAILED, detail=pushed.detail)
-    title = f"agent: {run.task[:60]}"
+
     body = (
         f"Opened by projects-orchestrator `work` for run `{run.id}`.\n\n"
         f"Task: {run.task}\n\nReview before merging — this is unreviewed agent output."
     )
-    opened = landing.open_draft_pr(Path(run.worktree), run.branch, title, body)
+    opened = landing.open_draft_pr(tree, run.branch, f"agent: {run.task[:60]}", body)
     if not opened.ok:
         return runs.finish(run, runs.FAILED, detail=opened.detail)
+
+    # The work is in the PR now, so the checkout is redundant. Only FAILED runs
+    # keep their worktree as evidence (ADR-007); a landed one is removed here, or
+    # the state dir accretes a dead worktree per successful run forever.
+    wt.remove_path(tree)
     return runs.finish(run, runs.PR_OPENED, pr_url=opened.pr_url)
 
 

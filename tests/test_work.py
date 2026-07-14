@@ -309,3 +309,80 @@ def test_cli_work_list_empty_is_friendly(capsys) -> None:
 
     assert main(["work", "--list"]) == 0
     assert "no agent runs" in capsys.readouterr().out
+
+
+# --- The real landing path (commit → push → PR → cleanup) --------------------
+# The composition tests above inject `land`, so they never exercised the REAL
+# _default_land — which is exactly how the "push without committing" bug shipped.
+# These drive it end to end against a real bare remote.
+
+
+def _repo_with_remote(fleet_dir: Path, tmp_path: Path) -> object:
+    descriptor = _repo(fleet_dir)
+    remote = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+    subprocess.run(
+        ["git", "-C", str(descriptor.path), "remote", "add", "origin", str(remote)], check=True
+    )
+    return descriptor
+
+
+def test_default_land_commits_the_agents_edits_before_pushing(
+    fleet_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # THE P1. The agent is told not to commit, so its edits are uncommitted in the
+    # worktree; landing must commit them or the branch is empty and the PR is a
+    # no-diff. Drive the real _default_land, stubbing only the final `gh pr create`.
+    descriptor = _repo_with_remote(fleet_dir, tmp_path)
+    run = work.launch(descriptor, "add a file", spawn=_recording_spawn([]))
+
+    # Simulate the agent: write a file in the worktree WITHOUT committing.
+    (Path(run.worktree) / "created_by_agent.txt").write_text("hi", encoding="utf-8")
+
+    # Let commit and push run for real against the bare remote; stub only the PR.
+    opened: list[str] = []
+
+    def patched_open(_worktree: Path, branch: str, _title: str, _body: str) -> object:
+        opened.append(branch)
+        return work.landing.Landing(work.landing.LANDED, pr_url="https://example/pr/1")
+
+    monkeypatch.setattr(work.landing, "open_draft_pr", patched_open)
+    result = work._default_land(run)
+
+    assert result.state == runs.PR_OPENED
+    # The agent's file reached the pushed branch as a real commit.
+    show = subprocess.run(
+        ["git", "-C", str(descriptor.path), "show", "--stat", f"origin/{run.branch}"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert "created_by_agent.txt" in show
+    assert opened == [run.branch]  # the PR was opened after the commit landed
+
+
+def test_default_land_fails_when_the_agent_changed_nothing(fleet_dir: Path, tmp_path: Path) -> None:
+    # An agent that touched nothing has not produced a PR-worthy result. Landing
+    # must fail loudly, not open an empty PR.
+    descriptor = _repo_with_remote(fleet_dir, tmp_path)
+    run = work.launch(descriptor, "do nothing", spawn=_recording_spawn([]))
+    result = work._default_land(run)  # no edits made in the worktree
+    assert result.state == runs.FAILED
+    assert "nothing" in result.detail
+
+
+def test_default_land_removes_the_worktree_on_success(
+    fleet_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The P2: a landed run's checkout is redundant (the work is in the PR) and must
+    # not accrete in the state dir. Only FAILED runs keep their worktree.
+    descriptor = _repo_with_remote(fleet_dir, tmp_path)
+    run = work.launch(descriptor, "add a file", spawn=_recording_spawn([]))
+    (Path(run.worktree) / "f.txt").write_text("x", encoding="utf-8")
+    monkeypatch.setattr(
+        work.landing,
+        "open_draft_pr",
+        lambda *_: work.landing.Landing(work.landing.LANDED, pr_url="https://x/1"),
+    )
+    work._default_land(run)
+    assert not Path(run.worktree).exists()

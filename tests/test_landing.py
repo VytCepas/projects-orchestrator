@@ -313,3 +313,36 @@ def test_a_child_whose_trunk_is_not_main_is_still_protected(
 
     result = push_branch(project, "production", repo_default=default_branch(project))
     assert result.status == REFUSED
+
+
+# --- Committing the agent's edits (commit_all) --------------------------------
+
+
+def test_commit_all_commits_uncommitted_changes(fleet_dir: Path) -> None:
+    from projects_orchestrator.landing import LANDED, commit_all
+
+    project = make_project(fleet_dir, "alpha")
+    git_init(project)
+    (project / "new.txt").write_text("hi", encoding="utf-8")
+    result = commit_all(project, "agent: did a thing")
+    assert result.status == LANDED
+    log = subprocess.run(
+        ["git", "-C", str(project), "log", "--oneline"], capture_output=True, text=True, check=True
+    ).stdout
+    assert "did a thing" in log
+
+
+def test_commit_all_reports_nothing_to_commit_on_a_clean_tree(fleet_dir: Path) -> None:
+    from projects_orchestrator.landing import NOTHING_TO_COMMIT, commit_all
+
+    project = make_project(fleet_dir, "alpha")
+    git_init(project)
+    # git_init already committed everything; the tree is clean.
+    assert commit_all(project, "m").status == NOTHING_TO_COMMIT
+
+
+def test_commit_all_on_a_non_repo_fails_rather_than_raising(fleet_dir: Path) -> None:
+    from projects_orchestrator.landing import COMMIT_FAILED, commit_all
+
+    plain = make_project(fleet_dir, "alpha")  # no git_init
+    assert commit_all(plain, "m").status == COMMIT_FAILED
