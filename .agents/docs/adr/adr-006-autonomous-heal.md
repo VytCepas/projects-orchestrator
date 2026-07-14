@@ -32,12 +32,24 @@ Chosen option: **PR-gated autonomous fix** (`heal.py`, wired as the `heal
    runnable and locally re-verifiable. `ci`/`cloud` failures depend on
    remote state a local run can't reproduce, so they're excluded from this
    loop entirely.
-2. **The fix runs on a dedicated branch, never in place.** `heal_project`
+2. **The fix runs on a dedicated branch, never in place.** ~~`heal_project`
    requires a clean worktree, checks out `heal/<tasks>-<project>`, and
-   restores the original branch on every exit path (success or failure) —
-   the rest of the engine (`status.py`, the checks cache's `head` stamp)
-   assumes one stable "current" branch per project, and heal must not
-   violate that between commands.
+   restores the original branch on every exit path (success or failure).~~
+
+   > **SUPERSEDED by [ADR-007](adr-007-agent-orchestration.md) §3.** The intent
+   > stands — the fix must never happen in place — but the mechanism did not
+   > survive contact with a fleet. Checking out *in the operator's own clone*
+   > branch-switches every project out from under whoever is working in them,
+   > and "restores on every exit path" was never true: it rested on a `finally`,
+   > which a SIGKILL or an OOM skips, stranding the clone on a `heal/` branch
+   > with an agent's uncommitted edits in the tree. It also made a detached run,
+   > two concurrent runs, and a run whose record outlives its process all
+   > impossible, since a run held the clone's HEAD for its whole life.
+   >
+   > `heal_project` now cuts a throwaway **`git worktree`** (see `worktree.py`):
+   > same isolation, shared object store, and the operator's clone is only ever
+   > read. The clean-worktree requirement is gone with the reason for it — a
+   > project can be healed while you are mid-edit in it.
 3. **A scoped coding agent edits files; the orchestrator does everything
    else.** The agent (the `claude` CLI, headless) is told exactly which
    command is failing and its last-known error, and is explicitly told not
@@ -65,10 +77,16 @@ Chosen option: **PR-gated autonomous fix** (`heal.py`, wired as the `heal
    or lint output containing prompt-injection-shaped text can't as easily
    pass for an operator instruction.
 5. **Every external effect is injectable and never raises**, consistent with
-   ADR-003: `agent_run` and `open_pr` are swappable (tests inject fakes; no
-   live agent or GitHub call ever runs in CI), and a dirty worktree,
-   failed checkout, agent failure, failed re-verification, or failed
-   push/PR all degrade to a typed `HealResult` rather than an exception.
+   ADR-003: `agent_run` and `open_pr` are swappable, and a refused worktree,
+   agent failure, failed re-verification, or failed push/PR all degrade to a
+   typed `HealResult` rather than an exception.
+
+   "No live agent ever runs in CI" was originally asserted only by convention —
+   every *existing* test happened to inject a fake. That is not a guarantee, and
+   it broke: one test relied on heal aborting before the agent ran, and when the
+   checkout it depended on was removed (ADR-007), the test fell through and
+   launched a real `claude` process with a live budget. An autouse fixture now
+   fuses `_default_agent_run` shut, so a test must inject an agent to get one.
 6. **Every git/gh call is argv-only, never a shell string.** `descriptor.name`
    (and the branch derived from it) comes from the child's own
    `.claude/config.yaml` — unlike `tooling.*_command`, ADR-003's "trusted

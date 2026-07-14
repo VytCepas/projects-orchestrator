@@ -347,7 +347,7 @@ def test_heal_never_checks_out_in_the_operators_clone(fleet_dir: Path) -> None:
 
 def test_a_failed_run_keeps_its_worktree_as_evidence(fleet_dir: Path) -> None:
     # Deleting a dead agent's worktree destroys the only record of what it did,
-    # at precisely the moment someone needs it (ADR-006).
+    # at precisely the moment someone needs it (ADR-007).
     project = make_project(fleet_dir, "alpha", tooling={"lint": "true"})
     git_init(project)
     descriptor = load_descriptor(project)

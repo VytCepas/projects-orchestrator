@@ -15,6 +15,7 @@ The agent never works in the operator's clone. It used to: heal originally ran
 from under whoever was working in them, and a SIGKILL mid-run stranded a clone
 on a ``heal/`` branch with an agent's edits in the tree. :mod:`worktree` closes
 that; see its docstring for why a ``finally`` was never a sufficient guarantee.
+(ADR-007 §3 supersedes ADR-006 §2, which specified the old checkout.)
 
 Because the run is now isolated, heal no longer cares whether your clone is
 dirty — you can heal a project while you are mid-edit in it.
@@ -396,7 +397,7 @@ def heal_project(
             return replace(landed, worktree=str(tree.path))
         return landed
     finally:
-        # Asymmetric on purpose (ADR-006): a successful run's worktree is
+        # Asymmetric on purpose (ADR-007): a successful run's worktree is
         # redundant — the work is in the PR — but a failed one is the only
         # record of what the agent actually did, so it is retained and expires
         # on a clock instead. An early `return` above leaves `keep` True, which

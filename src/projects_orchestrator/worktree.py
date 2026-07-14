@@ -11,7 +11,7 @@ exists to close all three:
    sleeps badly skips it, stranding the clone on a ``heal/`` branch with an
    agent's uncommitted edits in the tree.
 3. **It serialises everything.** Detached runs, concurrent runs, and a run whose
-   state outlives its process (ADR-006) are all impossible while a run owns HEAD.
+   state outlives its process (ADR-007) are all impossible while a run owns HEAD.
 
 A worktree shares the repository's object store, so cutting one is cheap: it is a
 second checkout, not a second clone. Worktrees live under ``$XDG_STATE_HOME``
