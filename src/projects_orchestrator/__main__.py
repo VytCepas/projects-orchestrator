@@ -15,7 +15,7 @@ import sys
 from dataclasses import asdict, replace
 from pathlib import Path
 
-from projects_orchestrator import __version__, cache, runs, selector, work
+from projects_orchestrator import __version__, cache, campaign, runs, selector, work
 from projects_orchestrator.adapters.cloud import (
     DEPLOY_ACTIONS,
     DISPATCH_DISPATCHED,
@@ -800,6 +800,109 @@ def _cmd_run_agent(args: argparse.Namespace) -> int:
     return 0 if result.state == runs.PR_OPENED else 1
 
 
+def _runs_by_project() -> dict[str, list[runs.AgentRun]]:
+    """Group every recorded run by its project, for deriving campaign progress."""
+    grouped: dict[str, list[runs.AgentRun]] = {}
+    for run in runs.list_runs():
+        grouped.setdefault(run.project, []).append(run)
+    return grouped
+
+
+def _campaign_fleet(args: argparse.Namespace, camp: campaign.Campaign) -> Fleet:
+    """Discover the fleet, forcing plain-repo inclusion when the campaign needs it.
+
+    A ``scaffold=none`` campaign targets repos with no project-init, which are
+    invisible to discovery by default — so the campaign's own policy overrides the
+    fleet config here, or its target list would be silently empty.
+    """
+    config = _fleet_config(args)
+    if camp.policy.include_plain_repos:
+        config = replace(config, include_plain_repos=True)
+    fleet = discover(config)
+    for warning in fleet.warnings:
+        print(f"warning: {warning}", file=sys.stderr)
+    return fleet
+
+
+def _outcome_line(outcome: campaign.Outcome) -> str:
+    """One rendered line for a campaign run outcome."""
+    state = "timed-out" if outcome.timed_out else outcome.run.state
+    where = outcome.run.pr_url or outcome.run.detail or ""
+    tail = f"  {where}" if where else ""
+    return f"{state:<11} {outcome.run.project:<18}{tail}"
+
+
+def _campaign_json(report: campaign.CampaignReport) -> dict[str, object]:
+    return {
+        "name": report.name,
+        "canary": report.canary,
+        "remaining": report.remaining,
+        "outcomes": [
+            {
+                "run_id": o.run.id,
+                "project": o.run.project,
+                "state": o.run.state,
+                "pr_url": o.run.pr_url,
+                "timed_out": o.timed_out,
+                "detail": o.run.detail,
+            }
+            for o in report.outcomes
+        ],
+    }
+
+
+def _render_campaign_report(report: campaign.CampaignReport) -> None:
+    """Print a campaign's outcomes, then the canary's you-still-have-N nudge."""
+    for outcome in report.outcomes:
+        print(_outcome_line(outcome))
+    if report.canary and report.remaining:
+        print(
+            f"\ncanary complete — {report.remaining} project(s) still outstanding. "
+            "Review the PR above, then re-run with --apply to fan out to the rest."
+        )
+
+
+def _cmd_campaign(args: argparse.Namespace) -> int:
+    """Run a declarative campaign: canary one project by default, --apply for all.
+
+    Progress is derived, not tracked: what is outstanding is recomputed each run
+    from the selector and the runs store, so a campaign whose selector matches
+    nothing is done (exit 0), and re-running picks up only what still remains.
+    """
+    try:
+        camp = campaign.load_campaign(Path(args.file))
+    except campaign.CampaignError as exc:
+        print(f"campaign: {exc}", file=sys.stderr)
+        return 2
+
+    snapshots = fleet_snapshots(_campaign_fleet(args, camp))
+    targets = campaign.outstanding(camp, snapshots, _runs_by_project())
+    if not targets:
+        print(f"campaign '{camp.name}' is done — nothing outstanding")
+        return 0
+    if args.dry_run:
+        print(f"campaign '{camp.name}': {len(targets)} project(s) outstanding")
+        for snapshot in targets:
+            print(f"  {snapshot.descriptor.name}")
+        print("\nre-run without --dry-run to canary one, or with --apply to fan out.")
+        return 0
+
+    batch = targets if args.apply else targets[:1]
+    outcomes = campaign.execute(camp, [s.descriptor for s in batch], campaign.default_seams())
+    report = campaign.summarize(
+        camp, outcomes, remaining=len(targets) - len(batch), canary=not args.apply
+    )
+    # The exit code carries the outcome to automation and must survive the render
+    # format: `_emit_json` always returns 0, so a failed run reported as JSON would
+    # otherwise look like success while the text path correctly fails.
+    exit_code = 0 if report.ok else 1
+    if args.json or camp.policy.output == "json":
+        _emit_json(_campaign_json(report))
+        return exit_code
+    _render_campaign_report(report)
+    return exit_code
+
+
 def _cmd_snapshot(args: argparse.Namespace) -> int:
     """Dump the full joined fleet view (text, JSON, or standalone HTML)."""
     fleet = _discover(args)
@@ -1042,6 +1145,12 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
         (work.RUNNER_SUBCOMMAND, argparse.SUPPRESS, _cmd_run_agent, False),
         (
+            "campaign",
+            "run a declarative fleet campaign (canary by default; --apply to fan out)",
+            _cmd_campaign,
+            True,
+        ),
+        (
             "upgrade-plan",
             "scaffold version vs upstream project-init (--apply triggers upgrades)",
             _cmd_upgrade_plan,
@@ -1116,6 +1225,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "-n", "--lines", type=int, default=40, help="trailing lines to show (default 40)"
     )
     _add_work_arguments(sub)
+    campaign_sp = sub.choices["campaign"]
+    campaign_sp.add_argument("file", help="path to the campaign YAML file")
+    campaign_sp.add_argument(
+        "--apply",
+        action="store_true",
+        help="fan out to every outstanding project (default: canary one and stop)",
+    )
+    campaign_sp.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="list outstanding projects and launch nothing",
+    )
     sub.choices["register"].add_argument(
         "result", help="path to `scaffold --json` output, or '-' for stdin"
     )
