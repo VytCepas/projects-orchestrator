@@ -260,6 +260,16 @@ Render the fleet view as one self-contained HTML page.
 
 - `def render_html` — Render fleet rows as a complete standalone HTML document (pure).
 
+### `projects_orchestrator/landing.py`
+
+The write boundary — an agent run's work leaves here as a draft PR, or not at all.
+
+- `class Landing` — The outcome of trying to land a run's work.
+- `def default_branch` — Resolve the repo's *actual* default branch; ``""`` when it cannot be.
+- `def is_protected` — Whether ``branch`` is a ref an agent run may never write to (pure).
+- `def push_branch` — Push one agent branch to ``origin``; refuse anything else.
+- `def open_draft_pr` — Open a **draft** PR from ``branch``; never a ready-for-review one.
+
 ### `projects_orchestrator/memory.py`
 
 Read and search the fleet's memory — the "all-knowing" layer.
