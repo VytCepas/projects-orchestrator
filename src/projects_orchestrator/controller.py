@@ -27,6 +27,7 @@ from projects_orchestrator.detail import build_detail, render_detail
 from projects_orchestrator.doctor import diagnose
 from projects_orchestrator.drift import compute_drift
 from projects_orchestrator.fleet import fleet_rows, fleet_snapshots, render_table
+from projects_orchestrator.heal import heal_project, render_heal_result
 from projects_orchestrator.memory import load_project_memory, search_memory
 from projects_orchestrator.observability import filter_since, load_events
 from projects_orchestrator.pool import map_ordered
@@ -48,6 +49,7 @@ commands:
   stop <project>          terminate the supervised process
   logs <project>          tail the captured run output
   deploy <project> [action]  plan a cloud action (deploy|rollback|restart); dispatch via CLI --apply
+  heal <project>          spawn a scoped agent to fix a cached lint/test failure, open a PR
   memory <query>          search every project's memory files
   drift [project|all]     scaffold drift vs the recorded manifest
   doctor [project|all]    diagnose contract-v1 conformance
@@ -70,7 +72,7 @@ _TARGET_VERBS = {"drift", "doctor", "audit", "ci", "upgrade", "cloud", "events",
 
 # Verbs that require exactly one project target (plus an optional trailing
 # argument, e.g. the deploy action — supervise verbs ignore it).
-_PROJECT_VERBS = {"start", "stop", "logs", "deploy"}
+_PROJECT_VERBS = {"start", "stop", "logs", "deploy", "heal"}
 
 
 @dataclass(frozen=True)
@@ -377,6 +379,20 @@ def _dispatch_deploy(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
     yield f"{result.project}: {result.action} {result.status} — {result.detail}"
 
 
+def _dispatch_heal(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
+    """Attempt an autonomous fix for one project's cached lint/test failure."""
+    if intent.target is None or intent.target == "all":
+        yield "usage: heal <project>"
+        return
+    selected = _select_projects(ctx, intent.target)
+    if isinstance(selected, str):
+        yield selected
+        return
+    descriptor = selected[0]
+    cached = cache.load_results(ctx.cache_file).get(descriptor.name, {})
+    yield render_heal_result(heal_project(descriptor, cached))
+
+
 def _dispatch_ask(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
     """Resolve /ask to an existing intent (opt-in), then dispatch it."""
     import os
@@ -425,6 +441,7 @@ _ENGINE = {
     "stop": _dispatch_supervise,
     "logs": _dispatch_supervise,
     "deploy": _dispatch_deploy,
+    "heal": _dispatch_heal,
     "ask": _dispatch_ask,
     "upgrade": _dispatch_upgrade,
 }
