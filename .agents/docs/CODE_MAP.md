@@ -221,6 +221,18 @@ Fleet setup-readiness checklist with concrete next actions.
 - `def checklist` — Build hardening checklists for the fleet.
 - `def render_text` — Render reports as grouped text with concrete next actions.
 
+### `projects_orchestrator/heal.py`
+
+Autonomous fix dispatch — spawn a scoped coding agent to repair a failing gate.
+
+- `class AgentOutcome` — Result of one scoped coding-agent invocation.
+- `class PrOutcome` — Result of opening a pull request for a healed branch.
+- `class HealResult` — Outcome of one heal attempt on one project.
+- `def pending_failures` — Return the project's cached failures among the healable tasks (pure).
+- `def build_heal_prompt` — Render the fix-scoping prompt handed to the coding agent (pure).
+- `def heal_project` — Attempt to fix one project's failing lint/test gate end to end; never raises.
+- `def render_heal_result` — Render one heal outcome as a single human-readable line (pure).
+
 ### `projects_orchestrator/history.py`
 
 Append-only check history — trends the last-known cache can't show.
