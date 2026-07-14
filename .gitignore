@@ -52,3 +52,4 @@ site/
 # machine-specific fleet definition (see fleet.yaml.example)
 fleet.yaml
 .coverage
+mutants/
