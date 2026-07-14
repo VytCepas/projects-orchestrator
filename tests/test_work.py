@@ -1,0 +1,388 @@
+"""`work`: launch a tracked, detached agent run — and list, tail, stop it.
+
+Every external effect is injected — spawn (the detached process), agent (the
+claude CLI), land (the write boundary) — so nothing here starts a process or a
+real agent. The composition of the five layers is what is under test, not their
+individual internals (those have their own suites).
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+from conftest import git_init, make_project
+
+from projects_orchestrator import runs, work
+from projects_orchestrator.descriptor import load_descriptor
+
+
+@pytest.fixture(autouse=True)
+def _isolate_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+
+
+def _repo(fleet_dir: Path, name: str = "alpha") -> object:
+    project = make_project(fleet_dir, name, tooling={"lint": "true"})
+    git_init(project)
+    return load_descriptor(project)
+
+
+def _recording_spawn(calls: list[list[str]]) -> work.Spawn:
+    # Return THIS process's pid: it is genuinely alive, so runs' reconciliation
+    # (a dead pid → failed, #113) leaves the launched run RUNNING. A fake dead pid
+    # would correctly reconcile to failed — a different test, not this one.
+    def spawn(argv: list[str], _log_path: Path) -> int:
+        calls.append(argv)
+        return os.getpid()
+
+    return spawn
+
+
+# --- Launch ------------------------------------------------------------------
+
+
+def test_launch_records_a_running_agent(fleet_dir: Path) -> None:
+    run = work.launch(_repo(fleet_dir), "add a health endpoint", spawn=_recording_spawn([]))
+    assert run.state == runs.RUNNING
+    assert run.task == "add a health endpoint"
+    assert run.pid == os.getpid()
+
+
+def test_launch_is_visible_in_the_listing(fleet_dir: Path) -> None:
+    # The whole point of the run record: it outlives the launching call.
+    work.launch(_repo(fleet_dir), "t", spawn=_recording_spawn([]))
+    assert [r.state for r in work.list_runs()] == [runs.RUNNING]
+
+
+def test_launch_cuts_a_worktree_not_the_operators_clone(fleet_dir: Path) -> None:
+    descriptor = _repo(fleet_dir)
+    run = work.launch(descriptor, "t", spawn=_recording_spawn([]))
+    assert run.worktree
+    assert Path(run.worktree) != descriptor.path
+    assert Path(run.worktree).is_dir()
+
+
+def test_launch_spawns_the_detached_runner_for_this_run(fleet_dir: Path) -> None:
+    calls: list[list[str]] = []
+    run = work.launch(_repo(fleet_dir), "t", spawn=_recording_spawn(calls))
+    assert calls == [[sys.argv[0], work.RUNNER_SUBCOMMAND, run.id]]
+
+
+def test_launch_stages_the_briefing_for_the_runner(fleet_dir: Path) -> None:
+    # The detached runner reads the prompt from a file (it is large and carries
+    # untrusted output); launch must write it before spawning.
+    run = work.launch(_repo(fleet_dir), "fix the frobnicator", spawn=_recording_spawn([]))
+    prompt = work._prompt_path(run.id).read_text(encoding="utf-8")
+    assert "fix the frobnicator" in prompt
+    assert "do not commit" in prompt.lower()  # the write-boundary contract
+
+
+def test_launch_on_a_non_repo_fails_synchronously(fleet_dir: Path) -> None:
+    # A repo that cannot yield a worktree fails HERE, in the operator's shell —
+    # not silently inside a detached process discovered later via --list.
+    plain = make_project(fleet_dir, "alpha", tooling={"lint": "true"})  # no git_init
+    run = work.launch(load_descriptor(plain), "t", spawn=_recording_spawn([]))
+    assert run.state == runs.FAILED
+    assert "worktree" in run.detail
+
+
+def test_a_failed_launch_never_spawns_anything(fleet_dir: Path) -> None:
+    plain = make_project(fleet_dir, "alpha", tooling={"lint": "true"})
+    calls: list[list[str]] = []
+    work.launch(load_descriptor(plain), "t", spawn=_recording_spawn(calls))
+    assert calls == []
+
+
+def test_a_spawn_failure_degrades_to_failed(fleet_dir: Path) -> None:
+    def boom(_argv: list[str], _log: Path) -> int:
+        raise OSError("no fork for you")
+
+    run = work.launch(_repo(fleet_dir), "t", spawn=boom)
+    assert run.state == runs.FAILED
+    assert "launch" in run.detail
+
+
+def test_the_branch_is_unique_per_run(fleet_dir: Path) -> None:
+    descriptor = _repo(fleet_dir)
+    a = work.launch(descriptor, "t", spawn=_recording_spawn([]))
+    b = work.launch(descriptor, "t", spawn=_recording_spawn([]))
+    assert a.branch != b.branch  # else the second run deadlocks on the first's kept worktree
+
+
+# --- The detached runner body ------------------------------------------------
+
+
+def _launched(fleet_dir: Path, task: str = "t") -> runs.AgentRun:
+    return work.launch(_repo(fleet_dir), task, spawn=_recording_spawn([]))
+
+
+def test_run_agent_lands_a_pr_on_success(fleet_dir: Path) -> None:
+    run = _launched(fleet_dir)
+    landed = runs.AgentRun(**{**vars(run), "state": runs.PR_OPENED, "pr_url": "https://x/pr/1"})
+    result = work.run_agent(
+        run.id,
+        agent=lambda *_: True,
+        land=lambda _r: runs.finish(_r, runs.PR_OPENED, pr_url="https://x/pr/1"),
+    )
+    assert result.state == runs.PR_OPENED
+    assert runs.load(run.id).pr_url == "https://x/pr/1"
+    assert landed  # (constructed only to document the expected shape)
+
+
+def test_run_agent_fails_and_keeps_the_worktree_when_the_agent_dies(fleet_dir: Path) -> None:
+    run = _launched(fleet_dir)
+    landed_called: list[int] = []
+    result = work.run_agent(
+        run.id,
+        agent=lambda *_: False,
+        land=lambda _r: landed_called.append(1) or _r,  # must NOT be reached
+    )
+    assert result.state == runs.FAILED
+    assert landed_called == []  # a dead agent is never landed
+    assert Path(run.worktree).is_dir()  # evidence kept
+
+
+def test_run_agent_never_lands_without_a_successful_agent(fleet_dir: Path) -> None:
+    run = _launched(fleet_dir)
+    result = work.run_agent(run.id, agent=lambda *_: False, land=lambda _r: _r)
+    assert result.state == runs.FAILED
+
+
+def test_run_agent_on_an_unknown_run_is_failed_not_a_crash() -> None:
+    result = work.run_agent("no-such-run", agent=lambda *_: True, land=lambda r: r)
+    assert result.state == runs.FAILED
+
+
+def test_run_agent_leaves_an_already_terminal_run_untouched(fleet_dir: Path) -> None:
+    # A stop that raced ahead of the wrapper already settled the run; the wrapper
+    # must not resurrect it, overwrite it, OR waste a real agent run on it.
+    run = _launched(fleet_dir)
+    runs.finish(run, runs.ABANDONED, detail="stopped first")
+    agent_calls: list[int] = []
+    result = work.run_agent(
+        run.id, agent=lambda *_: agent_calls.append(1) or True, land=lambda r: r
+    )
+    assert result.state == runs.ABANDONED
+    assert agent_calls == []  # the abandoned run must not still burn an agent
+
+
+def test_run_agent_fails_when_the_briefing_is_missing(fleet_dir: Path) -> None:
+    run = _launched(fleet_dir)
+    work._prompt_path(run.id).unlink()
+    result = work.run_agent(run.id, agent=lambda *_: True, land=lambda r: r)
+    assert result.state == runs.FAILED
+
+
+# --- Logs --------------------------------------------------------------------
+
+
+def test_logs_tails_the_run_log(fleet_dir: Path) -> None:
+    run = _launched(fleet_dir)
+    Path(run.log_path).write_text("line one\nline two\nline three\n", encoding="utf-8")
+    assert work.logs(run.id, lines=2) == ["line two", "line three"]
+
+
+def test_logs_on_an_unknown_run_is_empty() -> None:
+    assert work.logs("no-such-run") == []
+
+
+def test_logs_before_anything_is_written_is_empty(fleet_dir: Path) -> None:
+    run = _launched(fleet_dir)
+    Path(run.log_path).unlink(missing_ok=True)
+    assert work.logs(run.id) == []
+
+
+# --- Stop --------------------------------------------------------------------
+
+
+def test_stop_terminates_and_marks_abandoned(
+    fleet_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    killed: list[int] = []
+    monkeypatch.setattr(work, "terminate_group", lambda pid, _grace: killed.append(pid))
+    run = _launched(fleet_dir)
+    stopped = work.stop(run.id)
+    assert stopped is not None
+    assert stopped.state == runs.ABANDONED
+    assert killed == [run.pid]
+
+
+def test_stop_on_an_unknown_run_is_none() -> None:
+    assert work.stop("no-such-run") is None
+
+
+def test_stop_does_not_bury_a_run_that_already_opened_its_pr(
+    fleet_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A stop racing a natural completion must not overwrite pr-opened with
+    # abandoned (finish's first-writer-wins, #131).
+    killed: list[int] = []
+    monkeypatch.setattr(work, "terminate_group", lambda pid, _grace: killed.append(pid))
+    run = _launched(fleet_dir)
+    runs.finish(run, runs.PR_OPENED, pr_url="https://x/pr/9")
+    stopped = work.stop(run.id)
+    assert stopped.state == runs.PR_OPENED
+    assert killed == []  # nothing to kill; the run already finished
+
+
+# --- The default agent launch is sandboxed -----------------------------------
+
+
+def test_the_default_agent_runs_with_a_scrubbed_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # work's own agent launch must scrub the data plane, exactly as heal's does.
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "leak")
+    monkeypatch.setenv("HOME", "/home/me")
+    seen: dict[str, object] = {}
+
+    def spy(*_args: object, **kwargs: object) -> object:
+        seen.update(kwargs)
+        raise OSError("stop before a real claude runs")
+
+    monkeypatch.setattr(work.subprocess, "run", spy)
+    work._default_agent(tmp_path, "do the thing", tmp_path / "log")
+
+    env = seen["env"]
+    assert "AWS_SECRET_ACCESS_KEY" not in env
+    assert env["HOME"] != "/home/me"
+
+
+def test_the_default_spawn_starts_a_detached_session(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    seen: dict[str, object] = {}
+
+    class _Proc:
+        pid = 999
+
+    def spy(*_args: object, **kwargs: object) -> object:
+        seen.update(kwargs)
+        return _Proc()
+
+    monkeypatch.setattr(work.subprocess, "Popen", spy)
+    pid = work._default_spawn(["prog", "_run-agent", "x"], tmp_path / "log")
+    assert pid == 999
+    assert seen["start_new_session"] is True  # so stop() can kill the whole tree
+    assert seen["stdin"] == subprocess.DEVNULL  # detached: no inherited stdin
+
+
+# --- The CLI surface ---------------------------------------------------------
+
+
+def test_cli_work_launch_and_list(fleet_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    from projects_orchestrator.__main__ import main
+
+    _repo(fleet_dir)
+    # Stub the spawn so the CLI path launches nothing real, with a live pid.
+    monkeypatch.setattr(work, "_default_spawn", lambda _argv, _log: os.getpid())
+    code = main(["work", "alpha", "make the tests pass", "--root", str(fleet_dir)])
+    assert code == 0
+    assert "running" in capsys.readouterr().out
+
+    assert main(["work", "--list", "--root", str(fleet_dir)]) == 0
+    assert "make the tests pass" in capsys.readouterr().out
+
+
+def test_cli_work_launch_on_a_non_repo_exits_nonzero(
+    fleet_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from projects_orchestrator.__main__ import main
+
+    make_project(fleet_dir, "alpha", tooling={"lint": "true"})  # no git_init
+    monkeypatch.setattr(work, "_default_spawn", lambda _argv, _log: os.getpid())
+    assert main(["work", "alpha", "t", "--root", str(fleet_dir)]) == 1
+
+
+def test_cli_work_stop_unknown_run_exits_two() -> None:
+    from projects_orchestrator.__main__ import main
+
+    assert main(["work", "--stop", "no-such-run"]) == 2
+
+
+def test_cli_work_list_empty_is_friendly(capsys) -> None:
+    from projects_orchestrator.__main__ import main
+
+    assert main(["work", "--list"]) == 0
+    assert "no agent runs" in capsys.readouterr().out
+
+
+# --- The real landing path (commit → push → PR → cleanup) --------------------
+# The composition tests above inject `land`, so they never exercised the REAL
+# _default_land — which is exactly how the "push without committing" bug shipped.
+# These drive it end to end against a real bare remote.
+
+
+def _repo_with_remote(fleet_dir: Path, tmp_path: Path) -> object:
+    descriptor = _repo(fleet_dir)
+    remote = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+    subprocess.run(
+        ["git", "-C", str(descriptor.path), "remote", "add", "origin", str(remote)], check=True
+    )
+    return descriptor
+
+
+def test_default_land_commits_the_agents_edits_before_pushing(
+    fleet_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # THE P1. The agent is told not to commit, so its edits are uncommitted in the
+    # worktree; landing must commit them or the branch is empty and the PR is a
+    # no-diff. Drive the real _default_land, stubbing only the final `gh pr create`.
+    descriptor = _repo_with_remote(fleet_dir, tmp_path)
+    run = work.launch(descriptor, "add a file", spawn=_recording_spawn([]))
+
+    # Simulate the agent: write a file in the worktree WITHOUT committing.
+    (Path(run.worktree) / "created_by_agent.txt").write_text("hi", encoding="utf-8")
+
+    # Let commit and push run for real against the bare remote; stub only the PR.
+    opened: list[str] = []
+
+    def patched_open(_worktree: Path, branch: str, _title: str, _body: str) -> object:
+        opened.append(branch)
+        return work.landing.Landing(work.landing.LANDED, pr_url="https://example/pr/1")
+
+    monkeypatch.setattr(work.landing, "open_draft_pr", patched_open)
+    result = work._default_land(run)
+
+    assert result.state == runs.PR_OPENED
+    # The agent's file reached the pushed branch as a real commit.
+    show = subprocess.run(
+        ["git", "-C", str(descriptor.path), "show", "--stat", f"origin/{run.branch}"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert "created_by_agent.txt" in show
+    assert opened == [run.branch]  # the PR was opened after the commit landed
+
+
+def test_default_land_fails_when_the_agent_changed_nothing(fleet_dir: Path, tmp_path: Path) -> None:
+    # An agent that touched nothing has not produced a PR-worthy result. Landing
+    # must fail loudly, not open an empty PR.
+    descriptor = _repo_with_remote(fleet_dir, tmp_path)
+    run = work.launch(descriptor, "do nothing", spawn=_recording_spawn([]))
+    result = work._default_land(run)  # no edits made in the worktree
+    assert result.state == runs.FAILED
+    assert "nothing" in result.detail
+
+
+def test_default_land_removes_the_worktree_on_success(
+    fleet_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The P2: a landed run's checkout is redundant (the work is in the PR) and must
+    # not accrete in the state dir. Only FAILED runs keep their worktree.
+    descriptor = _repo_with_remote(fleet_dir, tmp_path)
+    run = work.launch(descriptor, "add a file", spawn=_recording_spawn([]))
+    (Path(run.worktree) / "f.txt").write_text("x", encoding="utf-8")
+    monkeypatch.setattr(
+        work.landing,
+        "open_draft_pr",
+        lambda *_: work.landing.Landing(work.landing.LANDED, pr_url="https://x/1"),
+    )
+    work._default_land(run)
+    assert not Path(run.worktree).exists()

@@ -269,6 +269,7 @@ The write boundary — an agent run's work leaves here as a draft PR, or not at 
 - `def is_protected` — Whether ``branch`` is a ref an agent run may never write to (pure).
 - `def push_branch` — Push one agent branch to ``origin``; refuse anything else.
 - `def open_draft_pr` — Open a **draft** PR from ``branch``; never a ready-for-review one.
+- `def commit_all` — Stage and commit everything the agent changed; report the outcome.
 
 ### `projects_orchestrator/memory.py`
 
@@ -327,6 +328,7 @@ Is that pid still ours? — process liveness, shared by every run tracker.
 - `def proc_start_ticks` — Read a pid's start time (clock ticks since boot) from ``/proc``.
 - `def pid_alive` — Return whether a pid is a live process (not exited, not a zombie).
 - `def is_our_process` — Return whether ``pid`` is still the process we recorded, not an impostor.
+- `def terminate_group` — SIGTERM a process group, escalating to SIGKILL after ``grace`` (never raises).
 
 ### `projects_orchestrator/registry.py`
 
@@ -412,6 +414,16 @@ Fleet upgrade planning — who is behind upstream project-init, and act on it.
 - `def build_row` — Build one upgrade-plan row for a project (never raises).
 - `def upgrade_plan` — Build the whole fleet's upgrade plan (pure over its inputs).
 
+### `projects_orchestrator/work.py`
+
+``work`` — put an agent to work on a project, as a tracked, detached run.
+
+- `def launch` — Start a tracked, detached agent run against ``descriptor``; never raises.
+- `def run_agent` — The detached wrapper body: run the agent, then land or fail; never raises.
+- `def list_runs` — Every run (optionally for one project), newest first, reconciled.
+- `def logs` — The tail of a run's captured agent output; ``[]`` when there is none yet.
+- `def stop` — Kill a running run's agent tree and record it ``abandoned``; ``None`` if unknown.
+
 ### `projects_orchestrator/worktree.py`
 
 Throwaway git worktrees — an agent works here, never in the operator's clone.
@@ -421,4 +433,6 @@ Throwaway git worktrees — an agent works here, never in the operator's clone.
 - `def run_slug` — Build a slug that will not collide with a concurrent run on this repo.
 - `def create` — Cut a fresh worktree from ``repo``'s HEAD; ``None`` if git refuses.
 - `def remove` — Remove a worktree and deregister it; report success (never raises).
+- `def origin_repo` — Find the clone a worktree was cut from; ``None`` if it cannot be resolved.
+- `def remove_path` — Remove a worktree given only its path; resolve the origin repo itself.
 - `def prune_expired` — Delete kept worktrees older than ``expiry_days``; return how many went.
