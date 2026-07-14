@@ -1,7 +1,11 @@
-# ADR-006: Agent runs are isolated, PR-bounded, and never reach the data plane
+# ADR-007: Agent runs are isolated, PR-bounded, and never reach the data plane
 
 - Status: accepted
 - Date: 2026-07-14
+- Supersedes: **ADR-006 §2** ("the fix runs on a dedicated branch, never in
+  place" — heal's clean-worktree requirement and its `checkout -B` in the
+  operator's own clone). See §3 below for why that mechanism could not survive
+  contact with a fleet.
 
 ## Context and Problem Statement
 
@@ -87,6 +91,29 @@ the first campaign we want — the project-init rollout — **targets exactly th
 projects that do not have that hook yet**. The child's guard is absent precisely
 where the blast radius is highest. A guard that is missing whenever it matters is
 not a guard.
+
+**A worktree, not a checkout — this supersedes ADR-006 §2.** ADR-006 chose to run
+the fix "on a dedicated branch, never in place": require a clean worktree,
+`git checkout -B` in the project's own clone, and restore the operator's branch on
+every exit path. That is the right *intent* and the wrong *mechanism*, and it does
+not survive contact with a fleet:
+
+- **It commandeers the operator's clone.** A fleet-wide heal branch-switches every
+  project out from under whoever is working in them.
+- **"Restores on every exit path" is not true, and cannot be made true.** It rests
+  on a `finally`, and a SIGKILL, an OOM, or a host that sleeps badly skips it —
+  stranding a clone on a `heal/` branch with an agent's uncommitted edits in the
+  tree. An invariant that a `kill -9` can break is not an invariant.
+- **It serialises everything.** Every property above — a detached run, two runs at
+  once, a run whose record outlives its process — is impossible while a run owns
+  the clone's HEAD. ADR-006 §2 is not merely unsafe; it is the single thing
+  blocking the rest of this design.
+
+A `git worktree` gets the same isolation with none of that: it shares the object
+store (so it is cheap), it is a *second* checkout rather than a hijacked one, and
+the operator's clone is only ever read. The clean-worktree requirement disappears
+along with the reason for it — a run no longer cares what state your working copy
+is in, so a project can be healed while you are mid-edit in it.
 
 ### 4. The data plane is unreachable from an agent run
 
