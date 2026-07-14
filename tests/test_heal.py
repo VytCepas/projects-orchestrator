@@ -47,7 +47,9 @@ def test_pending_failures_keeps_only_healable_failing_tasks() -> None:
 
 
 def test_pending_failures_empty_when_nothing_failing() -> None:
-    assert pending_failures({"lint": CheckResult(project="alpha", task="lint", status="pass")}) == ()
+    assert (
+        pending_failures({"lint": CheckResult(project="alpha", task="lint", status="pass")}) == ()
+    )
 
 
 def test_build_heal_prompt_includes_command_and_detail(fleet_dir: Path) -> None:
@@ -72,7 +74,9 @@ def test_build_heal_prompt_flags_failure_text_as_untrusted_data(fleet_dir: Path)
 
 
 def test_agent_allowed_tools_scopes_bash_to_declared_gates(fleet_dir: Path) -> None:
-    project = make_project(fleet_dir, "alpha", tooling={"lint": "ruff check .", "test": "pytest -q"})
+    project = make_project(
+        fleet_dir, "alpha", tooling={"lint": "ruff check .", "test": "pytest -q"}
+    )
     descriptor = load_descriptor(project)
     tools = _agent_allowed_tools(descriptor)
     assert "Bash(ruff check .)" in tools
@@ -131,7 +135,9 @@ def test_heal_project_reports_agent_failure_and_restores_branch(fleet_dir: Path)
     assert result.detail == "could not figure it out"
     branch = subprocess.run(
         ["git", "-C", str(project), "rev-parse", "--abbrev-ref", "HEAD"],
-        check=True, capture_output=True, text=True,
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout.strip()
     assert branch == "main"
 
@@ -191,13 +197,17 @@ def test_heal_project_fixes_and_opens_pr_end_to_end(fleet_dir: Path, tmp_path: P
 
     current_branch = subprocess.run(
         ["git", "-C", str(project), "rev-parse", "--abbrev-ref", "HEAD"],
-        check=True, capture_output=True, text=True,
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout.strip()
     assert current_branch == "main"
 
     remote_branches = subprocess.run(
         ["git", "-C", str(remote), "branch", "--list", result.branch],
-        check=True, capture_output=True, text=True,
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout
     assert result.branch in remote_branches
 

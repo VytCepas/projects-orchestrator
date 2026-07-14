@@ -122,7 +122,10 @@ def _run_argv(args: list[str], cwd: Path, timeout: float = GIT_TIMEOUT) -> RunRe
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return RunResult(
-            command=" ".join(args), returncode=None, error=str(exc), duration=time.monotonic() - start
+            command=" ".join(args),
+            returncode=None,
+            error=str(exc),
+            duration=time.monotonic() - start,
         )
     return RunResult(
         command=" ".join(args),
@@ -244,7 +247,12 @@ def _default_agent_run(descriptor: ProjectDescriptor, prompt: str) -> AgentOutco
     ]
     try:
         proc = subprocess.run(  # noqa: S603 — fixed argv, no shell; scoped to the project's own directory
-            command, cwd=descriptor.path, capture_output=True, text=True, timeout=AGENT_TIMEOUT, check=False
+            command,
+            cwd=descriptor.path,
+            capture_output=True,
+            text=True,
+            timeout=AGENT_TIMEOUT,
+            check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return AgentOutcome(ok=False, summary=str(exc))
@@ -253,7 +261,9 @@ def _default_agent_run(descriptor: ProjectDescriptor, prompt: str) -> AgentOutco
     return AgentOutcome(ok=True, summary=_extract_result(proc.stdout))
 
 
-def _default_open_pr(descriptor: ProjectDescriptor, branch: str, tasks: tuple[str, ...]) -> PrOutcome:
+def _default_open_pr(
+    descriptor: ProjectDescriptor, branch: str, tasks: tuple[str, ...]
+) -> PrOutcome:
     """Open a PR for a pushed heal branch via ``gh``."""
     title = f"fix: repair failing {', '.join(tasks)} (automated)"
     body = (
@@ -280,7 +290,9 @@ def _commit_and_land(
     """Commit a verified fix, push the branch, and open a PR."""
     add = _run_argv(["git", "add", "-A"], cwd=descriptor.path)
     if not add.ok:
-        return HealResult(descriptor.name, BRANCH_FAILED, branch=branch, detail=add.stderr.strip()[-300:])
+        return HealResult(
+            descriptor.name, BRANCH_FAILED, branch=branch, detail=add.stderr.strip()[-300:]
+        )
     message = f"fix: repair failing {', '.join(tasks)} (automated)"
     commit = _run_argv(["git", "commit", "-m", message], cwd=descriptor.path)
     if not commit.ok:
@@ -289,7 +301,9 @@ def _commit_and_land(
         )
     push = _run_argv(["git", "push", "-u", "origin", branch], cwd=descriptor.path)
     if not push.ok:
-        return HealResult(descriptor.name, PUSH_FAILED, branch=branch, detail=push.stderr.strip()[-300:])
+        return HealResult(
+            descriptor.name, PUSH_FAILED, branch=branch, detail=push.stderr.strip()[-300:]
+        )
     pr = open_pr(descriptor, branch, tasks)
     if not pr.ok:
         return HealResult(descriptor.name, PR_FAILED, branch=branch, detail=pr.detail)
@@ -322,7 +336,9 @@ def heal_project(
     status = collect_status(descriptor)
     if status.dirty is not False:
         return HealResult(
-            descriptor.name, WORKTREE_DIRTY, detail="worktree is dirty or unreadable — refusing to heal"
+            descriptor.name,
+            WORKTREE_DIRTY,
+            detail="worktree is dirty or unreadable — refusing to heal",
         )
 
     original_branch = status.branch or ""
@@ -334,7 +350,9 @@ def heal_project(
         return HealResult(descriptor.name, BRANCH_FAILED, detail=checkout.stderr.strip()[-300:])
 
     try:
-        outcome = (agent_run or _default_agent_run)(descriptor, build_heal_prompt(descriptor, failing))
+        outcome = (agent_run or _default_agent_run)(
+            descriptor, build_heal_prompt(descriptor, failing)
+        )
         if not outcome.ok:
             return HealResult(descriptor.name, AGENT_FAILED, branch=branch, detail=outcome.summary)
 
