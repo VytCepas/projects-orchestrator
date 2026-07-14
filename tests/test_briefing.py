@@ -121,6 +121,17 @@ def test_the_contract_is_present_even_with_no_evidence(fleet_dir: Path) -> None:
     assert "do not commit" in build_briefing(_descriptor(fleet_dir), task="anything").lower()
 
 
+def test_the_agent_is_given_the_needs_human_escape_hatch(fleet_dir: Path) -> None:
+    # A headless agent cannot ask, so it must not guess (#119 / ADR-006 §2): the
+    # briefing tells it to write the marker and stop instead. Without this named
+    # in the briefing, the whole needs-human handoff is unreachable.
+    from projects_orchestrator.briefing import NEEDS_HUMAN_MARKER
+
+    briefing = build_briefing(_descriptor(fleet_dir), task="t")
+    assert NEEDS_HUMAN_MARKER in briefing
+    assert "do NOT guess" in briefing
+
+
 # --- Untrusted data -----------------------------------------------------------
 
 

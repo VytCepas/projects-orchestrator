@@ -453,6 +453,8 @@ Fleet upgrade planning — who is behind upstream project-init, and act on it.
 - `def logs` — The tail of a run's captured agent output; ``[]`` when there is none yet.
 - `def stop` — Kill a running run's agent tree and record it ``abandoned``; ``None`` if unknown.
 - `def clear` — Forget a SETTLED run's record so it leaves the fleet's Work column.
+- `def needs_human_run` — The project's most recent ``needs-human`` run, or ``None``.
+- `def attach` — Open an interactive session in a project's needs-human run; ``None`` if none.
 
 ### `projects_orchestrator/worktree.py`
 

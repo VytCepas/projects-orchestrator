@@ -448,3 +448,170 @@ def test_cli_work_clear_reports_a_failed_removal(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(work.runs, "forget", lambda _run_id: False)
     assert main(["work", "--clear", "r1"]) == 2
     assert "could not be removed" in capsys.readouterr().err
+
+
+# --- #119: needs-human handoff and work --attach -------------------------------
+
+
+def _agent_writes_marker(reason: str) -> work.Agent:
+    """An agent seam that drops a NEEDS_HUMAN marker in the worktree, then 'exits'."""
+
+    def agent(worktree: Path, _prompt: str, _log: Path) -> bool:
+        (worktree / work.briefing.NEEDS_HUMAN_MARKER).write_text(reason, encoding="utf-8")
+        return True
+
+    return agent
+
+
+def test_run_agent_stops_at_needs_human_when_the_marker_is_written(fleet_dir: Path) -> None:
+    run = _launched(fleet_dir)
+    landed: list[int] = []
+    result = work.run_agent(
+        run.id,
+        agent=_agent_writes_marker("should I use Postgres or MySQL?"),
+        land=lambda _r: landed.append(1) or _r,  # must NOT land a blocked run
+    )
+    assert result.state == runs.NEEDS_HUMAN
+    assert "Postgres or MySQL" in result.detail  # the recorded reason
+    assert landed == []
+    assert Path(run.worktree).is_dir()  # worktree kept for --attach
+
+
+def test_needs_human_takes_precedence_over_a_failed_agent(fleet_dir: Path) -> None:
+    # An agent that wrote the marker AND exited non-zero explained itself; it must
+    # not be buried as a generic failure.
+    run = _launched(fleet_dir)
+
+    def agent(worktree: Path, _p: str, _l: Path) -> bool:
+        (worktree / work.briefing.NEEDS_HUMAN_MARKER).write_text("blocked", encoding="utf-8")
+        return False
+
+    result = work.run_agent(run.id, agent=agent, land=lambda r: r)
+    assert result.state == runs.NEEDS_HUMAN
+
+
+def test_an_empty_marker_still_hands_off(fleet_dir: Path) -> None:
+    run = _launched(fleet_dir)
+    result = work.run_agent(run.id, agent=_agent_writes_marker(""), land=lambda r: r)
+    assert result.state == runs.NEEDS_HUMAN
+    assert result.detail  # a generic reason, not blank
+
+
+def test_no_marker_lands_as_before(fleet_dir: Path) -> None:
+    run = _launched(fleet_dir)
+    result = work.run_agent(
+        run.id,
+        agent=lambda *_: True,
+        land=lambda r: runs.finish(r, runs.PR_OPENED, pr_url="https://x/1"),
+    )
+    assert result.state == runs.PR_OPENED  # the marker path did not steal the land
+
+
+def test_needs_human_run_finds_the_blocked_run(fleet_dir: Path) -> None:
+    run = _launched(fleet_dir)
+    runs.finish(run, runs.NEEDS_HUMAN, detail="pick one")
+    found = work.needs_human_run("alpha")
+    assert found is not None
+    assert found.id == run.id
+
+
+def test_needs_human_run_is_none_without_one(fleet_dir: Path) -> None:
+    _launched(fleet_dir)  # a running run, not needs-human
+    assert work.needs_human_run("alpha") is None
+
+
+def test_attach_opens_a_session_in_the_run_worktree(fleet_dir: Path) -> None:
+    run = _launched(fleet_dir)
+    runs.finish(run, runs.NEEDS_HUMAN, detail="which database?")
+    seen: list[tuple[Path, str]] = []
+
+    def session(worktree: Path, prompt: str, reason: str) -> None:
+        seen.append((worktree, reason))
+        assert prompt  # the original briefing is loaded, not blank
+
+    attached = work.attach("alpha", session=session)
+    assert attached is not None and attached.id == run.id
+    assert seen == [(Path(run.worktree), "which database?")]
+
+
+def test_attach_without_a_needs_human_run_returns_none() -> None:
+    launched: list[int] = []
+    result = work.attach("alpha", session=lambda *_: launched.append(1))
+    assert result is None
+    assert launched == []  # no session opened for a phantom
+
+
+def test_cli_work_attach(fleet_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from projects_orchestrator.__main__ import main
+
+    run = _launched(fleet_dir)
+    runs.finish(run, runs.NEEDS_HUMAN, detail="which db?")
+    opened: list[str] = []
+    monkeypatch.setattr(work, "_default_session", lambda *_a: opened.append("session"))
+    assert main(["work", "alpha", "--attach", "--root", str(fleet_dir)]) == 0
+    assert opened == ["session"]
+
+
+def test_cli_work_attach_without_a_needs_human_run_exits_two(fleet_dir: Path, capsys) -> None:
+    from projects_orchestrator.__main__ import main
+
+    _repo(fleet_dir)  # a project, but no needs-human run
+    assert main(["work", "alpha", "--attach", "--root", str(fleet_dir)]) == 2
+    assert "no needs-human run" in capsys.readouterr().err
+
+
+def test_a_pre_existing_marker_left_untouched_is_not_a_handoff(fleet_dir: Path) -> None:
+    # A repo that already ships a NEEDS_HUMAN.md (a tracked doc, or one left from a
+    # prior handoff) must NOT wedge every successful run into needs-human.
+    run = _launched(fleet_dir)
+    (Path(run.worktree) / work.briefing.NEEDS_HUMAN_MARKER).write_text("old doc", encoding="utf-8")
+    result = work.run_agent(
+        run.id,
+        agent=lambda *_: True,  # a clean run that never touches the marker
+        land=lambda r: runs.finish(r, runs.PR_OPENED, pr_url="https://x/1"),
+    )
+    assert result.state == runs.PR_OPENED  # landed, not falsely handed off
+
+
+def test_a_pre_existing_marker_the_agent_changes_is_a_handoff(fleet_dir: Path) -> None:
+    run = _launched(fleet_dir)
+    marker = Path(run.worktree) / work.briefing.NEEDS_HUMAN_MARKER
+    marker.write_text("old doc", encoding="utf-8")
+
+    def agent(worktree: Path, _p: str, _l: Path) -> bool:
+        (worktree / work.briefing.NEEDS_HUMAN_MARKER).write_text(
+            "now I am blocked", encoding="utf-8"
+        )
+        return True
+
+    result = work.run_agent(run.id, agent=agent, land=lambda r: r)
+    assert result.state == runs.NEEDS_HUMAN
+    assert "now I am blocked" in result.detail
+
+
+def test_attach_returns_none_when_the_session_cannot_start(fleet_dir: Path) -> None:
+    # `claude` missing or the worktree pruned raises OSError; attach must degrade
+    # to None (ADR-003), not crash.
+    run = _launched(fleet_dir)
+    runs.finish(run, runs.NEEDS_HUMAN, detail="which db?")
+
+    def broken_session(*_a: object) -> None:
+        raise OSError("claude: command not found")
+
+    assert work.attach("alpha", session=broken_session) is None
+
+
+def test_cli_work_attach_reports_a_session_failure(
+    fleet_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    from projects_orchestrator.__main__ import main
+
+    run = _launched(fleet_dir)
+    runs.finish(run, runs.NEEDS_HUMAN, detail="which db?")
+
+    def broken(*_a: object) -> None:
+        raise OSError("no claude")
+
+    monkeypatch.setattr(work, "_default_session", broken)
+    assert main(["work", "alpha", "--attach", "--root", str(fleet_dir)]) == 2
+    assert "could not open a session" in capsys.readouterr().err

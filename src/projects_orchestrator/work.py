@@ -62,6 +62,8 @@ RUNNER_SUBCOMMAND = "_run-agent"
 Spawn = Callable[[list[str], Path], int]
 Agent = Callable[[Path, str, Path], bool]
 Land = Callable[[runs.AgentRun], runs.AgentRun]
+# (worktree, briefing, reason) -> None: opens an interactive session for --attach.
+AttachSession = Callable[[Path, str, str], None]
 
 
 def _prompt_path(run_id: str) -> Path:
@@ -247,10 +249,33 @@ def run_agent(
     if prompt is None:
         return runs.finish(run, runs.FAILED, detail="the staged briefing was missing")
 
-    ok = agent(Path(run.worktree), prompt, Path(run.log_path))
+    worktree = Path(run.worktree)
+    # Snapshot the marker BEFORE the run: a repo may already ship a `NEEDS_HUMAN.md`
+    # (a tracked doc, or one committed after a previous handoff). Without this, that
+    # pre-existing file would make EVERY successful run read as needs-human and
+    # wedge the project. Only a marker the agent newly wrote or changed is a handoff.
+    marker_before = _read_marker(worktree)
+    ok = agent(worktree, prompt, Path(run.log_path))
+    marker_after = _read_marker(worktree)
+
+    # The needs-human handoff takes precedence over BOTH landing and failure: an
+    # agent that hit an ambiguity and wrote the marker explained itself, so it must
+    # not be buried as a generic failure, and its (uncommitted) work must not be
+    # landed unreviewed. The worktree is kept for `work --attach` to pick up.
+    if marker_after is not None and marker_after != marker_before:
+        reason = marker_after or "the agent stopped and asked for a human (no reason given)"
+        return runs.finish(run, runs.NEEDS_HUMAN, detail=reason)
     if not ok:
         return runs.finish(run, runs.FAILED, detail="the agent did not complete (see the run log)")
     return land(run)
+
+
+def _read_marker(worktree: Path) -> str | None:
+    """The NEEDS_HUMAN marker's stripped content, or ``None`` when it is absent."""
+    try:
+        return (worktree / briefing.NEEDS_HUMAN_MARKER).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
 
 
 def _read_prompt(run_id: str) -> str | None:
@@ -325,3 +350,60 @@ def clear(run_id: str) -> str:
     if not run.is_terminal:
         return CLEAR_ACTIVE
     return CLEARED if runs.forget(run.id) else CLEAR_FAILED
+
+
+def needs_human_run(project: str) -> runs.AgentRun | None:
+    """The project's most recent ``needs-human`` run, or ``None``.
+
+    This is what ``work --attach`` picks up: a run that stopped at an ambiguity it
+    would not guess through (ADR-006 §2), its worktree kept for a human to enter.
+    """
+    return next(
+        (r for r in runs.list_runs(project) if r.state == runs.NEEDS_HUMAN),
+        None,
+    )
+
+
+def attach(project: str, *, session: AttachSession | None = None) -> runs.AgentRun | None:
+    """Open an interactive session in a project's needs-human run; ``None`` if none.
+
+    The session runs in that run's EXISTING worktree, with its original briefing
+    and the agent's handoff note loaded, so the human resumes exactly where the
+    agent stopped rather than from a blank checkout. Returns the run attached to.
+    """
+    session = session or _default_session
+    run = needs_human_run(project)
+    if run is None:
+        return None
+    prompt = _read_prompt(run.id) or ""
+    try:
+        session(Path(run.worktree), prompt, run.detail)
+    except OSError:
+        # `claude` is not on PATH, or the worktree was pruned. Never raise (ADR-003):
+        # return None so the CLI reports a clean error instead of a traceback. The
+        # caller distinguishes this from "no run" by having checked needs_human_run.
+        return None
+    return run
+
+
+def _default_session(worktree: Path, prompt: str, reason: str) -> None:
+    """Exec an interactive ``claude`` in ``worktree``, seeded with the context.
+
+    Scrubbed like a headless run (:mod:`sandbox`): the human is resolving an
+    ambiguity in an isolated checkout, and the data plane stays unreachable
+    (ADR-007 §4). The write boundary is unchanged — landing is still the only way
+    work leaves the worktree.
+    """
+    seed = (
+        "You are taking over a blocked agent run. Resolve the ambiguity it could "
+        f"not.\n\n--- Its handoff note ---\n{reason}\n\n--- Its original briefing "
+        f"---\n{prompt}"
+    )
+    command = ["claude", seed]
+    with tempfile.TemporaryDirectory(prefix="po-attach-home-") as home:
+        subprocess.run(  # noqa: S603 — fixed argv, no shell; interactive by design
+            command,
+            cwd=worktree,
+            check=False,
+            env=sandbox.agent_env(home=home),
+        )
