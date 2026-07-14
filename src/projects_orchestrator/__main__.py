@@ -15,7 +15,8 @@ import sys
 from dataclasses import asdict, replace
 from pathlib import Path
 
-from projects_orchestrator import __version__, cache, campaign, runs, selector, work
+from projects_orchestrator import __version__, cache, campaign, orphans, runs, selector, work
+from projects_orchestrator.adapters import gcp
 from projects_orchestrator.adapters.cloud import (
     DEPLOY_ACTIONS,
     DISPATCH_DISPATCHED,
@@ -931,6 +932,35 @@ def _cmd_campaign(args: argparse.Namespace) -> int:
     return exit_code
 
 
+def _cmd_orphans(args: argparse.Namespace) -> int:
+    """Report live GCP resources that no repo in the fleet accounts for.
+
+    Read-only: it lists the cloud asset inventory and diffs it against the fleet,
+    and mutates nothing. A scan that could not run reports UNKNOWN and exits
+    nonzero — it never prints "no orphans", which would falsely clear an estate
+    that was never looked at (ADR-003).
+    """
+    fleet = _discover(args)
+    report = orphans.find_orphans(fleet, gcp.search_resources())
+    if report.is_unknown:
+        print(
+            "orphans: unknown — could not read the GCP inventory "
+            "(is `gcloud` installed and authenticated?). NOT reporting zero orphans.",
+            file=sys.stderr,
+        )
+        return 1
+    if args.json:
+        return _emit_json([asdict(o) for o in report.orphans])
+    if not report.orphans:
+        print("no orphans — every live GCP resource is accounted for by the fleet")
+        return 0
+    print(f"{len(report.orphans)} orphan(s) — live in GCP, governed by no repo:")
+    for orphan in report.orphans:
+        where = f" [{orphan.project}]" if orphan.project else ""
+        print(f"  {orphan.display_name or orphan.name}  ({orphan.asset_type}){where}")
+    return 0
+
+
 def _cmd_snapshot(args: argparse.Namespace) -> int:
     """Dump the full joined fleet view (text, JSON, or standalone HTML)."""
     fleet = _discover(args)
@@ -1198,6 +1228,12 @@ def _build_parser() -> argparse.ArgumentParser:
             "register",
             "register a scaffolded project from `project-init scaffold --json` output",
             _cmd_register,
+            True,
+        ),
+        (
+            "orphans",
+            "live GCP resources no repo in the fleet accounts for (read-only)",
+            _cmd_orphans,
             True,
         ),
         ("snapshot", "full joined fleet view", _cmd_snapshot, True),
