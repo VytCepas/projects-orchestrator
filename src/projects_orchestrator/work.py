@@ -296,3 +296,20 @@ def stop(run_id: str, grace: float = _STOP_GRACE_SECONDS) -> runs.AgentRun | Non
     if run.pid:
         terminate_group(run.pid, grace)
     return runs.finish(run, runs.ABANDONED, detail="stopped by the operator")
+
+
+def clear(run_id: str) -> runs.AgentRun | None:
+    """Forget a SETTLED run's record so it leaves the fleet's Work column.
+
+    This is how a merged (or closed) PR clears its run: once the operator has
+    dealt with the outcome, the record has served its purpose. Only a terminal
+    run is cleared — a queued or running one is still open work, and forgetting it
+    would strand a live agent and hide exactly what the Work column exists to
+    show. Returns the forgotten run, or ``None`` when it is unknown or still live
+    (stop it first).
+    """
+    run = runs.load(run_id)
+    if run is None or not run.is_terminal:
+        return None
+    runs.forget(run.id)
+    return run
