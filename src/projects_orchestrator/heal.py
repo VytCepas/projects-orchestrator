@@ -2,13 +2,24 @@
 
 The engine can *detect* a failing lint/test gate (``checks.py``) but not
 repair it. This closes that loop for the two gates every project declares
-locally: given a project with a cached failure, it checks out a dedicated
-branch, hands a scoped coding agent (the ``claude`` CLI, headless) exactly
-the failing command and its last-known error, re-runs the gate to verify
-the fix, and — only on a verified pass — commits, pushes, and opens a PR.
-Nothing ever reaches the default branch without a human merging it (ADR-006).
+locally: given a project with a cached failure, it cuts a **throwaway git
+worktree**, hands a scoped coding agent (the ``claude`` CLI, headless) exactly
+the failing command and its last-known error, re-runs the gate *in that
+worktree* to verify the fix, and — only on a verified pass — commits, pushes,
+and opens a PR. Nothing ever reaches the default branch without a human
+merging it (ADR-006).
 
-Like the rest of the engine, this never raises: a dirty worktree, an agent
+The agent never works in the operator's clone. It used to: heal originally ran
+``git checkout -B`` in ``descriptor.path`` and restored the branch in a
+``finally``, which meant a fleet-wide heal branch-switched every project out
+from under whoever was working in them, and a SIGKILL mid-run stranded a clone
+on a ``heal/`` branch with an agent's edits in the tree. :mod:`worktree` closes
+that; see its docstring for why a ``finally`` was never a sufficient guarantee.
+
+Because the run is now isolated, heal no longer cares whether your clone is
+dirty — you can heal a project while you are mid-edit in it.
+
+Like the rest of the engine, this never raises: a worktree git refuses, an agent
 that can't fix the gate, or a push/PR failure all degrade to a
 :class:`HealResult` the caller renders, never an exception.
 """
@@ -19,13 +30,13 @@ import json
 import subprocess
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
+from projects_orchestrator import worktree as wt
 from projects_orchestrator.checks import CheckResult, collect_checks
 from projects_orchestrator.descriptor import ProjectDescriptor
 from projects_orchestrator.runner import RunResult
-from projects_orchestrator.status import collect_status
 
 # Gates the heal loop can attempt: both are declared, locally-runnable
 # commands. ci/cloud are deliberately excluded — they probe remote state a
@@ -43,7 +54,11 @@ _MAX_BUDGET_USD = "2.00"
 _BASE_TOOLS = ("Edit", "Write", "Read", "Grep", "Glob")
 
 NO_FAILURES = "no_action"
-WORKTREE_DIRTY = "worktree_dirty"
+# NOTE: there is deliberately no "worktree dirty" outcome any more. Heal used to
+# refuse on a dirty clone because it was about to `checkout -B` *in* it. It now
+# cuts its own worktree, so the operator's working state is irrelevant — you can
+# heal a project while you are mid-edit in it.
+WORKTREE_FAILED = "worktree_failed"
 BRANCH_FAILED = "branch_failed"
 AGENT_FAILED = "agent_failed"
 VERIFY_FAILED = "verify_failed"
@@ -92,6 +107,10 @@ class HealResult:
         branch: The heal branch, once created (empty before then).
         pr_url: The opened PR's URL, only set when ``status == FIXED``.
         detail: Human-readable explanation.
+        worktree: Where the agent's work was left, set only when the run FAILED
+            and its worktree was therefore retained. Empty on success (the
+            worktree is removed) — so a non-empty value means "there is evidence
+            on disk, go look at it".
     """
 
     project: str
@@ -99,6 +118,7 @@ class HealResult:
     branch: str = ""
     pr_url: str = ""
     detail: str = ""
+    worktree: str = ""
 
 
 AgentRun = Callable[[ProjectDescriptor, str], AgentOutcome]
@@ -278,12 +298,6 @@ def _default_open_pr(
     return PrOutcome(ok=True, url=url)
 
 
-def _restore_branch(descriptor: ProjectDescriptor, original_branch: str) -> None:
-    """Return the worktree to the branch it was on before healing started."""
-    if original_branch:
-        _run_argv(["git", "checkout", original_branch], cwd=descriptor.path)
-
-
 def _commit_and_land(
     descriptor: ProjectDescriptor, branch: str, tasks: tuple[str, ...], open_pr: OpenPr
 ) -> HealResult:
@@ -326,37 +340,46 @@ def heal_project(
         open_pr: PR-creation override; ``None`` uses the real ``gh`` CLI.
 
     Returns:
-        A :class:`HealResult` describing what happened. The worktree is
-        always returned to its original branch before this returns.
+        A :class:`HealResult` describing what happened. The operator's clone is
+        never checked out, branch-switched, or otherwise touched: all work
+        happens in a throwaway worktree (:mod:`worktree`), which is removed on
+        success and *kept* on failure so the agent's work can be inspected.
     """
     failing = pending_failures(cached)
     if not failing:
         return HealResult(descriptor.name, NO_FAILURES, detail="no failing lint/test gate cached")
 
-    status = collect_status(descriptor)
-    if status.dirty is not False:
-        return HealResult(
-            descriptor.name,
-            WORKTREE_DIRTY,
-            detail="worktree is dirty or unreadable — refusing to heal",
-        )
-
-    original_branch = status.branch or ""
     tasks = tuple(sorted({result.task for result in failing}))
     branch = f"heal/{'-'.join(tasks)}-{descriptor.name}"
 
-    checkout = _run_argv(["git", "checkout", "-B", branch], cwd=descriptor.path)
-    if not checkout.ok:
-        return HealResult(descriptor.name, BRANCH_FAILED, detail=checkout.stderr.strip()[-300:])
-
-    try:
-        outcome = (agent_run or _default_agent_run)(
-            descriptor, build_heal_prompt(descriptor, failing)
+    tree = wt.create(
+        repo=descriptor.path, project=descriptor.name, branch=branch, slug=wt.run_slug()
+    )
+    if tree is None:
+        return HealResult(
+            descriptor.name,
+            WORKTREE_FAILED,
+            branch=branch,
+            detail="could not cut an isolated worktree (branch may be held by a kept failed run)",
         )
-        if not outcome.ok:
-            return HealResult(descriptor.name, AGENT_FAILED, branch=branch, detail=outcome.summary)
 
-        verify = collect_checks(descriptor, tasks)
+    # Everything downstream — the agent, the re-verify, the commit, the push, the
+    # PR — is keyed off `descriptor.path`, so pointing a copy at the worktree
+    # redirects the whole flow without touching the operator's clone.
+    work = replace(descriptor, path=tree.path)
+    keep = True
+    try:
+        outcome = (agent_run or _default_agent_run)(work, build_heal_prompt(work, failing))
+        if not outcome.ok:
+            return HealResult(
+                descriptor.name,
+                AGENT_FAILED,
+                branch=branch,
+                detail=outcome.summary,
+                worktree=str(tree.path),
+            )
+
+        verify = collect_checks(work, tasks)
         still_failing = [result.task for result in verify if result.status != "pass"]
         if still_failing:
             return HealResult(
@@ -364,10 +387,22 @@ def heal_project(
                 VERIFY_FAILED,
                 branch=branch,
                 detail=f"still failing after the agent's fix: {', '.join(still_failing)}",
+                worktree=str(tree.path),
             )
-        return _commit_and_land(descriptor, branch, tasks, open_pr or _default_open_pr)
+
+        landed = _commit_and_land(work, branch, tasks, open_pr or _default_open_pr)
+        keep = landed.status != FIXED
+        if keep:
+            return replace(landed, worktree=str(tree.path))
+        return landed
     finally:
-        _restore_branch(descriptor, original_branch)
+        # Asymmetric on purpose (ADR-006): a successful run's worktree is
+        # redundant — the work is in the PR — but a failed one is the only
+        # record of what the agent actually did, so it is retained and expires
+        # on a clock instead. An early `return` above leaves `keep` True, which
+        # is the safe default: we keep evidence rather than destroy it.
+        if not keep:
+            wt.remove(tree)
 
 
 def render_heal_result(result: HealResult) -> str:

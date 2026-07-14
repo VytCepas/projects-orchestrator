@@ -358,3 +358,14 @@ Fleet upgrade planning — who is behind upstream project-init, and act on it.
 - `def plan_status` — Classify a scaffold version against the latest upstream (pure).
 - `def build_row` — Build one upgrade-plan row for a project (never raises).
 - `def upgrade_plan` — Build the whole fleet's upgrade plan (pure over its inputs).
+
+### `projects_orchestrator/worktree.py`
+
+Throwaway git worktrees — an agent works here, never in the operator's clone.
+
+- `class Worktree` — One throwaway checkout an agent runs in.
+- `def worktree_root` — Return the worktree state directory, honoring ``$XDG_STATE_HOME``.
+- `def run_slug` — Build a slug that will not collide with a concurrent run on this repo.
+- `def create` — Cut a fresh worktree from ``repo``'s HEAD; ``None`` if git refuses.
+- `def remove` — Remove a worktree and deregister it; report success (never raises).
+- `def prune_expired` — Delete kept worktrees older than ``expiry_days``; return how many went.
