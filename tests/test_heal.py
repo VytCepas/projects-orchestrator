@@ -5,18 +5,18 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
 from conftest import git_init, make_project
 
 from projects_orchestrator.checks import CheckResult
 from projects_orchestrator.descriptor import load_descriptor
 from projects_orchestrator.heal import (
     AGENT_FAILED,
-    BRANCH_FAILED,
     FIXED,
     NO_FAILURES,
     PUSH_FAILED,
     VERIFY_FAILED,
-    WORKTREE_DIRTY,
+    WORKTREE_FAILED,
     AgentOutcome,
     HealResult,
     PrOutcome,
@@ -28,8 +28,49 @@ from projects_orchestrator.heal import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # heal now cuts worktrees under $XDG_STATE_HOME. Without this, running the
+    # suite would litter the developer's real ~/.local/state with checkouts and
+    # register them in throwaway test repos.
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+
+
+@pytest.fixture(autouse=True)
+def _no_live_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make it impossible for a test to spawn a real ``claude`` process.
+
+    This is not hypothetical. The old checkout-failure test relied on heal
+    aborting *before* the agent ran; when the checkout was removed, the test
+    quietly fell through to ``_default_agent_run`` and launched a live agent
+    with a real budget. A test must never be one refactor away from doing that,
+    so the default is fused shut: a test that wants agent behaviour injects it.
+    """
+
+    def _explode(*_args: object, **_kwargs: object) -> AgentOutcome:
+        message = "a test reached the REAL coding agent — inject agent_run instead"
+        raise AssertionError(message)
+
+    monkeypatch.setattr("projects_orchestrator.heal._default_agent_run", _explode)
+
+
+def _no_agent(_descriptor: object, _prompt: str) -> AgentOutcome:
+    """An agent that must never be called; fails the test loudly if it is."""
+    message = "the agent ran when it should not have"
+    raise AssertionError(message)
+
+
 def _run(*args: str, cwd: Path) -> None:
     subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True)
+
+
+def _branch_of(repo: Path) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "--abbrev-ref", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
 
 
 def _fail(task: str, detail: str = "boom") -> dict[str, CheckResult]:
@@ -113,16 +154,40 @@ def test_heal_project_no_action_when_nothing_cached_failing(fleet_dir: Path) -> 
     assert result.status == NO_FAILURES
 
 
-def test_heal_project_refuses_on_dirty_worktree(fleet_dir: Path) -> None:
+def test_heal_project_runs_even_when_the_operators_clone_is_dirty(fleet_dir: Path) -> None:
+    # Heal used to REFUSE here, because it was about to `checkout -B` in this
+    # very clone and would have clobbered the operator's uncommitted work. It
+    # now cuts its own worktree, so the operator's working state is none of its
+    # business — you can heal a project while you are mid-edit in it.
     project = make_project(fleet_dir, "alpha", tooling={"lint": "true"})
     git_init(project)
     (project / "scratch.txt").write_text("uncommitted", encoding="utf-8")
     descriptor = load_descriptor(project)
-    result = heal_project(descriptor, _fail("lint"))
-    assert result.status == WORKTREE_DIRTY
+
+    def noop_agent(_descriptor: object, _prompt: str) -> AgentOutcome:
+        return AgentOutcome(ok=False, summary="reached the agent")
+
+    result = heal_project(descriptor, _fail("lint"), agent_run=noop_agent)
+    assert result.status == AGENT_FAILED  # i.e. it got past the old dirty guard
 
 
-def test_heal_project_reports_agent_failure_and_restores_branch(fleet_dir: Path) -> None:
+def test_heal_project_leaves_the_operators_uncommitted_work_untouched(fleet_dir: Path) -> None:
+    project = make_project(fleet_dir, "alpha", tooling={"lint": "true"})
+    git_init(project)
+    scratch = project / "scratch.txt"
+    scratch.write_text("my work in progress", encoding="utf-8")
+    descriptor = load_descriptor(project)
+
+    def meddling_agent(descriptor_: object, _prompt: str) -> AgentOutcome:
+        # Writes a file of the same name — but in ITS worktree, not the clone.
+        (descriptor_.path / "scratch.txt").write_text("agent scribble", encoding="utf-8")
+        return AgentOutcome(ok=False, summary="done meddling")
+
+    heal_project(descriptor, _fail("lint"), agent_run=meddling_agent)
+    assert scratch.read_text(encoding="utf-8") == "my work in progress"
+
+
+def test_heal_project_reports_agent_failure(fleet_dir: Path) -> None:
     project = make_project(fleet_dir, "alpha", tooling={"lint": "true"})
     git_init(project)
     descriptor = load_descriptor(project)
@@ -133,13 +198,6 @@ def test_heal_project_reports_agent_failure_and_restores_branch(fleet_dir: Path)
     result = heal_project(descriptor, _fail("lint"), agent_run=failing_agent)
     assert result.status == AGENT_FAILED
     assert result.detail == "could not figure it out"
-    branch = subprocess.run(
-        ["git", "-C", str(project), "rev-parse", "--abbrev-ref", "HEAD"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    assert branch == "main"
 
 
 def test_heal_project_verify_failed_when_gate_still_fails(fleet_dir: Path) -> None:
@@ -193,7 +251,9 @@ def test_heal_project_fixes_and_opens_pr_end_to_end(fleet_dir: Path, tmp_path: P
 
     assert result.status == FIXED
     assert result.pr_url == f"https://example/pr/{result.branch}"
-    assert result.branch == "heal/lint-alpha"
+    # Per-RUN, not per project+task: a stable name deadlocks against retention
+    # (a kept worktree holds the branch, and git will not check it out twice).
+    assert result.branch.startswith("heal/lint-alpha-")
 
     current_branch = subprocess.run(
         ["git", "-C", str(project), "rev-parse", "--abbrev-ref", "HEAD"],
@@ -233,12 +293,159 @@ def test_heal_project_malicious_project_name_cannot_inject_shell_commands(fleet_
     assert not (Path.cwd() / "pwn").exists()
 
 
-def test_heal_project_branch_checkout_failure_reports_branch_failed(fleet_dir: Path) -> None:
-    # A locked index (a stale .git/index.lock) makes any git command in the
-    # worktree fail, including the initial checkout -B.
+def test_heal_project_reports_worktree_failed_when_git_refuses(fleet_dir: Path) -> None:
+    # Not a git repo at all, so `git worktree add` cannot succeed. This replaces
+    # the old checkout-failure test: there is no `checkout -B` left to fail.
+    project = make_project(fleet_dir, "alpha", tooling={"lint": "true"})  # deliberately no git_init
+    descriptor = load_descriptor(project)
+    result = heal_project(descriptor, _fail("lint"), agent_run=_no_agent)
+    assert result.status == WORKTREE_FAILED
+
+
+def test_heal_project_never_reaches_the_agent_without_a_worktree(fleet_dir: Path) -> None:
+    # The bug this guards: the old checkout-failure test stopped heal before the
+    # agent ran, so nothing else had to. Once the checkout was gone, that test
+    # fell through and launched a REAL `claude` process with a live budget. If a
+    # worktree cannot be cut, no agent may run — assert on behaviour, not status.
+    project = make_project(fleet_dir, "alpha", tooling={"lint": "true"})  # no git_init
+    descriptor = load_descriptor(project)
+    launched: list[str] = []
+
+    def spy(_descriptor: object, _prompt: str) -> AgentOutcome:
+        launched.append("agent ran")
+        return AgentOutcome(ok=True, summary="")
+
+    heal_project(descriptor, _fail("lint"), agent_run=spy)
+    assert launched == []
+
+
+def test_heal_never_checks_out_in_the_operators_clone(fleet_dir: Path) -> None:
+    # THE load-bearing guard. The existing "restores_branch" test asserts the
+    # clone is back on main AFTER heal returns — which the unsafe implementation
+    # also satisfies, because its `finally` puts it back. That test cannot tell
+    # a safe heal from an unsafe one.
+    #
+    # This one looks WHILE the agent is running: if heal commandeered the clone,
+    # HEAD is on the heal branch at exactly this moment.
     project = make_project(fleet_dir, "alpha", tooling={"lint": "true"})
     git_init(project)
-    (project / ".git" / "index.lock").write_text("", encoding="utf-8")
     descriptor = load_descriptor(project)
-    result = heal_project(descriptor, _fail("lint"))
-    assert result.status == BRANCH_FAILED
+    seen: list[str] = []
+
+    def spy_agent(_descriptor: object, _prompt: str) -> AgentOutcome:
+        seen.append(
+            subprocess.run(
+                ["git", "-C", str(project), "rev-parse", "--abbrev-ref", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+        )
+        return AgentOutcome(ok=False, summary="stop here")
+
+    heal_project(descriptor, _fail("lint"), agent_run=spy_agent)
+    assert seen == ["main"]
+
+
+def test_a_failed_run_keeps_its_worktree_as_evidence(fleet_dir: Path) -> None:
+    # Deleting a dead agent's worktree destroys the only record of what it did,
+    # at precisely the moment someone needs it (ADR-007).
+    project = make_project(fleet_dir, "alpha", tooling={"lint": "true"})
+    git_init(project)
+    descriptor = load_descriptor(project)
+
+    def scribbling_agent(descriptor_: object, _prompt: str) -> AgentOutcome:
+        (descriptor_.path / "half-done.txt").write_text("what I tried", encoding="utf-8")
+        return AgentOutcome(ok=False, summary="gave up")
+
+    result = heal_project(descriptor, _fail("lint"), agent_run=scribbling_agent)
+    assert result.status == AGENT_FAILED
+    assert Path(result.worktree, "half-done.txt").read_text(encoding="utf-8") == "what I tried"
+
+
+def test_a_successful_run_removes_its_worktree(fleet_dir: Path, tmp_path: Path) -> None:
+    # The work is in the PR, so the checkout is redundant.
+    project = make_project(fleet_dir, "alpha", tooling={"lint": "test -f fixed.txt"})
+    git_init(project)
+    remote = tmp_path / "origin.git"
+    _run("init", "--bare", "-q", str(remote), cwd=fleet_dir)
+    _run("remote", "add", "origin", str(remote), cwd=project)
+    descriptor = load_descriptor(project)
+    seen: list[Path] = []
+
+    def fixing_agent(descriptor_: object, _prompt: str) -> AgentOutcome:
+        seen.append(descriptor_.path)
+        (descriptor_.path / "fixed.txt").write_text("ok", encoding="utf-8")
+        return AgentOutcome(ok=True, summary="created fixed.txt")
+
+    result = heal_project(
+        descriptor,
+        _fail("lint"),
+        agent_run=fixing_agent,
+        open_pr=lambda *_: PrOutcome(ok=True, url="https://example.com/pr/1"),
+    )
+    assert result.status == FIXED
+    assert not seen[0].exists()
+
+
+def test_a_verify_failure_keeps_the_worktree_too(fleet_dir: Path) -> None:
+    project = make_project(fleet_dir, "alpha", tooling={"lint": "false"})
+    git_init(project)
+    descriptor = load_descriptor(project)
+
+    def noop_agent(_descriptor: object, _prompt: str) -> AgentOutcome:
+        return AgentOutcome(ok=True, summary="changed nothing")
+
+    result = heal_project(descriptor, _fail("lint"), agent_run=noop_agent)
+    assert result.status == VERIFY_FAILED
+    assert Path(result.worktree).is_dir()
+
+
+def test_concurrent_runs_on_one_repo_get_distinct_worktrees(fleet_dir: Path) -> None:
+    # Impossible under the old design: two runs would fight over the clone's HEAD.
+    project = make_project(fleet_dir, "alpha", tooling={"lint": "true"})
+    git_init(project)
+    descriptor = load_descriptor(project)
+    paths: list[str] = []
+
+    def recording_agent(descriptor_: object, _prompt: str) -> AgentOutcome:
+        paths.append(str(descriptor_.path))
+        return AgentOutcome(ok=False, summary="stop")
+
+    heal_project(descriptor, _fail("lint"), agent_run=recording_agent)
+    heal_project(descriptor, _fail("test"), agent_run=recording_agent)
+    assert paths[0] != paths[1]
+
+
+def test_a_failed_heal_does_not_block_the_next_heal(fleet_dir: Path) -> None:
+    # End-to-end form of the deadlock: heal once, fail (worktree kept), heal
+    # again. The second attempt must still reach the agent, not die at
+    # worktree_failed because the first run's evidence is holding its branch.
+    project = make_project(fleet_dir, "alpha", tooling={"lint": "true"})
+    git_init(project)
+    descriptor = load_descriptor(project)
+    reached: list[str] = []
+
+    def failing_agent(_descriptor: object, _prompt: str) -> AgentOutcome:
+        reached.append("ran")
+        return AgentOutcome(ok=False, summary="gave up")
+
+    first = heal_project(descriptor, _fail("lint"), agent_run=failing_agent)
+    second = heal_project(descriptor, _fail("lint"), agent_run=failing_agent)
+    assert first.status == AGENT_FAILED
+    assert second.status == AGENT_FAILED  # NOT worktree_failed
+    assert len(reached) == 2
+
+
+def test_two_failed_heals_keep_two_separate_pieces_of_evidence(fleet_dir: Path) -> None:
+    project = make_project(fleet_dir, "alpha", tooling={"lint": "true"})
+    git_init(project)
+    descriptor = load_descriptor(project)
+
+    def failing_agent(_descriptor: object, _prompt: str) -> AgentOutcome:
+        return AgentOutcome(ok=False, summary="gave up")
+
+    first = heal_project(descriptor, _fail("lint"), agent_run=failing_agent)
+    second = heal_project(descriptor, _fail("lint"), agent_run=failing_agent)
+    assert first.worktree != second.worktree
+    assert Path(first.worktree).is_dir() and Path(second.worktree).is_dir()

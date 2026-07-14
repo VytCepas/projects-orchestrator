@@ -35,11 +35,11 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import os
-import re
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from uuid import uuid4
 
+from projects_orchestrator.naming import safe_component
 from projects_orchestrator.procs import is_our_process, proc_start_ticks
 
 _STATE_DIRNAME = "projects-orchestrator"
@@ -55,11 +55,6 @@ ABANDONED = "abandoned"
 #: States a run never leaves. Note ``pr-opened`` is one of them: the run is over
 #: even though the *work* is not, and conflating those is how open PRs go unread.
 TERMINAL = frozenset({PR_OPENED, FAILED, NEEDS_HUMAN, ABANDONED})
-
-#: A project name reaches us from a child's own config.yaml, and it becomes part
-#: of a filename. Anything outside this set (a slash, a `..`) could walk out of
-#: the state directory, so it is replaced rather than trusted.
-_UNSAFE_IN_NAME = re.compile(r"[^A-Za-z0-9._-]")
 
 _DIED_WITHOUT_OUTCOME = "the run's process exited without recording an outcome"
 
@@ -115,26 +110,15 @@ def _now() -> str:
     return _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds")
 
 
-def safe_name(project: str) -> str:
-    """Reduce a project name to something safe to put in a filename.
-
-    Not cosmetic: the name comes from a child repo's own config, and a project
-    called ``../../etc`` would otherwise write its state file outside the state
-    directory entirely.
-    """
-    cleaned = _UNSAFE_IN_NAME.sub("-", project).strip(".-")
-    return cleaned or "unnamed"
-
-
 def new_run(project: str, task: str) -> AgentRun:
     """Mint a queued run. Nothing is launched and nothing is written yet."""
     stamp = _dt.datetime.now(_dt.UTC).strftime("%Y%m%dT%H%M%S")
-    run_id = f"{safe_name(project)}-{stamp}-{uuid4().hex[:6]}"
+    run_id = f"{safe_component(project)}-{stamp}-{uuid4().hex[:6]}"
     return AgentRun(id=run_id, project=project, task=task, state=QUEUED, started_at=_now())
 
 
 def _run_file(run_id: str) -> Path:
-    return state_dir() / f"{safe_name(run_id)}.json"
+    return state_dir() / f"{safe_component(run_id)}.json"
 
 
 def save(run: AgentRun) -> bool:

@@ -26,7 +26,6 @@ from projects_orchestrator.runs import (
     mark_running,
     new_run,
     resolve,
-    safe_name,
     save,
     state_dir,
 )
@@ -235,12 +234,8 @@ def test_a_traversing_project_name_cannot_escape_the_state_dir() -> None:
     assert written[0].parent == state_dir()
 
 
-def test_safe_name_keeps_ordinary_names_readable() -> None:
-    assert safe_name("my-project_1.0") == "my-project_1.0"
-
-
-def test_safe_name_never_returns_empty() -> None:
-    assert safe_name("...") == "unnamed"
+# (safe_component's own behaviour is covered in test_worktree/naming; here we
+# only pin that runs.py actually USES it — the traversal test above.)
 
 
 # --- Forgetting ---------------------------------------------------------------
