@@ -125,6 +125,7 @@ Campaigns — one declarative file that fans an agent across the fleet, safely.
 - `class Campaign` — A declarative fleet task: who to run on, what to do, and under what policy.
 - `def parse_campaign` — Build a :class:`Campaign` from a decoded document; raise on anything off.
 - `def load_campaign` — Read and validate a campaign file; raise :class:`CampaignError` on any fault.
+- `def resolve` — Resolve a built-in campaign name, or load a campaign file by path.
 - `def outstanding` — The projects still needing work: matched by the selector, not yet handled.
 - `class Outcome` — What became of one launched run.
 - `class Seams` — The side-effecting operations execution depends on, injected for testing.

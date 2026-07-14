@@ -12,6 +12,8 @@ job is to fail if that safety is removed:
 
 from __future__ import annotations
 
+import os
+import subprocess
 import textwrap
 from dataclasses import replace
 from pathlib import Path
@@ -43,12 +45,17 @@ def _valid_body(select: str = "scaffold=none", **policy: object) -> str:
 
 
 def _plain_repo(fleet_dir: Path, name: str) -> Path:
-    """A git repo with NO project-init scaffold — what a rollout targets."""
-    import subprocess
+    """A git repo with NO project-init scaffold — what a rollout targets.
 
+    A committer identity is configured in the repo (not globally), so a worktree
+    cut from it can commit even on a CI runner with no global git identity — the
+    default there, unlike a developer's machine.
+    """
     repo = fleet_dir / name
     repo.mkdir(parents=True)
     subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True)
     return repo
 
 
@@ -599,3 +606,144 @@ def test_cli_a_failing_canary_exits_one(fleet_dir: Path, monkeypatch: pytest.Mon
     cfile = _campaign_file(fleet_dir, include_plain_repos="true")
 
     assert main(["campaign", str(cfile), "--root", str(fleet_dir)]) == 1
+
+
+# --- #122: the project-init estate rollout -------------------------------------
+
+
+def test_resolve_returns_a_builtin_by_name() -> None:
+    assert campaign.resolve("project-init") is campaign.BUILTIN_CAMPAIGNS["project-init"]
+
+
+def test_resolve_refuses_an_unknown_name_and_lists_builtins() -> None:
+    with pytest.raises(campaign.CampaignError, match="project-init"):
+        campaign.resolve("not-a-real-campaign")
+
+
+def test_resolve_loads_a_campaign_file_by_path(tmp_path: Path) -> None:
+    path = _write(tmp_path / "c.yml", _valid_body(select="ci=fail"))
+    assert campaign.resolve(str(path)).name == "rollout"
+
+
+def test_the_project_init_builtin_is_the_estate_rollout() -> None:
+    # Guards the shipped campaign against being quietly mis-wired: it MUST select
+    # unscaffolded repos, MUST opt discovery into seeing them (or it targets an
+    # empty set), and MUST tell the agent what "done" means.
+    camp = campaign.BUILTIN_CAMPAIGNS["project-init"]
+    assert camp.select == ("scaffold=none",)
+    assert camp.policy.include_plain_repos is True
+    assert "project-init" in camp.task
+    assert "just ci" in camp.task
+
+
+def test_project_init_is_self_terminating_as_a_project_gains_a_scaffold(fleet_dir: Path) -> None:
+    # THE criterion-3 guard. A project leaves the selector the moment its scaffold
+    # lands, so re-running the campaign converges to empty with nothing tracked.
+    _plain_repo(fleet_dir, "legacy")
+    camp = campaign.BUILTIN_CAMPAIGNS["project-init"]
+    assert _names(campaign.outstanding(camp, _snap_fleet(fleet_dir), {})) == ["legacy"]
+
+    # The scaffold PR merges: the repo now carries a versioned descriptor.
+    scaffold = fleet_dir / "legacy" / ".agents"
+    scaffold.mkdir(parents=True)
+    (scaffold / "config.yaml").write_text(
+        "project:\n  name: legacy\n  language: python\n"
+        '  project_init_version: 0.6.0\n  lint_command: "true"\n',
+        encoding="utf-8",
+    )
+    # It no longer matches scaffold=none, so the campaign reports itself done.
+    assert campaign.outstanding(camp, _snap_fleet(fleet_dir), {}) == []
+
+
+def _rev(remote: Path, ref: str) -> str:
+    out = subprocess.run(
+        ["git", "-C", str(remote), "rev-parse", ref],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return out.stdout.strip()
+
+
+def _remote_branches(remote: Path) -> list[str]:
+    out = subprocess.run(
+        ["git", "-C", str(remote), "for-each-ref", "--format=%(refname:short)", "refs/heads"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return out.stdout.split()
+
+
+def test_project_init_boundary_holds_on_a_hookless_plain_repo(
+    fleet_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # THE criterion-2 guard, at the rollout level: the estate's repos have NO
+    # pre-push hook, so the branch-only / draft-PR-only boundary must hold on
+    # orchestrator muscle alone. Drive the campaign's real land path on an
+    # unguarded plain repo and prove main is never written.
+    from projects_orchestrator import work
+
+    repo = _plain_repo(fleet_dir, "legacy")
+    (repo / "README.md").write_text("legacy app\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "init")  # identity is configured in _plain_repo
+    remote = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+    _git(repo, "remote", "add", "origin", str(remote))
+    _git(repo, "push", "-q", "origin", "main")
+    main_sha = _rev(remote, "main")
+    assert not (repo / ".git" / "hooks" / "pre-push").exists()  # genuinely unguarded
+
+    fleet = discover(FleetConfig(roots=(fleet_dir,), include_plain_repos=True))
+    descriptor = fleet.get("legacy")
+    assert descriptor is not None
+    task = campaign.BUILTIN_CAMPAIGNS["project-init"].task
+    run = work.launch(descriptor, task, spawn=lambda _argv, _log: os.getpid())
+
+    # Simulate the agent applying a scaffold (edits, no commit — the briefing forbids it).
+    (Path(run.worktree) / "justfile").write_text("ci:\n\ttrue\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        work.landing,
+        "open_draft_pr",
+        lambda *_: work.landing.Landing(work.landing.LANDED, pr_url="http://pr/1"),
+    )
+    result = work._default_land(run)
+
+    assert result.state == runs.PR_OPENED
+    assert run.branch.startswith("work/")  # a non-protected branch
+    assert run.branch in _remote_branches(remote)  # the work landed on it
+    assert _rev(remote, "main") == main_sha  # ...and main was never touched
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(repo), *args], check=True)
+
+
+def test_cli_campaign_project_init_by_name_canaries_one(
+    fleet_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from projects_orchestrator.__main__ import main
+
+    _plain_repo(fleet_dir, "legacy-a")
+    _plain_repo(fleet_dir, "legacy-b")
+    seen: list[list[str]] = []
+    monkeypatch.setattr(
+        campaign,
+        "execute",
+        lambda camp, descriptors, _s: (
+            seen.append([d.name for d in descriptors])
+            or [
+                campaign.Outcome(
+                    run=runs.AgentRun(id="r", project=d.name, task=camp.task, state=runs.PR_OPENED)
+                )
+                for d in descriptors
+            ]
+        ),
+    )
+    monkeypatch.setattr(campaign, "default_seams", lambda: None)
+
+    # No --root file needed for the campaign itself: the built-in name resolves it.
+    assert main(["campaign", "project-init", "--root", str(fleet_dir)]) == 0
+    assert len(seen[0]) == 1  # canary of one, drawn from the two plain repos

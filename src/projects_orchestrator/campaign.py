@@ -261,6 +261,55 @@ def load_campaign(path: Path) -> Campaign:
     return parse_campaign(raw)
 
 
+# --- Built-in campaigns --------------------------------------------------------
+
+#: The instruction the project-init rollout hands every agent. It says WHAT to
+#: achieve, not how to push it: the briefing already forbids committing, pushing,
+#: and merging, and the orchestrator lands the result (ADR-007 §3).
+_PROJECT_INIT_TASK = (
+    "Apply the project-init scaffold so this repository conforms to the fleet's "
+    "contract-v1: add the .agents/ descriptor (config.yaml with the project name, "
+    "language, and per-task commands), the CI workflow, the language toolchain gates "
+    "(lint, typecheck, tests with a coverage floor), and the git hooks. Then make "
+    "`just ci` pass, fixing whatever lint, type, or test failures the new gates surface. "
+    "Keep the change scoped to the scaffold and the fixes its own gates require."
+)
+
+#: Named campaigns shipped with the tool, so ``campaign project-init`` works with
+#: no file to author. ``project-init`` is THE estate rollout (#122): it selects the
+#: unscaffolded repos — which is why it must opt discovery into seeing plain repos —
+#: and is self-terminating, because a project drops out of ``scaffold=none`` the
+#: moment its scaffold PR merges.
+BUILTIN_CAMPAIGNS: dict[str, Campaign] = {
+    "project-init": Campaign(
+        name="project-init",
+        select=("scaffold=none",),
+        task=_PROJECT_INIT_TASK,
+        policy=Policy(max_concurrent=1, include_plain_repos=True),
+    ),
+}
+
+
+def resolve(name_or_path: str) -> Campaign:
+    """Resolve a built-in campaign name, or load a campaign file by path.
+
+    Built-in names are reserved and win over a same-named file, so
+    ``campaign project-init`` means the same thing from any directory. Anything
+    else is treated as a path; a value that is neither is refused with the list of
+    built-ins, rather than read as an empty or missing file.
+    """
+    if name_or_path in BUILTIN_CAMPAIGNS:
+        return BUILTIN_CAMPAIGNS[name_or_path]
+    path = Path(name_or_path)
+    if not path.exists():
+        message = (
+            f"'{name_or_path}' is neither a campaign file nor a built-in campaign "
+            f"({', '.join(sorted(BUILTIN_CAMPAIGNS))})"
+        )
+        raise CampaignError(message)
+    return load_campaign(path)
+
+
 # --- Deriving what is outstanding ----------------------------------------------
 
 

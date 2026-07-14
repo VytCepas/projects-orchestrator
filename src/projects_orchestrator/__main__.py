@@ -870,7 +870,7 @@ def _cmd_campaign(args: argparse.Namespace) -> int:
     nothing is done (exit 0), and re-running picks up only what still remains.
     """
     try:
-        camp = campaign.load_campaign(Path(args.file))
+        camp = campaign.resolve(args.file)
     except campaign.CampaignError as exc:
         print(f"campaign: {exc}", file=sys.stderr)
         return 2
@@ -1226,7 +1226,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_work_arguments(sub)
     campaign_sp = sub.choices["campaign"]
-    campaign_sp.add_argument("file", help="path to the campaign YAML file")
+    campaign_sp.add_argument(
+        "file",
+        help="a built-in campaign name (e.g. project-init) or a path to a campaign YAML file",
+    )
     campaign_sp.add_argument(
         "--apply",
         action="store_true",
