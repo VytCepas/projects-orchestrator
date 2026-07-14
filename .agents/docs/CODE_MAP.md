@@ -40,7 +40,8 @@ Per-project deploy/runtime status, driven by the contract-v2 deploy block.
 Read-only GCP inventory — list what is live, and never touch it.
 
 - `class GcpResource` — One live GCP resource, as returned by the asset inventory.
-- `def search_resources` — List live GCP resources via the read-only asset inventory; never raises.
+- `def search_command` — The exact read-only command for a scope (scope is shell-quoted).
+- `def search_resources` — List live GCP resources in ``scope`` via the read-only asset inventory.
 
 ### `projects_orchestrator/adapters/generic.py`
 
@@ -344,7 +345,7 @@ Read guard/usage events across the fleet — the observability layer.
 Diff the live GCP inventory against the fleet — what does no repo govern?
 
 - `class OrphanReport` — The result of an orphan scan.
-- `def accounted_names` — Every name the fleet accounts for: each project's name and its deploy app.
+- `def accounted_keys` — Every (name, region) the fleet accounts for, lower-cased.
 - `def find_orphans` — Report resources no fleet project accounts for; never raises.
 
 ### `projects_orchestrator/pool.py`
