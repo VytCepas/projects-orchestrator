@@ -22,8 +22,10 @@ from __future__ import annotations
 
 import json
 import shlex
+import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -58,6 +60,26 @@ DISPATCH_SKIPPED = "skipped"
 # not a transient one ("gh was offline"). Retrying will never help.
 DISPATCH_NO_WORKFLOW = "no-workflow"
 
+# Settlement of a dispatched deploy (ADR-005's deferred poll-until-settled).
+# A dispatch confirms only that a run was QUEUED; --wait follows it to a verdict.
+# The states are asymmetric on purpose — only ``succeeded`` is good news, and the
+# three not-good outcomes are kept distinct because an operator mid-incident needs
+# to tell "it failed" from "it is still running" from "I could not confirm".
+SETTLE_SUCCEEDED = "succeeded"
+SETTLE_FAILED = "failed"
+# Dispatched and observed running, but not finished before --wait gave up. The
+# deploy may yet succeed; we simply stopped watching. NOT a failure.
+SETTLE_TIMED_OUT = "timed-out"
+# The dispatch returned OK but no new run ever appeared to us. We cannot confirm
+# anything — reported as its own state and NEVER as success. Silence is not success.
+SETTLE_UNCONFIRMED = "unconfirmed"
+# `gh` missing, unauthenticated, or offline during polling — like every other
+# read path here, an unreachable forge is ``unknown``, not a verdict.
+SETTLE_UNKNOWN = "unknown"
+# Waiting is a GitHub-only capability (it follows a `gh` run). A GitLab project
+# says so rather than silently returning as though the wait had happened.
+SETTLE_UNSUPPORTED = "unsupported"
+
 _FLY_COMMAND = "flyctl status --json"
 _CLOUD_RUN_COMMAND = "gcloud run services describe {app} --region {region} --format=json"
 _DISPATCH_COMMAND = "gh workflow run {workflow} -f action={action}"
@@ -66,10 +88,20 @@ _DISPATCH_COMMAND = "gh workflow run {workflow} -f action={action}"
 # clean `planned` dry run and then fails at --apply with `gh` shouting into a
 # repo it cannot resolve — structurally undeployable, and nothing said so.
 _GITLAB_DISPATCH_COMMAND = "glab ci run --variables action:{action}"
+# List recent runs of one workflow, newest first, with the fields we need to
+# identify our run (databaseId) and read its verdict (status, conclusion, url).
+_RUN_LIST_COMMAND = (
+    "gh run list --workflow {workflow} --limit 20 --json databaseId,status,conclusion,url,createdAt"
+)
 
 _PROBE_TIMEOUT = 20.0
 _HEALTH_TIMEOUT = 5.0
 _DISPATCH_TIMEOUT = 20.0
+# Poll defaults for --wait. A deploy is minutes, not seconds, so the ceiling is
+# generous and the cadence unhurried — a tight poll would just rate-limit `gh`.
+_WAIT_TIMEOUT = 900.0
+_WAIT_POLL_INTERVAL = 10.0
+_WAIT_LIST_TIMEOUT = 20.0
 
 
 @dataclass(frozen=True)
@@ -369,3 +401,220 @@ def trigger_deploy(
         # An operator mid-rollback cannot tell "impossible" from "retry".
         detail="" if result.ok else _failure_detail(result),
     )
+
+
+# --- Poll-until-settled (ADR-005 deferred consequence) -------------------------
+
+#: gh's terminal conclusions that are anything but a clean success. ``conclusion``
+#: is null while a run is in flight; only a non-null, non-``success`` value here
+#: is a real failure.
+_FAILED_CONCLUSIONS = frozenset(
+    {"failure", "cancelled", "timed_out", "action_required", "startup_failure", "stale"}
+)
+
+
+@dataclass(frozen=True)
+class WaitPolicy:
+    """The knobs and seams for :func:`wait_for_deploy`, bundled so it stays pure.
+
+    ``now``/``sleep`` are injectable for the same reason :class:`campaign.Seams`
+    injects a clock: the poll loop must be testable without real wall-clock or a
+    real ``time.sleep`` stalling the suite.
+
+    Attributes:
+        timeout: Give up waiting after this many seconds.
+        poll_interval: Seconds between ``gh run list`` polls.
+        now: Monotonic clock source.
+        sleep: Sleep function, called between polls.
+    """
+
+    timeout: float = _WAIT_TIMEOUT
+    poll_interval: float = _WAIT_POLL_INTERVAL
+    now: Callable[[], float] = time.monotonic
+    sleep: Callable[[float], None] = time.sleep
+
+
+@dataclass(frozen=True)
+class DeploySettlement:
+    """What became of a dispatched deploy once we followed it (ADR-005).
+
+    Attributes:
+        project: Project name.
+        workflow: The workflow whose run we watched.
+        state: One of the ``SETTLE_*`` constants.
+        detail: Human-readable note — the conclusion, why we could not confirm,
+            or which failure mode a poll hit.
+        run_url: URL of the run we watched, when we identified one.
+    """
+
+    project: str
+    workflow: str
+    state: str
+    detail: str = ""
+    run_url: str = ""
+
+    @property
+    def succeeded(self) -> bool:
+        """Whether the deploy is confirmed successful — and nothing weaker."""
+        return self.state == SETTLE_SUCCEEDED
+
+
+def _run_records(stdout: str) -> list[dict[str, Any]]:
+    """Decode ``gh run list --json`` output to a list of run dicts (pure)."""
+    try:
+        data = json.loads(stdout)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [item for item in data if isinstance(item, dict)]
+
+
+def newest_run_id(stdout: str) -> int | None:
+    """The highest ``databaseId`` in a run list, or ``None`` (pure).
+
+    Captured *before* dispatch, this is the high-water mark that lets
+    :func:`wait_for_deploy` recognise the run the dispatch created — the one with
+    an id above every run that already existed — rather than mistaking a
+    pre-existing run for ours.
+    """
+    ids = [
+        int(record["databaseId"])
+        for record in _run_records(stdout)
+        if isinstance(record.get("databaseId"), int)
+    ]
+    return max(ids) if ids else None
+
+
+def resolved_workflow(descriptor: ProjectDescriptor) -> str:
+    """The deploy workflow name a dispatch would use — declared, or the default.
+
+    Exposed so a caller can name the workflow *before* dispatching (to read the
+    pre-dispatch watermark) without re-deriving the default-fallback rule.
+    """
+    deploy = descriptor.deploy
+    return (deploy.workflow if deploy else "") or DEFAULT_DEPLOY_WORKFLOW
+
+
+def latest_run_id(descriptor: ProjectDescriptor, workflow: str) -> int | None:
+    """The newest existing run id for ``workflow`` — the pre-dispatch watermark.
+
+    Call this *before* dispatching so :func:`wait_for_deploy` can tell our run
+    from the ones already there. ``None`` when there are no runs yet, or when
+    ``gh`` cannot answer — in the latter case the wait simply has no floor and
+    treats the first run it sees as ours, which is the best it can do blind.
+    """
+    command = _RUN_LIST_COMMAND.format(workflow=shlex.quote(workflow))
+    result = run_command(command, cwd=descriptor.path, timeout=_WAIT_LIST_TIMEOUT)
+    return newest_run_id(result.stdout) if result.ok else None
+
+
+def _our_run(stdout: str, after_id: int) -> dict[str, Any] | None:
+    """The newest run created after ``after_id`` — our dispatch's run (pure).
+
+    Older runs (id <= ``after_id``) existed before we dispatched and are not ours,
+    so they are filtered out entirely: following one would report a *previous*
+    deploy's verdict as this one's, which is worse than reporting nothing.
+    """
+    ours = [
+        record
+        for record in _run_records(stdout)
+        if isinstance(record.get("databaseId"), int) and int(record["databaseId"]) > after_id
+    ]
+    if not ours:
+        return None
+    return max(ours, key=lambda record: int(record["databaseId"]))
+
+
+def classify_run(record: dict[str, Any]) -> str:
+    """Map one gh run record to a settlement state (pure).
+
+    Returns ``SETTLE_SUCCEEDED``/``SETTLE_FAILED`` once the run is ``completed``,
+    and ``""`` while it is still in flight — the caller keeps polling on empty.
+    An unrecognised ``completed`` conclusion is treated as a failure, not ignored:
+    a verdict we do not understand must not be allowed to read as success.
+    """
+    if record.get("status") != "completed":
+        return ""
+    conclusion = record.get("conclusion")
+    if conclusion == "success":
+        return SETTLE_SUCCEEDED
+    return SETTLE_FAILED
+
+
+def wait_for_deploy(
+    descriptor: ProjectDescriptor,
+    workflow: str,
+    after_id: int | None,
+    policy: WaitPolicy | None = None,
+) -> DeploySettlement:
+    """Follow a dispatched deploy to its conclusion; never raises.
+
+    Polls ``gh run list`` for the run whose id is above ``after_id`` (the
+    pre-dispatch high-water mark) and returns when it completes. Timing and the
+    clock/sleep seams come from ``policy`` (:class:`WaitPolicy`), injected so the
+    loop is testable without real time — as :class:`campaign.Seams` does.
+
+    The outcome is deliberately honest about what it did and did not see:
+
+    - ``succeeded``/``failed`` — the run completed and we read its conclusion.
+    - ``timed-out`` — we saw our run but it was still running when ``timeout``
+      elapsed. The deploy may yet succeed; we stopped watching. Not a failure.
+    - ``unconfirmed`` — no run above ``after_id`` ever appeared. We confirm
+      nothing, and in particular we do not confirm success.
+    - ``unknown`` — ``gh`` was missing/unauthenticated/offline the whole time.
+    - ``unsupported`` — a GitLab project, whose runs ``gh`` cannot follow.
+    """
+    if provider_is_gitlab(descriptor):
+        return DeploySettlement(
+            project=descriptor.name,
+            workflow=workflow,
+            state=SETTLE_UNSUPPORTED,
+            detail="--wait follows a GitHub Actions run; glab pipelines are not polled",
+        )
+
+    policy = policy or WaitPolicy()
+    floor = after_id if after_id is not None else -1
+    command = _RUN_LIST_COMMAND.format(workflow=shlex.quote(workflow))
+    deadline = policy.now() + policy.timeout
+    saw_our_run = False
+    reachable = False
+    while True:
+        result = run_command(command, cwd=descriptor.path, timeout=_WAIT_LIST_TIMEOUT)
+        if result.ok:
+            reachable = True
+            record = _our_run(result.stdout, floor)
+            if record is not None:
+                saw_our_run = True
+                state = classify_run(record)
+                if state:
+                    return DeploySettlement(
+                        project=descriptor.name,
+                        workflow=workflow,
+                        state=state,
+                        detail=str(record.get("conclusion") or "completed"),
+                        run_url=str(record.get("url") or ""),
+                    )
+        # Not settled yet. Stop when the budget is spent — but only AFTER a poll,
+        # so a timeout shorter than one interval still checks once.
+        if policy.now() >= deadline:
+            return _wait_deadline(
+                descriptor, workflow, saw_our_run=saw_our_run, reachable=reachable
+            )
+        policy.sleep(policy.poll_interval)
+
+
+def _wait_deadline(
+    descriptor: ProjectDescriptor, workflow: str, *, saw_our_run: bool, reachable: bool
+) -> DeploySettlement:
+    """The settlement when ``wait_for_deploy`` runs out of time (pure)."""
+    if saw_our_run:
+        state, detail = SETTLE_TIMED_OUT, "the run was still in flight when --wait gave up"
+    elif reachable:
+        state, detail = (
+            SETTLE_UNCONFIRMED,
+            "no run for this dispatch appeared before --wait gave up",
+        )
+    else:
+        state, detail = SETTLE_UNKNOWN, "gh was unreachable throughout the wait"
+    return DeploySettlement(project=descriptor.name, workflow=workflow, state=state, detail=detail)

@@ -618,3 +618,93 @@ def test_deploy_dry_run_json_exits_zero(fleet_dir: Path) -> None:
     # A dry run asked for nothing, so it cannot have failed to do it.
     _deployable(fleet_dir)
     assert main(["deploy", "alpha", "--json", "--root", str(fleet_dir)]) == 0
+
+
+# --- deploy --wait: poll-until-settled (#152) ---------------------------------
+
+
+class _CLIDeploy:
+    """Routes run_command by command: gh-run-list for watermark+polls, else dispatch.
+
+    The first `gh run list` is the pre-dispatch watermark read; subsequent ones
+    are polls. This lets a CLI test assert the ORDER (watermark before dispatch)
+    as well as the settled outcome.
+    """
+
+    def __init__(self, run_lists: list[str], dispatch_ok: bool = True) -> None:
+        from projects_orchestrator.runner import RunResult
+
+        self._RunResult = RunResult
+        self._run_lists = run_lists
+        self._list_calls = 0
+        self._dispatch_ok = dispatch_ok
+        self.commands: list[str] = []
+
+    def __call__(self, command: str, cwd, timeout: float = 0.0):  # noqa: ARG002
+        self.commands.append(command)
+        if command.startswith("gh run list"):
+            idx = min(self._list_calls, len(self._run_lists) - 1)
+            self._list_calls += 1
+            return self._RunResult(command=command, returncode=0, stdout=self._run_lists[idx])
+        return self._RunResult(command=command, returncode=0 if self._dispatch_ok else 1)
+
+
+def _run_list(db_id: int, conclusion: str | None = "success", status: str = "completed") -> str:
+    import json as _json
+
+    return _json.dumps(
+        [{"databaseId": db_id, "status": status, "conclusion": conclusion, "url": f"u/{db_id}"}]
+    )
+
+
+def test_deploy_wait_reports_success(fleet_dir: Path, monkeypatch, capsys) -> None:
+    _deployable(fleet_dir)
+    fake = _CLIDeploy([_run_list(41), _run_list(42, "success")])  # watermark 41, our run 42
+    monkeypatch.setattr(cloud, "run_command", fake)
+    code = main(["deploy", "alpha", "--apply", "--wait", "--root", str(fleet_dir)])
+    assert code == 0
+    assert "succeeded" in capsys.readouterr().out
+
+
+def test_deploy_wait_on_a_failed_run_exits_nonzero(fleet_dir: Path, monkeypatch, capsys) -> None:
+    # The whole point: we WATCHED it, so a failed deploy is a nonzero exit — not
+    # the exit 0 a bare dispatch would have given for "successfully queued".
+    _deployable(fleet_dir)
+    fake = _CLIDeploy([_run_list(41), _run_list(42, "failure")])
+    monkeypatch.setattr(cloud, "run_command", fake)
+    code = main(["deploy", "alpha", "--apply", "--wait", "--root", str(fleet_dir)])
+    assert code == 1
+    assert "failed" in capsys.readouterr().out
+
+
+def test_deploy_wait_reads_the_watermark_before_dispatching(fleet_dir: Path, monkeypatch) -> None:
+    # Ordering is load-bearing: the watermark must be captured before the dispatch
+    # creates our run, or our own run sets the floor above itself.
+    _deployable(fleet_dir)
+    fake = _CLIDeploy([_run_list(41), _run_list(42, "success")])
+    monkeypatch.setattr(cloud, "run_command", fake)
+    main(["deploy", "alpha", "--apply", "--wait", "--root", str(fleet_dir)])
+    assert fake.commands[0].startswith("gh run list")  # watermark
+    assert fake.commands[1].startswith("gh workflow run")  # dispatch, AFTER
+
+
+def test_deploy_wait_without_apply_does_not_poll(fleet_dir: Path, monkeypatch, capsys) -> None:
+    # --wait is meaningless on a dry run: nothing was dispatched to follow.
+    _deployable(fleet_dir)
+    fake = _CLIDeploy([_run_list(41)])
+    monkeypatch.setattr(cloud, "run_command", fake)
+    code = main(["deploy", "alpha", "--wait", "--root", str(fleet_dir)])
+    assert code == 0
+    assert "planned" in capsys.readouterr().out
+    assert fake.commands == []  # never shelled out at all
+
+
+def test_deploy_wait_json_carries_the_settlement(fleet_dir: Path, monkeypatch, capsys) -> None:
+    _deployable(fleet_dir)
+    fake = _CLIDeploy([_run_list(41), _run_list(42, "success")])
+    monkeypatch.setattr(cloud, "run_command", fake)
+    main(["deploy", "alpha", "--apply", "--wait", "--json", "--root", str(fleet_dir)])
+    import json as _json
+
+    payload = _json.loads(capsys.readouterr().out)
+    assert payload["settlement"]["state"] == "succeeded"

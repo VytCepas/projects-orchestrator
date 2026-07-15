@@ -351,3 +351,185 @@ def test_gitlab_child_dispatches_via_glab(fleet_dir: Path, monkeypatch) -> None:
 def test_gitlab_child_looks_for_its_workflow_under_gitlab(fleet_dir: Path) -> None:
     descriptor = load_descriptor(_gitlab_project(fleet_dir))
     assert trigger_deploy(descriptor, "deploy").status == "planned"
+
+
+# --- Poll-until-settled: deploy --wait (#152, ADR-005 deferred loop) -----------
+
+from projects_orchestrator.adapters.cloud import (  # noqa: E402
+    SETTLE_FAILED,
+    SETTLE_SUCCEEDED,
+    SETTLE_TIMED_OUT,
+    SETTLE_UNCONFIRMED,
+    SETTLE_UNKNOWN,
+    SETTLE_UNSUPPORTED,
+    WaitPolicy,
+    classify_run,
+    newest_run_id,
+    resolved_workflow,
+    wait_for_deploy,
+)
+
+
+def _runs_json(*runs: dict) -> str:
+    return json.dumps(list(runs))
+
+
+def _run(db_id: int, status: str = "completed", conclusion: str | None = "success") -> dict:
+    return {
+        "databaseId": db_id,
+        "status": status,
+        "conclusion": conclusion,
+        "url": f"https://gh/run/{db_id}",
+        "createdAt": "2026-07-15T00:00:00Z",
+    }
+
+
+# newest_run_id / classify_run — the pure core
+
+
+def test_newest_run_id_picks_the_highest() -> None:
+    assert newest_run_id(_runs_json(_run(7), _run(42), _run(13))) == 42
+
+
+def test_newest_run_id_of_no_runs_is_none() -> None:
+    assert newest_run_id("[]") is None
+
+
+def test_newest_run_id_of_garbage_is_none() -> None:
+    assert newest_run_id("not json") is None
+
+
+def test_classify_run_success() -> None:
+    assert classify_run(_run(1, "completed", "success")) == SETTLE_SUCCEEDED
+
+
+def test_classify_run_failure() -> None:
+    assert classify_run(_run(1, "completed", "failure")) == SETTLE_FAILED
+
+
+def test_classify_run_in_flight_is_empty() -> None:
+    # Still running: the caller keeps polling, so the state is deliberately blank.
+    assert classify_run(_run(1, "in_progress", None)) == ""
+
+
+def test_classify_run_unknown_conclusion_is_failure() -> None:
+    # A completed verdict we don't recognise must not read as success.
+    assert classify_run(_run(1, "completed", "neutral")) == SETTLE_FAILED
+
+
+# The loop, with injected clock/sleep and a scripted run_command
+
+
+class _ScriptedRuns:
+    """A run_command stand-in that returns queued stdout payloads in order."""
+
+    def __init__(self, payloads: list[str], ok: bool = True) -> None:
+        self._payloads = payloads
+        self._ok = ok
+        self.calls = 0
+
+    def __call__(self, command: str, cwd: Path, timeout: float = 0.0) -> RunResult:  # noqa: ARG002
+        idx = min(self.calls, len(self._payloads) - 1)
+        self.calls += 1
+        return RunResult(
+            command=command,
+            returncode=0 if self._ok else 1,
+            stdout=self._payloads[idx] if self._payloads else "",
+            duration=0.0,
+        )
+
+
+def _fast_policy() -> WaitPolicy:
+    # A clock that advances 1s per read and a no-op sleep, so the loop never
+    # touches real time. timeout=5 gives a handful of polls before the deadline.
+    ticks = iter(range(0, 10_000))
+    return WaitPolicy(
+        timeout=5.0, poll_interval=1.0, now=lambda: next(ticks), sleep=lambda _s: None
+    )
+
+
+def _service(fleet_dir: Path) -> object:
+    return load_descriptor(
+        _with_deploy_workflow(make_project_v2(fleet_dir, "alpha", deploy_target="fly"))
+    )
+
+
+def test_wait_returns_succeeded_when_our_run_completes(fleet_dir: Path, monkeypatch) -> None:
+    # Watermark was 41; our run is 42, completed successfully.
+    scripted = _ScriptedRuns([_runs_json(_run(42, "completed", "success"))])
+    monkeypatch.setattr(cloud, "run_command", scripted)
+    result = wait_for_deploy(_service(fleet_dir), "deploy.yml", 41, _fast_policy())
+    assert result.state == SETTLE_SUCCEEDED
+
+
+def test_wait_returns_failed_when_our_run_fails(fleet_dir: Path, monkeypatch) -> None:
+    scripted = _ScriptedRuns([_runs_json(_run(42, "completed", "failure"))])
+    monkeypatch.setattr(cloud, "run_command", scripted)
+    result = wait_for_deploy(_service(fleet_dir), "deploy.yml", 41, _fast_policy())
+    assert result.state == SETTLE_FAILED
+
+
+def test_wait_polls_until_the_run_completes(fleet_dir: Path, monkeypatch) -> None:
+    # First poll: still running. Second: done. The loop must keep going.
+    scripted = _ScriptedRuns(
+        [
+            _runs_json(_run(42, "in_progress", None)),
+            _runs_json(_run(42, "completed", "success")),
+        ]
+    )
+    monkeypatch.setattr(cloud, "run_command", scripted)
+    result = wait_for_deploy(_service(fleet_dir), "deploy.yml", 41, _fast_policy())
+    assert result.state == SETTLE_SUCCEEDED
+    assert scripted.calls == 2
+
+
+def test_wait_ignores_a_pre_existing_run_below_the_watermark(fleet_dir: Path, monkeypatch) -> None:
+    # A PREVIOUS deploy's run (id 41, failed) is in the list. Our dispatch's run
+    # never appears. Following 41 would report the old failure as ours — instead
+    # this must be unconfirmed, not failed.
+    scripted = _ScriptedRuns([_runs_json(_run(41, "completed", "failure"))])
+    monkeypatch.setattr(cloud, "run_command", scripted)
+    result = wait_for_deploy(_service(fleet_dir), "deploy.yml", 41, _fast_policy())
+    assert result.state == SETTLE_UNCONFIRMED
+
+
+def test_wait_times_out_when_our_run_never_finishes(fleet_dir: Path, monkeypatch) -> None:
+    scripted = _ScriptedRuns([_runs_json(_run(42, "in_progress", None))])
+    monkeypatch.setattr(cloud, "run_command", scripted)
+    result = wait_for_deploy(_service(fleet_dir), "deploy.yml", 41, _fast_policy())
+    assert result.state == SETTLE_TIMED_OUT
+
+
+def test_wait_is_unknown_when_gh_is_unreachable(fleet_dir: Path, monkeypatch) -> None:
+    scripted = _ScriptedRuns([""], ok=False)  # every poll fails
+    monkeypatch.setattr(cloud, "run_command", scripted)
+    result = wait_for_deploy(_service(fleet_dir), "deploy.yml", 41, _fast_policy())
+    assert result.state == SETTLE_UNKNOWN
+
+
+def test_wait_is_unconfirmed_not_success_when_no_run_appears(fleet_dir: Path, monkeypatch) -> None:
+    # THE honesty guard: gh answers, but our run never shows. Never call it success.
+    scripted = _ScriptedRuns([_runs_json()])  # empty list, reachable
+    monkeypatch.setattr(cloud, "run_command", scripted)
+    result = wait_for_deploy(_service(fleet_dir), "deploy.yml", 41, _fast_policy())
+    assert result.state == SETTLE_UNCONFIRMED
+    assert not result.succeeded
+
+
+def test_wait_with_no_watermark_follows_the_first_run(fleet_dir: Path, monkeypatch) -> None:
+    # No prior runs (watermark None): the first run we see is ours.
+    scripted = _ScriptedRuns([_runs_json(_run(1, "completed", "success"))])
+    monkeypatch.setattr(cloud, "run_command", scripted)
+    result = wait_for_deploy(_service(fleet_dir), "deploy.yml", None, _fast_policy())
+    assert result.state == SETTLE_SUCCEEDED
+
+
+def test_wait_on_a_gitlab_project_is_unsupported(fleet_dir: Path, monkeypatch) -> None:
+    monkeypatch.setattr(cloud, "run_command", _explode)  # must not even poll
+    descriptor = load_descriptor(_gitlab_project(fleet_dir))
+    result = wait_for_deploy(descriptor, "deploy.yml", 41, _fast_policy())
+    assert result.state == SETTLE_UNSUPPORTED
+
+
+def test_resolved_workflow_defaults(fleet_dir: Path) -> None:
+    assert resolved_workflow(_service(fleet_dir)) == "deploy.yml"

@@ -31,9 +31,14 @@ from projects_orchestrator.adapters.cloud import (
     DEPLOY_ACTIONS,
     DISPATCH_DISPATCHED,
     DISPATCH_FAILED,
+    SETTLE_SUCCEEDED,
     DeployDispatch,
+    DeploySettlement,
     collect_cloud,
+    latest_run_id,
+    resolved_workflow,
     trigger_deploy,
+    wait_for_deploy,
 )
 from projects_orchestrator.adapters.cloud import as_check_results as cloud_check_results
 from projects_orchestrator.adapters.github import as_check_results, collect_github
@@ -636,35 +641,69 @@ def _cmd_deploy(args: argparse.Namespace) -> int:
     triggers the child's own ``workflow_dispatch`` pipeline, where production
     credentials live — the orchestrator holds none (ADR-012). Exits 1 when an
     applied dispatch fails.
+
+    Fire-and-forget by default (ADR-005): dispatch confirms the run was *queued*,
+    not that it *succeeded*. ``--wait`` (with ``--apply``) closes that loop —
+    poll the dispatched run to its conclusion and exit nonzero unless it actually
+    succeeded.
     """
     descriptor = _resolve_project(args)
     if descriptor is None:
         return 2
+
+    # The watermark MUST be read before dispatch: it is the id of the newest run
+    # that already existed, so wait_for_deploy can exclude it and follow only the
+    # run this dispatch creates. Read it after dispatch and our own run could
+    # already be listed, setting the floor above itself — we would then wait out
+    # the whole timeout for a run we had, and report it unconfirmed.
+    wait = args.wait and args.apply
+    watermark = latest_run_id(descriptor, resolved_workflow(descriptor)) if wait else None
+
     result = trigger_deploy(descriptor, args.action, apply=args.apply)
+    settlement = None
+    if wait and result.status == DISPATCH_DISPATCHED:
+        settlement = wait_for_deploy(descriptor, result.workflow, watermark)
+
     if args.json:
         # NOT `return _emit_json(...)`: _emit_json always returns 0, which would
         # hand every JSON consumer the exact success-that-wasn't this function
         # exists to prevent — `deploy --apply --json && notify "rolled back"`
         # announcing a rollback that never happened. Emit, then exit properly.
-        _emit_json(asdict(result))
-        return _deploy_exit_code(result, apply=args.apply)
+        payload = asdict(result)
+        if settlement is not None:
+            payload["settlement"] = asdict(settlement)
+        _emit_json(payload)
+        return _deploy_exit_code(result, settlement, apply=args.apply)
     workflow = f" via {result.workflow}" if result.workflow else ""
     detail = f" — {result.detail}" if result.detail else ""
     print(f"{result.project}: {result.action} {result.status}{workflow}{detail}")
-    return _deploy_exit_code(result, apply=args.apply)
+    if settlement is not None:
+        settle_detail = f" — {settlement.detail}" if settlement.detail else ""
+        url = f" ({settlement.run_url})" if settlement.run_url else ""
+        print(f"{settlement.project}: deploy {settlement.state}{settle_detail}{url}")
+    return _deploy_exit_code(result, settlement, apply=args.apply)
 
 
-def _deploy_exit_code(result: DeployDispatch, apply: bool) -> int:
-    """Exit 1 whenever an explicit ``--apply`` did not actually dispatch.
+def _deploy_exit_code(
+    result: DeployDispatch, settlement: DeploySettlement | None, *, apply: bool
+) -> int:
+    """Exit nonzero whenever an explicit ``--apply`` did not reach success.
 
     A dry run reports and exits 0 — nothing was asked for. But under ``--apply``,
     `skipped` (no deploy target) and `no-workflow` are failures *to act*, not
     successes: `deploy api --action rollback --apply && notify "rolled back"`
     must not announce a rollback that never happened.
+
+    Under ``--wait`` the bar rises from *dispatched* to *succeeded*: we watched
+    the run, so anything short of a confirmed success — failed, timed-out,
+    unconfirmed, unknown — is a nonzero exit. Waiting and then exiting 0 on a
+    deploy we watched fail would be a worse lie than never having waited.
     """
     if result.status == DISPATCH_FAILED:
         return 1
     if apply and result.status != DISPATCH_DISPATCHED:
+        return 1
+    if settlement is not None and settlement.state != SETTLE_SUCCEEDED:
         return 1
     return 0
 
@@ -1350,6 +1389,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--apply",
         action="store_true",
         help="actually dispatch the workflow (default: dry-run plan only)",
+    )
+    sub.choices["deploy"].add_argument(
+        "--wait",
+        action="store_true",
+        help="with --apply: poll the dispatched run to its conclusion "
+        "(succeeded/failed/timed-out); exit nonzero unless it succeeded",
     )
     sub.choices["logs"].add_argument(
         "-n", "--lines", type=int, default=40, help="trailing lines to show (default 40)"
