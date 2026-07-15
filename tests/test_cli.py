@@ -504,10 +504,14 @@ def test_serve_command_dispatches_to_server(fleet_dir: Path, monkeypatch) -> Non
 
     captured = {}
     monkeypatch.setattr(
-        cli, "serve", lambda _config, host, port: captured.update(host=host, port=port)
+        cli,
+        "serve",
+        lambda _config, host, port, enable_actions: captured.update(
+            host=host, port=port, enable_actions=enable_actions
+        ),
     )
     assert main(["serve", "--root", str(fleet_dir), "--host", "0.0.0.0", "--port", "9999"]) == 0
-    assert captured == {"host": "0.0.0.0", "port": 9999}
+    assert captured == {"host": "0.0.0.0", "port": 9999, "enable_actions": False}
 
 
 def test_project_checks_drops_head_when_worktree_changes_mid_run(
@@ -732,6 +736,12 @@ def test_deploy_wait_on_gitlab_rejects_before_dispatching(
     code = main(["deploy", "alpha", "--apply", "--wait", "--root", str(fleet_dir)])
     assert code == 2
     assert "not supported for GitLab" in capsys.readouterr().err
+
+
+def test_serve_enable_actions_rejects_non_loopback_host(capsys) -> None:
+    # The guard returns before the blocking serve loop, so this is safe to call.
+    assert main(["serve", "--enable-actions", "--host", "0.0.0.0"]) == 2
+    assert "loopback" in capsys.readouterr().err
 
 
 @pytest.fixture(autouse=True)

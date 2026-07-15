@@ -441,8 +441,13 @@ The environment an agent run is allowed to see — the data plane, scrubbed out.
 
 ### `projects_orchestrator/server.py`
 
-Live fleet dashboard — a read-only HTTP view that refreshes itself.
+Live fleet dashboard — a read-only view that can, opt-in, act on the fleet.
 
+- `class ActionStatus` — The latest mutating action tracked for one project.
+- `class ActionTracker` — Thread-safe record of the most recent mutating action per project.
+- `def is_loopback` — Whether binding to ``host`` keeps the server loopback-only (pure).
+- `def run_recheck` — Re-run one project's declared gates and refresh the cache; never raises.
+- `def run_heal` — Heal one project's red lint/test gate end to end; never raises.
 - `def snapshot_payload` — Build the fleet-overview JSON payload (pure w.r.t. ``generated_at``).
 - `def project_payload` — Build one project's drill-in payload; ``None`` when it is unknown.
 - `def render_page` — Render the self-contained dashboard shell (pure).

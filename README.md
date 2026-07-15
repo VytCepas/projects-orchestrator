@@ -52,6 +52,7 @@ projects-orchestrator register <json>          # register a project from `projec
 projects-orchestrator snapshot --json     # full machine-readable fleet state
 projects-orchestrator snapshot --html -o fleet.html  # self-contained HTML dashboard
 projects-orchestrator serve               # live auto-refreshing dashboard (--host, --port)
+projects-orchestrator serve --enable-actions  # + re-check/heal buttons (loopback only, CSRF-token gated)
 projects-orchestrator controller          # deterministic command REPL (also: `heal <project>`)
 projects-orchestrator tui                 # terminal UI (needs the tui extra)
 ```

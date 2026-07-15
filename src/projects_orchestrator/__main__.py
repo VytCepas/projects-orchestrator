@@ -104,7 +104,7 @@ from projects_orchestrator.registry import (
     load_fleet_config,
     register_project,
 )
-from projects_orchestrator.server import DEFAULT_HOST, DEFAULT_PORT, serve
+from projects_orchestrator.server import DEFAULT_HOST, DEFAULT_PORT, is_loopback, serve
 from projects_orchestrator.status import clean_worktree_head, collect_status
 from projects_orchestrator.supervisor import logs as run_logs
 from projects_orchestrator.supervisor import start as run_start
@@ -1231,7 +1231,19 @@ def _cmd_notify(args: argparse.Namespace) -> int:
 
 def _cmd_serve(args: argparse.Namespace) -> int:
     """Serve the live fleet dashboard over HTTP until interrupted."""
-    serve(_fleet_config(args), host=args.host, port=args.port)
+    if args.enable_actions and not is_loopback(args.host):
+        print(
+            f"serve: --enable-actions needs a loopback --host (127.0.0.1 or ::1); "
+            f"refusing to expose mutating actions on {args.host}",
+            file=sys.stderr,
+        )
+        return 2
+    serve(
+        _fleet_config(args),
+        host=args.host,
+        port=args.port,
+        enable_actions=args.enable_actions,
+    )
     return 0
 
 
@@ -1580,13 +1592,24 @@ def _build_parser() -> argparse.ArgumentParser:
         help="skip gates whose last cached pass is at the current clean HEAD",
     )
     sub.choices["memory"].add_argument("query", nargs="+", help="text to search for")
-    sub.choices["serve"].add_argument(
+    _add_serve_arguments(sub)
+    return parser
+
+
+def _add_serve_arguments(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Wire `serve`'s bind and opt-in mutating-actions flags onto its subparser."""
+    serve_sp = sub.choices["serve"]
+    serve_sp.add_argument(
         "--host", default=DEFAULT_HOST, help=f"bind host (default {DEFAULT_HOST})"
     )
-    sub.choices["serve"].add_argument(
+    serve_sp.add_argument(
         "--port", type=int, default=DEFAULT_PORT, help=f"bind port (default {DEFAULT_PORT})"
     )
-    return parser
+    serve_sp.add_argument(
+        "--enable-actions",
+        action="store_true",
+        help="allow re-check/heal from the page (loopback bind only; CSRF-token gated)",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
