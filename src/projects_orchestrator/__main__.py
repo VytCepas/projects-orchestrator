@@ -75,6 +75,12 @@ from projects_orchestrator.drift import compute_drift
 from projects_orchestrator.fleet import ProjectSnapshot, fleet_rows, fleet_snapshots, render_table
 from projects_orchestrator.hardening import checklist as hardening_checklist
 from projects_orchestrator.hardening import render_text as render_hardening
+from projects_orchestrator.heal import (
+    HEALABLE_TASKS,
+    FleetHealReport,
+    heal_fleet,
+    render_fleet_heal_report,
+)
 from projects_orchestrator.history import DEFAULT_TREND_WIDTH as HISTORY_TREND_WIDTH
 from projects_orchestrator.history import load_history, project_history, sparkline, transitions
 from projects_orchestrator.history import record as history_record
@@ -1022,6 +1028,89 @@ def _cmd_campaign(args: argparse.Namespace) -> int:
     return exit_code
 
 
+def _heal_targets(
+    descriptors: list[ProjectDescriptor], *, cached: bool, jobs: int | None
+) -> list[tuple[ProjectDescriptor, dict[str, CheckResult]]]:
+    """Pair each project with its lint/test results for a heal pass.
+
+    Fresh by default: runs the two healable gates now — on a bounded pool, like
+    ``checks`` — and saves them to the cache (so a later ``status``/``checks``
+    agrees) so heal acts on current state rather than a stale cache. ``--cached``
+    skips that run and reuses the last recorded results: the fast path right after
+    a ``checks`` run has already populated the cache.
+    """
+    if cached:
+        store = cache.load_results()
+        return [(descriptor, store.get(descriptor.name, {})) for descriptor in descriptors]
+    fresh = [
+        result
+        for project_results in map_ordered(
+            lambda d: collect_checks(d, HEALABLE_TASKS), descriptors, jobs=jobs
+        )
+        for result in project_results
+    ]
+    cache.save_results(fresh)
+    by_project: dict[str, dict[str, CheckResult]] = {}
+    for result in fresh:
+        by_project.setdefault(result.project, {})[result.task] = result
+    return [(descriptor, by_project.get(descriptor.name, {})) for descriptor in descriptors]
+
+
+def _fleet_heal_json(report: FleetHealReport) -> dict[str, object]:
+    """Machine-readable form of a fleet heal pass (for ``--json``)."""
+    return {
+        "attempted": [asdict(result) for result in report.results],
+        "deferred": list(report.deferred),
+        "limit": report.limit,
+        "fixed": len(report.fixed),
+        "eventful": report.eventful,
+        "spend": asdict(report.spend),
+    }
+
+
+def _cmd_heal(args: argparse.Namespace) -> int:
+    """Heal a failing lint/test gate: one project, or the whole fleet (``--all``).
+
+    Runs the two healable gates now (unless ``--cached``), then spawns a scoped
+    agent per failing project and, on a re-verified fix, opens a draft PR — never
+    touching a default branch (ADR-006). ``--all`` is the scheduled trigger's
+    entry point and ``--limit`` caps how many projects one unattended pass spends
+    on.
+
+    Exit codes suit a scheduler: **1** when the pass was eventful (it attempted a
+    heal or deferred a project), **0** when the fleet had nothing to heal, **2**
+    on a usage error. The systemd unit maps 1 to success, so an eventful nightly
+    run is not flagged as failed.
+    """
+    if bool(args.project) == args.all:
+        print(
+            "heal: name one project, or pass --all for the whole fleet (not both)",
+            file=sys.stderr,
+        )
+        return 2
+    if args.all and args.limit < 1:
+        print("heal: --limit must be at least 1", file=sys.stderr)
+        return 2
+
+    fleet = _discover(args)
+    if args.project:
+        descriptor = fleet.get(args.project)
+        if descriptor is None:
+            print(f"unknown project: {args.project}", file=sys.stderr)
+            return 2
+        descriptors, limit = [descriptor], 1
+    else:
+        descriptors, limit = list(fleet.descriptors), args.limit
+
+    targets = _heal_targets(descriptors, cached=args.cached, jobs=args.jobs)
+    report = heal_fleet(targets, limit=limit)
+    if args.json:
+        _emit_json(_fleet_heal_json(report))
+    else:
+        print(render_fleet_heal_report(report))
+    return 1 if report.eventful else 0
+
+
 def _cmd_orphans(args: argparse.Namespace) -> int:
     """Report live GCP resources that no repo in the fleet accounts for.
 
@@ -1226,6 +1315,33 @@ def _select(
         return None
 
 
+def _add_heal_arguments(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Wire `heal`'s single-project / fleet-wide flags onto its subparser."""
+    heal_sp = sub.choices["heal"]
+    heal_sp.add_argument("project", nargs="?", help="the project to heal (omit with --all)")
+    heal_sp.add_argument(
+        "--all",
+        action="store_true",
+        help="heal every project in the fleet with a failing lint/test gate",
+    )
+    heal_sp.add_argument(
+        "--limit",
+        type=int,
+        default=5,
+        help="with --all, max projects to attempt in one pass (caps unattended spend; default 5)",
+    )
+    heal_sp.add_argument(
+        "--cached",
+        action="store_true",
+        help="heal from the last recorded checks instead of running the gates fresh",
+    )
+    heal_sp.add_argument(
+        "--jobs",
+        type=int,
+        help="parallel projects when running fresh checks (default: min(8, cpu))",
+    )
+
+
 def _add_work_arguments(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     """Wire `work`'s own flags (and the hidden runner's) onto the subparsers."""
     # --where filters on what the fleet table already knows; it probes nothing.
@@ -1339,6 +1455,12 @@ def _build_parser() -> argparse.ArgumentParser:
             True,
         ),
         (
+            "heal",
+            "fix a failing lint/test gate: one project, or the fleet (--all); opens a PR",
+            _cmd_heal,
+            True,
+        ),
+        (
             "upgrade-plan",
             "scaffold version vs upstream project-init (--apply triggers upgrades)",
             _cmd_upgrade_plan,
@@ -1444,6 +1566,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="list outstanding projects and launch nothing",
     )
+    _add_heal_arguments(sub)
     sub.choices["register"].add_argument(
         "result", help="path to `scaffold --json` output, or '-' for stdin"
     )
@@ -1469,18 +1592,24 @@ def _build_parser() -> argparse.ArgumentParser:
         help="skip gates whose last cached pass is at the current clean HEAD",
     )
     sub.choices["memory"].add_argument("query", nargs="+", help="text to search for")
-    sub.choices["serve"].add_argument(
+    _add_serve_arguments(sub)
+    return parser
+
+
+def _add_serve_arguments(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Wire `serve`'s bind and opt-in mutating-actions flags onto its subparser."""
+    serve_sp = sub.choices["serve"]
+    serve_sp.add_argument(
         "--host", default=DEFAULT_HOST, help=f"bind host (default {DEFAULT_HOST})"
     )
-    sub.choices["serve"].add_argument(
+    serve_sp.add_argument(
         "--port", type=int, default=DEFAULT_PORT, help=f"bind port (default {DEFAULT_PORT})"
     )
-    sub.choices["serve"].add_argument(
+    serve_sp.add_argument(
         "--enable-actions",
         action="store_true",
         help="allow re-check/heal from the page (loopback bind only; CSRF-token gated)",
     )
-    return parser
 
 
 def main(argv: list[str] | None = None) -> int:

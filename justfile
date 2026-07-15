@@ -78,6 +78,14 @@ audit:
 digest:
     sh -c 'uv run projects-orchestrator audit --digest ${PO_DIGEST_WEBHOOK:+--webhook "$PO_DIGEST_WEBHOOK"}'
 
+# Autonomously open PRs that fix the fleet's red lint/test gates (#154). Spends a
+# budget-capped coding agent per project and opens DRAFT PRs only — nothing
+# merges. PO_HEAL_LIMIT caps projects per pass (default 3). This is what the
+# systemd timer in contrib/systemd/ runs; see docs/how-to/scheduled-heal.md.
+[doc("autonomously heal the fleet's red lint/test gates via PRs (#154)")]
+heal-all:
+    sh -c 'uv run projects-orchestrator heal --all --limit "${PO_HEAL_LIMIT:-3}"'
+
 # generate a CycloneDX SBOM of the runtime dependency tree (#574). release.yml
 # attaches this to GitHub Releases; run locally on demand. --no-dev so it
 # reflects what ships; uvx keeps cyclonedx-py out of the scanned .venv.

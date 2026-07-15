@@ -286,6 +286,9 @@ Autonomous fix dispatch — spawn a scoped coding agent to repair a failing gate
 - `def build_heal_prompt` — Render the fix-scoping prompt handed to the coding agent (pure).
 - `def heal_project` — Attempt to fix one project's failing lint/test gate end to end; never raises.
 - `def render_heal_result` — Render one heal outcome as a single human-readable line (pure).
+- `class FleetHealReport` — Outcome of one fleet-wide heal pass — the scheduled trigger's report.
+- `def heal_fleet` — Heal every project with a pending lint/test failure, up to ``limit``; never raises.
+- `def render_fleet_heal_report` — Render a fleet heal pass as human-readable lines (pure).
 
 ### `projects_orchestrator/history.py`
 
@@ -438,8 +441,13 @@ The environment an agent run is allowed to see — the data plane, scrubbed out.
 
 ### `projects_orchestrator/server.py`
 
-Live fleet dashboard — a read-only HTTP view that refreshes itself.
+Live fleet dashboard — a read-only view that can, opt-in, act on the fleet.
 
+- `class ActionStatus` — The latest mutating action tracked for one project.
+- `class ActionTracker` — Thread-safe record of the most recent mutating action per project.
+- `def is_loopback` — Whether binding to ``host`` keeps the server loopback-only (pure).
+- `def run_recheck` — Re-run one project's declared gates and refresh the cache; never raises.
+- `def run_heal` — Heal one project's red lint/test gate end to end; never raises.
 - `def snapshot_payload` — Build the fleet-overview JSON payload (pure w.r.t. ``generated_at``).
 - `def project_payload` — Build one project's drill-in payload; ``None`` when it is unknown.
 - `def render_page` — Render the self-contained dashboard shell (pure).
