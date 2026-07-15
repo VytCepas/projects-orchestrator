@@ -651,12 +651,25 @@ def _cmd_deploy(args: argparse.Namespace) -> int:
     if descriptor is None:
         return 2
 
+    wait = args.wait and args.apply
+    # Reject a wait we cannot honor BEFORE dispatching, not after. `gh` can follow
+    # a GitHub run; `glab` pipelines are not polled, so on a GitLab project --wait
+    # would fire the (irreversible) dispatch and only then report `unsupported`
+    # and exit nonzero — and an automation retrying that nonzero would dispatch a
+    # SECOND pipeline. Fail fast, before any mutation, so a retry is safe.
+    if wait and provider_is_gitlab(descriptor):
+        print(
+            f"deploy: --wait is not supported for GitLab projects ({descriptor.name}) — "
+            "glab pipelines are not polled. Re-run without --wait.",
+            file=sys.stderr,
+        )
+        return 2
+
     # The watermark MUST be read before dispatch: it is the id of the newest run
     # that already existed, so wait_for_deploy can exclude it and follow only the
     # run this dispatch creates. Read it after dispatch and our own run could
     # already be listed, setting the floor above itself — we would then wait out
     # the whole timeout for a run we had, and report it unconfirmed.
-    wait = args.wait and args.apply
     watermark = latest_run_id(descriptor, resolved_workflow(descriptor)) if wait else None
 
     result = trigger_deploy(descriptor, args.action, apply=args.apply)

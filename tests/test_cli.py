@@ -708,3 +708,27 @@ def test_deploy_wait_json_carries_the_settlement(fleet_dir: Path, monkeypatch, c
 
     payload = _json.loads(capsys.readouterr().out)
     assert payload["settlement"]["state"] == "succeeded"
+
+
+def test_deploy_wait_on_gitlab_rejects_before_dispatching(
+    fleet_dir: Path, monkeypatch, capsys
+) -> None:
+    # The wait is unsupported for glab, so it must be refused BEFORE the dispatch
+    # fires — otherwise a retry of the nonzero exit double-dispatches the pipeline.
+    config = (
+        "project:\n  name: alpha\n  project_init_contract_version: 2\n"
+        "  project_init_host: gitlab.com\n"
+        "language: python\ndelivery: service\n"
+        "deploy:\n  target: fly\n  app: alpha-svc\n"
+    )
+    project = make_project(fleet_dir, "alpha", config_text=config)
+    (project / ".gitlab").mkdir(parents=True, exist_ok=True)
+    (project / ".gitlab/deploy.yml").write_text("x\n", encoding="utf-8")
+
+    def explode(*_a: object, **_k: object) -> object:
+        raise AssertionError("--wait on gitlab shelled out — it must be rejected first")
+
+    monkeypatch.setattr(cloud, "run_command", explode)
+    code = main(["deploy", "alpha", "--apply", "--wait", "--root", str(fleet_dir)])
+    assert code == 2
+    assert "not supported for GitLab" in capsys.readouterr().err
