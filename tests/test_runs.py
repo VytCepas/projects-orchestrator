@@ -479,3 +479,16 @@ def test_a_corrupt_non_numeric_budget_falls_back_to_the_default() -> None:
     raw["budget_usd"] = "lots"
     path.write_text(json.dumps(raw))
     assert load(run.id).budget_usd == DEFAULT_BUDGET_USD
+
+
+def test_a_non_finite_persisted_budget_falls_back_to_the_default() -> None:
+    # nan/inf survive float() and pass every `> 0` test; an inf cap is no cap.
+    for bad in ("Infinity", "NaN"):
+        run = new_run("alpha", "t")
+        save(run)
+        path = state_dir() / f"{run.id}.json"
+        raw = json.loads(path.read_text())
+        raw["budget_usd"] = float(bad)
+        # json.dumps emits bare Infinity/NaN (non-standard but Python round-trips it).
+        path.write_text(json.dumps(raw))
+        assert load(run.id).budget_usd == DEFAULT_BUDGET_USD

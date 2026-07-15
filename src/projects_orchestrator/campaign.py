@@ -28,6 +28,7 @@ into a nonzero exit, and a run whose record vanishes mid-flight resolves to
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -210,8 +211,12 @@ def _coerce_positive_float(value: object, field_name: str) -> float:
     except (TypeError, ValueError) as exc:
         message = f"'{field_name}' must be a positive number"
         raise CampaignError(message) from exc
-    if result <= 0:
-        message = f"'{field_name}' must be greater than 0, not {result}"
+    # ``nan``/``inf`` survive ``float()`` and every ``> 0`` test (``nan <= 0`` and
+    # ``inf <= 0`` are both False), so they must be rejected explicitly. An ``inf``
+    # timeout is a runaway that never gets reaped; an ``inf`` budget is a cost cap
+    # that caps nothing — each is the silent negation of the very limit it sets.
+    if not math.isfinite(result) or result <= 0:
+        message = f"'{field_name}' must be a finite number greater than 0, not {result}"
         raise CampaignError(message)
     return result
 

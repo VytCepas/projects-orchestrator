@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import math
 import os
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -168,7 +169,12 @@ def _as_budget(raw: object) -> float:
     back to :data:`DEFAULT_BUDGET_USD` rather than an unusable cap. A run must
     never launch with a ``$0`` cap it did not ask for.
     """
-    if isinstance(raw, bool) or not isinstance(raw, (int, float)) or raw <= 0:
+    # ``nan``/``inf`` are floats that pass ``> 0`` (``nan <= 0`` and ``inf <= 0``
+    # are both False), so a persisted non-finite value must fall back too — an
+    # ``inf`` cap is no cap at all.
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return DEFAULT_BUDGET_USD
+    if not math.isfinite(raw) or raw <= 0:
         return DEFAULT_BUDGET_USD
     return float(raw)
 

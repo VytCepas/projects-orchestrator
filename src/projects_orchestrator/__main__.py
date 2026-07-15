@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import json
+import math
 import sys
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -768,9 +769,13 @@ def _cmd_work(args: argparse.Namespace) -> int:
         return 0
 
     # Guard the cap before either launch path (single or --where fan-out): a run
-    # must never start under a zero or negative budget the operator fat-fingered.
-    if args.budget <= 0:
-        print(f"work: --budget must be a positive number, not {args.budget}", file=sys.stderr)
+    # must never start under a budget the operator fat-fingered. ``nan``/``inf``
+    # pass ``> 0`` (both ``<= 0`` comparisons are False), and an ``inf`` cap is no
+    # cap — so reject non-finite values explicitly, not just non-positive ones.
+    if not math.isfinite(args.budget) or args.budget <= 0:
+        print(
+            f"work: --budget must be a finite positive number, not {args.budget}", file=sys.stderr
+        )
         return 2
 
     if args.where:

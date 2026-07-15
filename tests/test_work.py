@@ -827,4 +827,12 @@ def test_cli_work_rejects_a_non_positive_budget(fleet_dir: Path, capsys) -> None
 
     _repo(fleet_dir)
     assert main(["work", "alpha", "t", "--budget", "0", "--root", str(fleet_dir)]) == 2
-    assert "must be a positive number" in capsys.readouterr().err
+    assert "finite positive number" in capsys.readouterr().err
+
+
+def test_cli_work_rejects_a_non_finite_budget(fleet_dir: Path, capsys) -> None:
+    from projects_orchestrator.__main__ import main
+
+    _repo(fleet_dir)
+    assert main(["work", "alpha", "t", "--budget", "inf", "--root", str(fleet_dir)]) == 2
+    assert "finite" in capsys.readouterr().err

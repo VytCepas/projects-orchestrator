@@ -844,3 +844,18 @@ def test_the_policy_budget_reaches_every_launched_run() -> None:
     fake = _FakeFleet()
     campaign.execute(camp, [_descriptor("alpha"), _descriptor("beta")], fake.seams())
     assert fake.budgets == [4.0, 4.0]
+
+
+def test_a_non_finite_budget_is_refused(tmp_path: Path) -> None:
+    # `inf`/`nan` pass `> 0`, so an inf cap would silently cap nothing.
+    for bad in (".inf", ".nan"):
+        body = _valid_body(select="ci=fail", max_budget_usd=bad)
+        with pytest.raises(campaign.CampaignError, match="finite"):
+            campaign.load_campaign(_write(tmp_path / "c.yml", body))
+
+
+def test_a_non_finite_timeout_is_refused(tmp_path: Path) -> None:
+    # Same latent bug on the wall-clock cap: an inf timeout never reaps a runaway.
+    body = _valid_body(select="ci=fail", timeout=".inf")
+    with pytest.raises(campaign.CampaignError, match="finite"):
+        campaign.load_campaign(_write(tmp_path / "c.yml", body))
