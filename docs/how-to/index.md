@@ -6,3 +6,5 @@ skips teaching.
 
 - [Run the audit digest on a schedule](scheduled-audit-digest.md) — report only
   what changed in the fleet, daily, with an optional Slack sink.
+- [Heal the fleet on a schedule](scheduled-heal.md) — open PRs that fix red
+  lint/test gates, unattended, with a hard cap on how much one pass may spend.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -9,6 +10,7 @@ import pytest
 from conftest import git_init, make_project
 
 from projects_orchestrator.checks import CheckResult
+from projects_orchestrator.cost import RunCost
 from projects_orchestrator.descriptor import load_descriptor
 from projects_orchestrator.heal import (
     AGENT_FAILED,
@@ -18,12 +20,16 @@ from projects_orchestrator.heal import (
     VERIFY_FAILED,
     WORKTREE_FAILED,
     AgentOutcome,
+    FleetHealReport,
     HealResult,
     PrOutcome,
     _agent_allowed_tools,
+    _decode_agent_output,
     build_heal_prompt,
+    heal_fleet,
     heal_project,
     pending_failures,
+    render_fleet_heal_report,
     render_heal_result,
 )
 
@@ -525,3 +531,109 @@ def test_the_agent_launches_with_a_scrubbed_environment(
     # ~/.aws re-open every file-backed credential the var scrub just closed.
     assert env["HOME"] != "/home/me"
     assert env["XDG_CONFIG_HOME"].startswith(env["HOME"])
+
+
+def _failing(fleet_dir: Path, name: str) -> object:
+    """A git-backed project whose lint gate fails until ``fixed.txt`` exists."""
+    project = make_project(fleet_dir, name, tooling={"lint": "test -f fixed.txt"})
+    git_init(project)
+    return load_descriptor(project)
+
+
+def _cached_fail(name: str) -> dict[str, CheckResult]:
+    return {"lint": CheckResult(project=name, task="lint", status="fail")}
+
+
+def _noop_agent(_descriptor: object, _prompt: str) -> AgentOutcome:
+    """An agent that runs but changes nothing — heal then fails to re-verify."""
+    return AgentOutcome(ok=True, summary="looked, changed nothing")
+
+
+def test_decode_agent_output_pulls_result_and_cost() -> None:
+    stdout = json.dumps(
+        {"result": "done", "total_cost_usd": 0.25, "usage": {"input_tokens": 10}, "num_turns": 3}
+    )
+    text, cost = _decode_agent_output(stdout)
+    assert text == "done"
+    assert cost is not None
+    assert cost.usd == 0.25
+
+
+def test_decode_agent_output_unparseable_is_unmetered_not_free() -> None:
+    # A truncated / non-JSON tail must decode to "we don't know", never $0.
+    text, cost = _decode_agent_output("boom, not json")
+    assert text == "boom, not json"
+    assert cost is None
+
+
+def test_heal_result_carries_agent_cost_on_failure(fleet_dir: Path) -> None:
+    # Even a failed heal reports what the agent spent before giving up.
+    descriptor = _failing(fleet_dir, "alpha")
+
+    def paid_but_useless(_descriptor: object, _prompt: str) -> AgentOutcome:
+        return AgentOutcome(ok=False, summary="gave up", cost=RunCost(usd=0.4))
+
+    result = heal_project(descriptor, _cached_fail("alpha"), agent_run=paid_but_useless)
+    assert result.status == AGENT_FAILED
+    assert result.cost is not None
+    assert result.cost.usd == 0.4
+
+
+def test_heal_fleet_skips_projects_with_no_pending_failure(fleet_dir: Path) -> None:
+    alpha = _failing(fleet_dir, "alpha")
+    beta = _failing(fleet_dir, "beta")
+    targets = [
+        (alpha, _cached_fail("alpha")),
+        (beta, {"lint": CheckResult(project="beta", task="lint", status="pass")}),
+    ]
+    report = heal_fleet(targets, limit=5, agent_run=_noop_agent)
+    # Only the failing project is attempted; the passing one never reaches an agent.
+    assert [r.project for r in report.results] == ["alpha"]
+    assert report.deferred == ()
+    assert report.eventful
+
+
+def test_heal_fleet_defers_failing_projects_past_the_limit(fleet_dir: Path) -> None:
+    descriptors = [_failing(fleet_dir, name) for name in ("alpha", "beta", "gamma")]
+    targets = [(d, _cached_fail(d.name)) for d in descriptors]
+    report = heal_fleet(targets, limit=1, agent_run=_noop_agent)
+    assert len(report.results) == 1
+    assert report.results[0].project == "alpha"
+    # The cap is visible, not silent: the two it did not touch are named.
+    assert report.deferred == ("beta", "gamma")
+    assert report.limit == 1
+
+
+def test_heal_fleet_quiet_when_nothing_failing(fleet_dir: Path) -> None:
+    alpha = _failing(fleet_dir, "alpha")
+    targets = [(alpha, {"lint": CheckResult(project="alpha", task="lint", status="pass")})]
+    report = heal_fleet(targets, limit=5, agent_run=_no_agent)
+    assert report.results == ()
+    assert not report.eventful
+
+
+def test_heal_fleet_aggregates_metered_spend(fleet_dir: Path) -> None:
+    descriptors = [_failing(fleet_dir, name) for name in ("alpha", "beta")]
+    targets = [(d, _cached_fail(d.name)) for d in descriptors]
+
+    def paid_agent(_descriptor: object, _prompt: str) -> AgentOutcome:
+        return AgentOutcome(ok=True, summary="noop", cost=RunCost(usd=0.5))
+
+    report = heal_fleet(targets, limit=5, agent_run=paid_agent)
+    assert report.spend.metered == 2
+    assert report.spend.usd == pytest.approx(1.0)
+    assert report.spend.is_complete
+
+
+def test_render_fleet_heal_report_nothing_to_do() -> None:
+    line = render_fleet_heal_report(FleetHealReport(results=()))
+    assert "nothing to do" in line
+
+
+def test_render_fleet_heal_report_lists_deferred_and_tally() -> None:
+    results = (HealResult("alpha", VERIFY_FAILED, branch="heal/lint-alpha"),)
+    report = FleetHealReport(results=results, deferred=("beta", "gamma"), limit=1)
+    rendered = render_fleet_heal_report(report)
+    assert "alpha" in rendered
+    assert "deferred 2 more (limit 1): beta, gamma" in rendered
+    assert "healed 0/1 attempted" in rendered

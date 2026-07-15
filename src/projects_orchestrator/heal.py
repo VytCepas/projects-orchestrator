@@ -31,10 +31,11 @@ import json
 import subprocess
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from projects_orchestrator import cost as cost_mod
 from projects_orchestrator import landing, sandbox
 from projects_orchestrator import worktree as wt
 from projects_orchestrator.briefing import build_briefing, evidence_from_checks
@@ -87,10 +88,16 @@ class AgentOutcome:
             about whether the fix is correct — that is re-verified by
             re-running the failing gate.
         summary: The agent's final reply, or an error description.
+        cost: What the agent run actually cost, when the CLI metered it;
+            ``None`` when the run was unmetered (a killed/timed-out run, or an
+            injected fake). ``None`` is deliberately not ``$0`` — an unattended
+            heal that spends real money must report what it spent, and a failed
+            run may still have cost something before it gave up.
     """
 
     ok: bool
     summary: str = ""
+    cost: cost_mod.RunCost | None = None
 
 
 @dataclass(frozen=True)
@@ -122,6 +129,10 @@ class HealResult:
             and its worktree was therefore retained. Empty on success (the
             worktree is removed) — so a non-empty value means "there is evidence
             on disk, go look at it".
+        cost: What the healing agent run cost, when metered; ``None`` when
+            unmetered or when no agent ran (a no-op or a worktree that could not
+            be cut). Carried on every outcome that reached the agent — including
+            the failures, which can still have spent money before giving up.
     """
 
     project: str
@@ -130,6 +141,7 @@ class HealResult:
     pr_url: str = ""
     detail: str = ""
     worktree: str = ""
+    cost: cost_mod.RunCost | None = None
 
 
 AgentRun = Callable[[ProjectDescriptor, str], AgentOutcome]
@@ -234,13 +246,21 @@ def _agent_allowed_tools(descriptor: ProjectDescriptor) -> str:
     return ",".join((*_BASE_TOOLS, *scoped_bash))
 
 
-def _extract_result(stdout: str) -> str:
-    """Pull the ``result`` field from ``--output-format json``; raw tail otherwise."""
+def _decode_agent_output(stdout: str) -> tuple[str, cost_mod.RunCost | None]:
+    """Pull the agent's final reply and its metered cost from the CLI's JSON.
+
+    Both come from the one ``--output-format json`` object: ``result`` is the
+    agent's final message, ``total_cost_usd``/``usage`` are what it spent. A
+    payload that is not that object (truncated, or a plain-text tail) degrades to
+    the raw stdout tail and *no* cost — an unparseable run is unmetered, not free.
+    """
     try:
         payload = json.loads(stdout)
     except ValueError:
-        return stdout.strip()[-500:]
-    return str(payload.get("result", "")) if isinstance(payload, dict) else stdout.strip()[-500:]
+        return stdout.strip()[-500:], None
+    if not isinstance(payload, dict):
+        return stdout.strip()[-500:], None
+    return str(payload.get("result", "")), cost_mod.from_payload(payload)
 
 
 def _default_agent_run(descriptor: ProjectDescriptor, prompt: str) -> AgentOutcome:
@@ -287,9 +307,14 @@ def _default_agent_run(descriptor: ProjectDescriptor, prompt: str) -> AgentOutco
             )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return AgentOutcome(ok=False, summary=str(exc))
+    result_text, run_cost = _decode_agent_output(proc.stdout)
     if proc.returncode != 0:
-        return AgentOutcome(ok=False, summary=proc.stderr.strip()[-500:] or "agent exited non-zero")
-    return AgentOutcome(ok=True, summary=_extract_result(proc.stdout))
+        return AgentOutcome(
+            ok=False,
+            summary=proc.stderr.strip()[-500:] or "agent exited non-zero",
+            cost=run_cost,
+        )
+    return AgentOutcome(ok=True, summary=result_text, cost=run_cost)
 
 
 def _default_open_pr(
@@ -404,6 +429,7 @@ def heal_project(
                 branch=branch,
                 detail=outcome.summary,
                 worktree=str(tree.path),
+                cost=outcome.cost,
             )
 
         verify = collect_checks(work, tasks)
@@ -415,9 +441,16 @@ def heal_project(
                 branch=branch,
                 detail=f"still failing after the agent's fix: {', '.join(still_failing)}",
                 worktree=str(tree.path),
+                cost=outcome.cost,
             )
 
-        landed = _commit_and_land(work, branch, tasks, open_pr or _default_open_pr)
+        # The agent's spend is banked onto whatever the landing step produced —
+        # a FIXED, a PUSH_FAILED, a PR_FAILED — so the cost of the run survives
+        # into the terminal outcome regardless of how landing went.
+        landed = replace(
+            _commit_and_land(work, branch, tasks, open_pr or _default_open_pr),
+            cost=outcome.cost,
+        )
         keep = landed.status != FIXED
         if keep:
             return replace(landed, worktree=str(tree.path))
@@ -446,3 +479,124 @@ def render_heal_result(result: HealResult) -> str:
     detail = f" — {result.detail}" if result.detail else ""
     branch = f" (branch {result.branch})" if result.branch else ""
     return f"{result.project}: {result.status}{detail}{branch}"
+
+
+# A failing project the run deliberately did NOT attempt because the per-run
+# project cap was already reached. Not a HealResult status (no heal ran) — a
+# separate bucket the report names so the cap on unattended spend is never a
+# silent omission (ADR-006 §Consequences).
+DeferredProject = str
+
+
+@dataclass(frozen=True)
+class FleetHealReport:
+    """Outcome of one fleet-wide heal pass — the scheduled trigger's report.
+
+    A pass runs each failing project's heal serially, up to ``limit`` projects,
+    and folds the results into one object a scheduler (or the CLI) can render or
+    emit as JSON. The unattended-spend story is first-class: ``spend`` totals what
+    the agents actually cost (naming the runs it could not meter rather than
+    summing them as zero), and ``deferred`` names the failing projects the cap
+    kept it from touching this pass.
+
+    Attributes:
+        results: One :class:`HealResult` per project actually attempted, in the
+            order they were considered.
+        deferred: Names of failing projects left untried because ``limit`` was
+            reached — the spend cap made visible, never silently dropped.
+        limit: The per-run project cap that was applied.
+    """
+
+    results: tuple[HealResult, ...]
+    deferred: tuple[DeferredProject, ...] = ()
+    limit: int = 0
+
+    @property
+    def fixed(self) -> tuple[HealResult, ...]:
+        """The attempted heals that landed a PR."""
+        return tuple(result for result in self.results if result.status == FIXED)
+
+    @property
+    def eventful(self) -> bool:
+        """Whether this pass did anything a human might want to look at.
+
+        True when it attempted at least one heal or deferred at least one project;
+        False only when the fleet had no failing lint/test gate at all. This is the
+        signal the scheduler's exit code carries (a quiet fleet exits 0).
+        """
+        return bool(self.results or self.deferred)
+
+    @property
+    def spend(self) -> cost_mod.CostTotal:
+        """What the pass's agent runs cost, keeping the unmetered runs visible."""
+        return cost_mod.total(result.cost for result in self.results)
+
+
+def heal_fleet(
+    targets: Sequence[tuple[ProjectDescriptor, dict[str, CheckResult]]],
+    *,
+    limit: int,
+    agent_run: AgentRun | None = None,
+    open_pr: OpenPr | None = None,
+) -> FleetHealReport:
+    """Heal every project with a pending lint/test failure, up to ``limit``; never raises.
+
+    The scheduled trigger's engine (ADR-006 §Consequences). Runs **serially**: each
+    heal spawns a scoped, paid coding agent, and an unattended fleet pass must not
+    fan out concurrent agents that spike load and spend at once — a predictable
+    one-at-a-time march is the safe default. Projects with no pending failure are
+    skipped for free (they never count against ``limit``); failing projects beyond
+    the cap are recorded as ``deferred`` rather than silently ignored, so the cap
+    governing unattended spend is always visible in the report.
+
+    Args:
+        targets: ``(descriptor, {task: CheckResult})`` for every project to
+            consider — typically the whole fleet paired with its fresh check
+            results, so heal runs against current state, not a stale cache.
+        limit: Maximum number of *failing* projects to actually attempt this pass
+            (a hard cap on unattended spend). Values below 1 attempt nothing.
+        agent_run: Coding-agent override threaded to :func:`heal_project`; ``None``
+            uses the real ``claude`` CLI. Tests inject a fake so no live agent runs.
+        open_pr: PR-creation override threaded to :func:`heal_project`.
+
+    Returns:
+        A :class:`FleetHealReport` over the attempted projects plus deferred names.
+    """
+    failing = [(descriptor, cached) for descriptor, cached in targets if pending_failures(cached)]
+    cap = max(limit, 0)
+    attempted, held_back = failing[:cap], failing[cap:]
+    results = tuple(
+        heal_project(descriptor, cached, agent_run=agent_run, open_pr=open_pr)
+        for descriptor, cached in attempted
+    )
+    return FleetHealReport(
+        results=results,
+        deferred=tuple(descriptor.name for descriptor, _ in held_back),
+        limit=limit,
+    )
+
+
+def render_fleet_heal_report(report: FleetHealReport) -> str:
+    """Render a fleet heal pass as human-readable lines (pure).
+
+    Args:
+        report: The pass to render.
+
+    Returns:
+        One line per attempted project, a deferred-projects line when the cap bit,
+        and a closing tally with the metered spend; a friendly note when the fleet
+        had nothing to heal.
+    """
+    if not report.eventful:
+        return "heal: no failing lint/test gate in the fleet — nothing to do"
+    lines = [render_heal_result(result) for result in report.results]
+    if report.deferred:
+        lines.append(
+            f"deferred {len(report.deferred)} more (limit {report.limit}): "
+            f"{', '.join(report.deferred)}"
+        )
+    lines.append(
+        f"healed {len(report.fixed)}/{len(report.results)} attempted — "
+        f"spend {cost_mod.format_total(report.spend)}"
+    )
+    return "\n".join(lines)
