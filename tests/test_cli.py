@@ -732,3 +732,71 @@ def test_deploy_wait_on_gitlab_rejects_before_dispatching(
     code = main(["deploy", "alpha", "--apply", "--wait", "--root", str(fleet_dir)])
     assert code == 2
     assert "not supported for GitLab" in capsys.readouterr().err
+
+
+@pytest.fixture(autouse=True)
+def _no_live_heal_agent(monkeypatch) -> None:
+    """No CLI test may spawn a real ``claude`` via heal — fuse it shut.
+
+    heal's CLI reaches ``_default_agent_run`` whenever a gate is already red. A
+    test that means to exercise a heal injects its own fake, overriding this.
+    """
+
+    def _explode(*_args: object, **_kwargs: object) -> object:
+        message = "a CLI test reached the REAL heal agent — inject a fake"
+        raise AssertionError(message)
+
+    monkeypatch.setattr("projects_orchestrator.heal._default_agent_run", _explode)
+
+
+def test_heal_requires_a_target(capsys) -> None:
+    assert main(["heal"]) == 2
+    assert "name one project" in capsys.readouterr().err
+
+
+def test_heal_rejects_project_and_all_together(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")
+    assert main(["heal", "alpha", "--all", "--root", str(fleet_dir)]) == 2
+
+
+def test_heal_rejects_limit_below_one(capsys) -> None:
+    assert main(["heal", "--all", "--limit", "0"]) == 2
+    assert "--limit must be at least 1" in capsys.readouterr().err
+
+
+def test_heal_unknown_project_exits_two(fleet_dir: Path, capsys) -> None:
+    make_project(fleet_dir, "alpha")
+    assert main(["heal", "ghost", "--root", str(fleet_dir)]) == 2
+    assert "unknown project: ghost" in capsys.readouterr().err
+
+
+def test_heal_all_is_quiet_and_exits_zero_when_fleet_is_green(fleet_dir: Path, capsys) -> None:
+    # lint passes for both -> nothing failing -> no agent is ever reached, exit 0.
+    make_project(fleet_dir, "alpha", tooling={"lint": "true"})
+    make_project(fleet_dir, "beta", tooling={"lint": "true"})
+    assert main(["heal", "--all", "--root", str(fleet_dir)]) == 0
+    assert "nothing to do" in capsys.readouterr().out
+
+
+def test_heal_json_reports_eventful_false_for_a_green_project(fleet_dir: Path, capsys) -> None:
+    make_project(fleet_dir, "alpha", tooling={"lint": "true"})
+    assert main(["heal", "alpha", "--root", str(fleet_dir), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["eventful"] is False
+    assert payload["attempted"] == []
+
+
+def test_heal_single_project_exits_one_when_eventful(fleet_dir: Path, monkeypatch, capsys) -> None:
+    from projects_orchestrator.heal import AgentOutcome
+
+    project = make_project(fleet_dir, "alpha", tooling={"lint": "test -f fixed.txt"})
+    git_init(project)
+
+    def useless_agent(_descriptor: object, _prompt: str) -> AgentOutcome:
+        return AgentOutcome(ok=True, summary="looked, changed nothing")
+
+    monkeypatch.setattr("projects_orchestrator.heal._default_agent_run", useless_agent)
+    # lint is red (no fixed.txt); the fake agent changes nothing, so re-verify
+    # still fails -> VERIFY_FAILED -> an eventful pass -> exit 1.
+    assert main(["heal", "alpha", "--root", str(fleet_dir)]) == 1
+    assert "verify_failed" in capsys.readouterr().out

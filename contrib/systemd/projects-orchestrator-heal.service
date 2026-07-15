@@ -1,0 +1,42 @@
+[Unit]
+Description=projects-orchestrator autonomous heal — open PRs that fix the fleet's red lint/test gates
+Documentation=https://github.com/VytCepas/projects-orchestrator/blob/main/docs/how-to/scheduled-heal.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+# A *user* unit on purpose, exactly like the digest timer: the fleet is
+# discovered on local disk (sibling directories carrying .agents/config.yaml),
+# and the run needs the human's own `claude` and `gh` credentials to spawn a
+# coding agent and open a PR. root and a CI runner have neither. See the how-to
+# guide for why this cannot be a GitHub-hosted cron.
+#
+# Deliberately NOT the orchestrator's own checkout — the clone directory name is
+# not ours to predict, and a WorkingDirectory that does not exist fails the unit
+# before heal can run. `%h` always exists; the fleet root is passed explicitly.
+WorkingDirectory=%h
+
+# Optional config. Create the file with mode 600 and put in it:
+#   PO_FLEET_ROOT=/path/to/your/projects   (if your fleet is not ~/projects)
+#   PO_HEAL_LIMIT=3                         (max projects to spend on per run)
+# The leading `-` makes the file optional: with no override the unit heals
+# ~/projects and attempts at most PO_HEAL_LIMIT (default 3) projects per firing.
+EnvironmentFile=-%h/.config/projects-orchestrator/heal.env
+
+# `heal --all` is PR-gated and never merges anything: at worst it opens a draft
+# PR nobody wants. `--limit` caps how many projects one unattended firing spends
+# a coding agent on (each agent is itself capped at a small per-run budget), so a
+# fleet that goes red overnight cannot fan out unbounded spend. Start LOW and
+# raise it once you trust the PRs it opens.
+ExecStart=/bin/sh -c 'exec %h/.local/bin/projects-orchestrator heal --all --root "${PO_FLEET_ROOT:-%h/projects}" --limit "${PO_HEAL_LIMIT:-3}"'
+
+# `heal --all` exits 1 when the pass was EVENTFUL — it opened a PR, a heal failed
+# to verify, or projects were deferred past the limit. That is a run that worked
+# and has something for you to look at, not a failed unit. Without this, systemd
+# would mark every eventful heal as failed and stop being a useful signal.
+SuccessExitStatus=1
+
+[Install]
+WantedBy=default.target

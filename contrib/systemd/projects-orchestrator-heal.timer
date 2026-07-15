@@ -1,0 +1,21 @@
+[Unit]
+Description=Run the projects-orchestrator autonomous heal on a daily cadence
+Documentation=https://github.com/VytCepas/projects-orchestrator/blob/main/docs/how-to/scheduled-heal.md
+
+[Timer]
+# Daily is a deliberately gentle default for a job that spends money and opens
+# PRs. Widen it (weekly) or narrow it to taste — but remember every firing can
+# open up to PO_HEAL_LIMIT draft PRs someone then has to review.
+OnCalendar=daily
+
+# The usual host for a local fleet is a laptop that is asleep at 00:00.
+# Persistent=true runs the heal on the next boot when a firing was missed, so a
+# closed lid means a late pass rather than a lost one.
+Persistent=true
+
+# Don't stampede with every other daily timer at midnight — and heal is heavier
+# than the digest (it spawns coding agents), so give it room of its own.
+RandomizedDelaySec=30m
+
+[Install]
+WantedBy=timers.target
