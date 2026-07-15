@@ -38,6 +38,7 @@ import datetime as _dt
 import ipaddress
 import json
 import secrets
+import socket
 import threading
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -364,6 +365,25 @@ class _Handler(BaseHTTPRequestHandler):
         """Silence the default per-request stderr logging."""
 
 
+class _ThreadingHTTPServerV6(ThreadingHTTPServer):
+    """The dashboard server over IPv6 — ``ThreadingHTTPServer`` is IPv4-only.
+
+    ``ThreadingHTTPServer`` hard-codes ``address_family = AF_INET``, so binding an
+    IPv6 host like ``::1`` (which ``is_loopback`` accepts and the CLI advertises)
+    would otherwise raise ``gaierror``. This subclass binds ``AF_INET6`` instead.
+    """
+
+    address_family = socket.AF_INET6
+
+
+def _is_ipv6(host: str) -> bool:
+    """Whether ``host`` is an IPv6 literal (pure); needs the IPv6 server family."""
+    try:
+        return ipaddress.ip_address(host).version == 6
+    except ValueError:
+        return False
+
+
 def make_server(
     config: FleetConfig,
     host: str,
@@ -379,7 +399,8 @@ def make_server(
     empty token leaves the server read-only, so there is no state in which
     actions are live without a secret to guard them. Each server gets its own
     :class:`ActionTracker`, so action state never leaks between two ``serve``
-    processes on one host.
+    processes on one host. An IPv6 ``host`` (e.g. ``::1``) is bound with an
+    IPv6-capable server; everything else uses the stdlib IPv4 server.
     """
     handler = type(
         "BoundHandler",
@@ -392,7 +413,8 @@ def make_server(
             "tracker": ActionTracker(),
         },
     )
-    return ThreadingHTTPServer((host, port), handler)
+    server_cls = _ThreadingHTTPServerV6 if _is_ipv6(host) else ThreadingHTTPServer
+    return server_cls((host, port), handler)
 
 
 def serve(

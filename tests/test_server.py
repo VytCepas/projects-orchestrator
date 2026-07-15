@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import threading
 import time
 import urllib.error
@@ -304,3 +305,23 @@ def test_read_only_server_refuses_actions(_server: str) -> None:
     # The default server has no token -> actions disabled -> POST is 403.
     status, _body = _post(f"{_server}/api/project/alpha/recheck")
     assert status == 403
+
+
+def test_make_server_binds_ipv6_loopback_without_gaierror(fleet_dir: Path) -> None:
+    # is_loopback accepts ::1 and the CLI advertises it, so the server must
+    # actually bind IPv6 rather than raise gaierror from the IPv4-only default.
+    make_project(fleet_dir, "alpha")
+    try:
+        server = make_server(_config(fleet_dir), "::1", 0)
+    except OSError:
+        pytest.skip("no IPv6 loopback on this runner")
+    try:
+        assert server.address_family == socket.AF_INET6
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        status, body = _get(f"http://[::1]:{server.server_address[1]}/api/snapshot.json")
+        assert status == 200
+        assert json.loads(body)["rows"][0]["Project"] == "alpha"
+    finally:
+        server.shutdown()
+        server.server_close()
