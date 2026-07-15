@@ -313,6 +313,26 @@ def git_init(project: Path, commit: bool = True) -> None:
         run("commit", "-q", "-m", "init", "--allow-empty")
 
 
+@pytest.fixture(autouse=True)
+def _isolate_xdg_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point every XDG base dir at a per-test tmp dir, suite-wide (PO-158).
+
+    The checks cache lives under ``$XDG_CACHE_HOME`` and heal's worktrees under
+    ``$XDG_STATE_HOME``. A test that writes there via the *default* path — e.g.
+    ``cache.save_results(results)`` with no explicit file, or a code path that
+    does, like ``server.run_heal`` — otherwise hits the developer's real
+    ``~/.cache``/``~/.local/state``. Under ``pytest -n auto`` that write then
+    pollutes any peer that reads the default cache (``test_selector`` reads it
+    via ``fleet_snapshots(..., None)``), and the stale file persists between
+    runs. Isolating every XDG dir here makes the whole suite hermetic by default,
+    so a new test module cannot silently reintroduce that leak by forgetting to
+    isolate. Modules that also set these vars in their own fixtures simply
+    override this with another tmp dir — still isolated.
+    """
+    for var in ("XDG_CACHE_HOME", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME"):
+        monkeypatch.setenv(var, str(tmp_path / "xdg" / var.lower()))
+
+
 @pytest.fixture()
 def fleet_dir(tmp_path: Path) -> Path:
     """A directory to build fleets under."""
