@@ -284,7 +284,9 @@ def test_cli_work_where_is_dry_run_by_default(
 
     make_project(fleet_dir, "alpha")
     launched: list[str] = []
-    monkeypatch.setattr(work, "launch", lambda d, _t, **_k: launched.append(d.name))
+    monkeypatch.setattr(
+        work, "launch", lambda d, _t, _b=work.DEFAULT_BUDGET_USD, **_k: launched.append(d.name)
+    )
 
     code = main(["work", "--where", "name=alpha", "fix it", "--root", str(fleet_dir)])
     assert code == 0
@@ -304,7 +306,7 @@ def test_cli_work_where_launches_with_apply(
     make_project(fleet_dir, "beta")
     launched: list[str] = []
 
-    def fake_launch(descriptor, task, **_kwargs):
+    def fake_launch(descriptor, task, _budget=work.DEFAULT_BUDGET_USD, **_kwargs):
         launched.append(descriptor.name)
         return runs.AgentRun(id="x", project=descriptor.name, task=task, state=runs.RUNNING)
 
@@ -323,7 +325,9 @@ def test_cli_work_where_with_a_bad_field_launches_nothing(
 
     make_project(fleet_dir, "alpha")
     launched: list[str] = []
-    monkeypatch.setattr(work, "launch", lambda d, _t, **_k: launched.append(d.name))
+    monkeypatch.setattr(
+        work, "launch", lambda d, _t, _b=work.DEFAULT_BUDGET_USD, **_k: launched.append(d.name)
+    )
 
     assert main(["work", "--where", "cli=fail", "t", "--apply", "--root", str(fleet_dir)]) == 2
     assert launched == []

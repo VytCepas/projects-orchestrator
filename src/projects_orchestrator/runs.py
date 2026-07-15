@@ -46,6 +46,11 @@ from projects_orchestrator.procs import is_our_process, proc_start_ticks
 _STATE_DIRNAME = "projects-orchestrator"
 _RUNS_SUBDIR = "runs"
 
+#: Default per-run spend cap in USD. A default, not a constant: a campaign sets it
+#: via ``policy.max_budget_usd`` and a single run via ``work --budget``. It lives
+#: on the run record (below) so the detached wrapper enforces the launcher's cap.
+DEFAULT_BUDGET_USD = 5.0
+
 QUEUED = "queued"
 RUNNING = "running"
 PR_OPENED = "pr-opened"
@@ -88,6 +93,9 @@ class AgentRun:
         cost: What the run cost, or ``None`` when it could not be metered — a
             killed or timed-out agent never reports its spend, and ``None`` says
             *we do not know*, which is not the same as free (:mod:`cost`).
+        budget_usd: The spend cap this run was launched under, in USD. Set by the
+            launcher (a campaign's policy, or ``work --budget``) and recorded here
+            so the detached wrapper enforces the cap the launcher chose.
     """
 
     id: str
@@ -104,6 +112,7 @@ class AgentRun:
     detail: str = ""
     ended_at: str = ""
     cost: RunCost | None = None
+    budget_usd: float = DEFAULT_BUDGET_USD
 
     @property
     def is_terminal(self) -> bool:
@@ -151,6 +160,19 @@ def save(run: AgentRun) -> bool:
     return True
 
 
+def _as_budget(raw: object) -> float:
+    """A recorded budget, or the default when it is absent or malformed.
+
+    A run written before budgets were recorded has no ``budget_usd`` key, and a
+    corrupt one may hold a non-number or a non-positive value; all of those fall
+    back to :data:`DEFAULT_BUDGET_USD` rather than an unusable cap. A run must
+    never launch with a ``$0`` cap it did not ask for.
+    """
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)) or raw <= 0:
+        return DEFAULT_BUDGET_USD
+    return float(raw)
+
+
 def _parse(raw: object) -> AgentRun | None:
     """Build a run from a decoded JSON blob; ``None`` if it is not one."""
     if not isinstance(raw, dict):
@@ -177,6 +199,7 @@ def _parse(raw: object) -> AgentRun | None:
             detail=str(raw.get("detail", "")),
             ended_at=str(raw.get("ended_at", "")),
             cost=from_record(raw.get("cost")),
+            budget_usd=_as_budget(raw.get("budget_usd")),
         )
     except (KeyError, TypeError, ValueError):
         return None

@@ -246,7 +246,9 @@ def test_the_default_agent_runs_with_a_scrubbed_environment(
         raise OSError("stop before a real claude runs")
 
     monkeypatch.setattr(work.subprocess, "run", spy)
-    work._default_agent(tmp_path, "do the thing", tmp_path / "log")
+    work._default_agent(
+        tmp_path, "do the thing", tmp_path / "log", budget_usd=work.DEFAULT_BUDGET_USD
+    )
 
     env = seen["env"]
     assert "AWS_SECRET_ACCESS_KEY" not in env
@@ -282,7 +284,9 @@ def test_no_cloud_credential_reaches_the_agent_env(
         raise OSError("stop before a real claude runs")
 
     monkeypatch.setattr(work.subprocess, "run", spy)
-    work._default_agent(tmp_path, "deploy me to prod", tmp_path / "log")
+    work._default_agent(
+        tmp_path, "deploy me to prod", tmp_path / "log", budget_usd=work.DEFAULT_BUDGET_USD
+    )
 
     env = seen["env"]
     for key in families:
@@ -734,3 +738,93 @@ def test_a_killed_run_is_unmetered_not_free(fleet_dir: Path) -> None:
     run = _launched(fleet_dir)
     result = work.run_agent(run.id, agent=_silent_agent, land=lambda r: r)
     assert result.cost is None
+
+
+# --- Budget threading (#150) --------------------------------------------------
+
+
+def test_launch_records_the_default_budget_when_none_is_given(fleet_dir: Path) -> None:
+    run = work.launch(_repo(fleet_dir), "t", spawn=_recording_spawn([]))
+    assert run.budget_usd == work.DEFAULT_BUDGET_USD
+
+
+def test_launch_records_an_explicit_budget(fleet_dir: Path) -> None:
+    run = work.launch(_repo(fleet_dir), "t", 2.5, spawn=_recording_spawn([]))
+    assert run.budget_usd == 2.5
+
+
+def test_the_detached_runner_caps_at_the_budget_the_launcher_chose(fleet_dir: Path) -> None:
+    # The whole point of persisting it: run_agent is a fresh process that reloads
+    # the run from disk, so the budget the real _default_agent enforces is the
+    # LAUNCHER's, read back off the record — not this file's default.
+    run = work.launch(_repo(fleet_dir), "t", 3.0, spawn=_recording_spawn([]))
+    seen: list[float] = []
+
+    def agent(_tree: Path, _prompt: str, _log: Path) -> bool:
+        # run_agent binds budget via functools.partial, so a plain 3-arg substitute
+        # never sees it. Read it off the reloaded record, which is what the real
+        # agent's partial closes over.
+        seen.append(runs.load(run.id).budget_usd)
+        return False
+
+    work.run_agent(run.id, agent=agent, land=lambda r: r)
+    assert seen == [3.0]
+
+
+def test_the_default_agent_caps_spend_at_the_given_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: list[list[str]] = []
+
+    def fake_run(command, **_kwargs):
+        captured.append(command)
+        raise OSError("stop here — we only want the argv")
+
+    monkeypatch.setattr(work.subprocess, "run", fake_run)
+    work._default_agent(tmp_path, "t", tmp_path / "log", budget_usd=1.25)
+    argv = captured[0]
+    assert argv[argv.index("--max-budget-usd") + 1] == "1.25"
+
+
+def test_cli_work_budget_flag_sets_the_runs_cap(
+    fleet_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from projects_orchestrator.__main__ import main
+
+    _repo(fleet_dir)
+    monkeypatch.setattr(work, "_default_spawn", lambda _argv, _log: os.getpid())
+    launched: list[float] = []
+    real_launch = work.launch
+
+    def spy(descriptor, task, budget_usd=work.DEFAULT_BUDGET_USD, **kw):
+        launched.append(budget_usd)
+        return real_launch(descriptor, task, budget_usd, **kw)
+
+    monkeypatch.setattr(work, "launch", spy)
+    assert main(["work", "alpha", "t", "--budget", "2.50", "--root", str(fleet_dir)]) == 0
+    assert launched == [2.5]
+
+
+def test_cli_work_without_budget_uses_the_default(
+    fleet_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from projects_orchestrator.__main__ import main
+
+    _repo(fleet_dir)
+    monkeypatch.setattr(work, "_default_spawn", lambda _argv, _log: os.getpid())
+    seen: list[float] = []
+    monkeypatch.setattr(
+        work,
+        "launch",
+        lambda d, t, b=work.DEFAULT_BUDGET_USD, **_k: seen.append(b) or runs.new_run(d.name, t),
+    )
+    main(["work", "alpha", "t", "--root", str(fleet_dir)])
+    assert seen == [work.DEFAULT_BUDGET_USD]
+
+
+def test_cli_work_rejects_a_non_positive_budget(fleet_dir: Path, capsys) -> None:
+    from projects_orchestrator.__main__ import main
+
+    _repo(fleet_dir)
+    assert main(["work", "alpha", "t", "--budget", "0", "--root", str(fleet_dir)]) == 2
+    assert "must be a positive number" in capsys.readouterr().err
