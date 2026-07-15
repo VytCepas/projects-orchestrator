@@ -91,4 +91,11 @@ the orchestrator CLI.
 - Bad: dispatch is fire-and-forget — `trigger_deploy` confirms the workflow was
   *queued*, not that the deploy *succeeded*. Deploy outcome is observed
   afterward through the existing read path (`cloud-status`, the `Cloud`
-  column). Closing that loop (poll-until-settled) is deferred.
+  column). ~~Closing that loop (poll-until-settled) is deferred.~~
+  **`deploy --wait` closes it (#152)** — opt-in, because fire-and-forget is the
+  right *default* (decide and dispatch, let the review-gated path execute). With
+  `--wait` the CLI reads a pre-dispatch run-id watermark, follows the run the
+  dispatch creates, and reports `succeeded`/`failed`/`timed-out`/`unconfirmed`,
+  exiting nonzero on anything short of a confirmed success. It never claims an
+  outcome it did not observe — an unappearing run is `unconfirmed`, an
+  unreachable `gh` is `unknown`, never a silent success.

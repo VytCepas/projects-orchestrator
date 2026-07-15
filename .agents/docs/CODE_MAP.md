@@ -34,6 +34,13 @@ Per-project deploy/runtime status, driven by the contract-v2 deploy block.
 - `def has_deploy_workflow` — Whether the child actually ships the deploy workflow a dispatch would target.
 - `class DeployDispatch` — The outcome of one cloud action for one project (ADR-005).
 - `def trigger_deploy` — Dispatch a child's deploy workflow for a cloud action; never raises.
+- `class WaitPolicy` — The knobs and seams for :func:`wait_for_deploy`, bundled so it stays pure.
+- `class DeploySettlement` — What became of a dispatched deploy once we followed it (ADR-005).
+- `def newest_run_id` — The highest ``databaseId`` in a run list, or ``None`` (pure).
+- `def resolved_workflow` — The deploy workflow name a dispatch would use — declared, or the default.
+- `def latest_run_id` — The newest existing run id for ``workflow`` — the pre-dispatch watermark.
+- `def classify_run` — Map one gh run record to a settlement state (pure).
+- `def wait_for_deploy` — Follow a dispatched deploy to its conclusion; never raises.
 
 ### `projects_orchestrator/adapters/gcp.py`
 
