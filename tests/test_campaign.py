@@ -269,6 +269,7 @@ class _FakeFleet:
         self.done_after = done_after
         self.launch_terminal = launch_terminal
         self.launched: list[str] = []
+        self.budgets: list[float] = []
         self.stopped: list[str] = []
         self.inflight: set[str] = set()
         self.max_inflight = 0
@@ -276,11 +277,19 @@ class _FakeFleet:
         self._polls: dict[str, int] = {}
         self.t = 0.0
 
-    def launch(self, descriptor: ProjectDescriptor, task: str) -> runs.AgentRun:
+    def launch(
+        self, descriptor: ProjectDescriptor, task: str, budget_usd: float = runs.DEFAULT_BUDGET_USD
+    ) -> runs.AgentRun:
         self.launched.append(descriptor.name)
+        self.budgets.append(budget_usd)
         state = runs.FAILED if self.launch_terminal else runs.RUNNING
         run = runs.AgentRun(
-            id=f"r-{descriptor.name}", project=descriptor.name, task=task, state=state, pid=1
+            id=f"r-{descriptor.name}",
+            project=descriptor.name,
+            task=task,
+            state=state,
+            pid=1,
+            budget_usd=budget_usd,
         )
         self._runs[run.id] = run
         if not self.launch_terminal:
@@ -799,3 +808,54 @@ def test_a_timed_out_run_does_not_make_a_campaign_look_complete() -> None:
 def test_a_fully_metered_campaign_reports_a_complete_total() -> None:
     report = _report(_priced_outcome("alpha", RunCost(usd=1.00)))
     assert report.spend.is_complete
+
+
+# --- Budget as policy (#150) --------------------------------------------------
+
+
+def test_policy_defaults_the_budget(tmp_path: Path) -> None:
+    camp = campaign.load_campaign(_write(tmp_path / "c.yml", _valid_body(select="ci=fail")))
+    assert camp.policy.max_budget_usd == runs.DEFAULT_BUDGET_USD
+
+
+def test_policy_reads_an_explicit_budget(tmp_path: Path) -> None:
+    body = _valid_body(select="ci=fail", max_budget_usd=2.5)
+    camp = campaign.load_campaign(_write(tmp_path / "c.yml", body))
+    assert camp.policy.max_budget_usd == 2.5
+
+
+def test_a_non_positive_budget_is_refused(tmp_path: Path) -> None:
+    body = _valid_body(select="ci=fail", max_budget_usd=0)
+    with pytest.raises(campaign.CampaignError, match="max_budget_usd"):
+        campaign.load_campaign(_write(tmp_path / "c.yml", body))
+
+
+def test_a_non_numeric_budget_is_refused(tmp_path: Path) -> None:
+    body = _valid_body(select="ci=fail", max_budget_usd="lots")
+    with pytest.raises(campaign.CampaignError, match="max_budget_usd"):
+        campaign.load_campaign(_write(tmp_path / "c.yml", body))
+
+
+def test_the_policy_budget_reaches_every_launched_run() -> None:
+    # The end-to-end wiring: policy.max_budget_usd is what each run launches under.
+    camp = campaign.Campaign(
+        name="c", task="t", select=("ci=fail",), policy=campaign.Policy(max_budget_usd=4.0)
+    )
+    fake = _FakeFleet()
+    campaign.execute(camp, [_descriptor("alpha"), _descriptor("beta")], fake.seams())
+    assert fake.budgets == [4.0, 4.0]
+
+
+def test_a_non_finite_budget_is_refused(tmp_path: Path) -> None:
+    # `inf`/`nan` pass `> 0`, so an inf cap would silently cap nothing.
+    for bad in (".inf", ".nan"):
+        body = _valid_body(select="ci=fail", max_budget_usd=bad)
+        with pytest.raises(campaign.CampaignError, match="finite"):
+            campaign.load_campaign(_write(tmp_path / "c.yml", body))
+
+
+def test_a_non_finite_timeout_is_refused(tmp_path: Path) -> None:
+    # Same latent bug on the wall-clock cap: an inf timeout never reaps a runaway.
+    body = _valid_body(select="ci=fail", timeout=".inf")
+    with pytest.raises(campaign.CampaignError, match="finite"):
+        campaign.load_campaign(_write(tmp_path / "c.yml", body))

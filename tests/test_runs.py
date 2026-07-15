@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ import pytest
 from projects_orchestrator.cost import RunCost
 from projects_orchestrator.runs import (
     ABANDONED,
+    DEFAULT_BUDGET_USD,
     FAILED,
     NEEDS_HUMAN,
     PR_OPENED,
@@ -432,3 +434,61 @@ def test_a_run_keeps_its_first_recorded_price() -> None:
     record_cost(run, RunCost(usd=0.5))
     record_cost(run, RunCost(usd=9.99))
     assert load(run.id).cost.usd == 0.5
+
+
+# --- Budget on the record (#150) ----------------------------------------------
+
+
+def test_a_new_run_has_the_default_budget() -> None:
+    assert new_run("alpha", "t").budget_usd == DEFAULT_BUDGET_USD
+
+
+def test_a_budget_round_trips_through_persistence() -> None:
+    run = replace(new_run("alpha", "t"), budget_usd=12.5)
+    save(run)
+    assert load(run.id).budget_usd == 12.5
+
+
+def test_a_run_recorded_before_budgets_reloads_at_the_default() -> None:
+    # Back-compat: an old record has no `budget_usd` key. It must not reload as 0.
+    run = new_run("alpha", "t")
+    save(run)
+    path = state_dir() / f"{run.id}.json"
+    raw = json.loads(path.read_text())
+    del raw["budget_usd"]
+    path.write_text(json.dumps(raw))
+    assert load(run.id).budget_usd == DEFAULT_BUDGET_USD
+
+
+def test_a_corrupt_non_positive_budget_falls_back_to_the_default() -> None:
+    # A run must never launch under a $0 cap it did not ask for.
+    run = new_run("alpha", "t")
+    save(run)
+    path = state_dir() / f"{run.id}.json"
+    raw = json.loads(path.read_text())
+    raw["budget_usd"] = 0
+    path.write_text(json.dumps(raw))
+    assert load(run.id).budget_usd == DEFAULT_BUDGET_USD
+
+
+def test_a_corrupt_non_numeric_budget_falls_back_to_the_default() -> None:
+    run = new_run("alpha", "t")
+    save(run)
+    path = state_dir() / f"{run.id}.json"
+    raw = json.loads(path.read_text())
+    raw["budget_usd"] = "lots"
+    path.write_text(json.dumps(raw))
+    assert load(run.id).budget_usd == DEFAULT_BUDGET_USD
+
+
+def test_a_non_finite_persisted_budget_falls_back_to_the_default() -> None:
+    # nan/inf survive float() and pass every `> 0` test; an inf cap is no cap.
+    for bad in ("Infinity", "NaN"):
+        run = new_run("alpha", "t")
+        save(run)
+        path = state_dir() / f"{run.id}.json"
+        raw = json.loads(path.read_text())
+        raw["budget_usd"] = float(bad)
+        # json.dumps emits bare Infinity/NaN (non-standard but Python round-trips it).
+        path.write_text(json.dumps(raw))
+        assert load(run.id).budget_usd == DEFAULT_BUDGET_USD

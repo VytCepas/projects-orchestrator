@@ -28,6 +28,7 @@ into a nonzero exit, and a run whose record vanishes mid-flight resolves to
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -78,12 +79,17 @@ class Policy:
             without this — the repos it targets are invisible to discovery by
             default, so its target list would be silently empty.
         output: Preferred report format (``text`` or ``json``).
+        max_budget_usd: Per-run spend cap in USD, applied to every run the
+            campaign launches. The money analog of ``timeout``: ``timeout`` bounds
+            a run's wall-clock, this bounds its cost. Defaults to
+            :data:`~runs.DEFAULT_BUDGET_USD`.
     """
 
     max_concurrent: int = 1
     timeout: float = _DEFAULT_TIMEOUT
     include_plain_repos: bool = False
     output: str = "text"
+    max_budget_usd: float = runs.DEFAULT_BUDGET_USD
 
 
 @dataclass(frozen=True)
@@ -158,10 +164,15 @@ def _parse_policy(raw: object) -> Policy:
         message = "'policy' must be a mapping"
         raise CampaignError(message)
     _reject_unknown(
-        raw, frozenset({"max_concurrent", "timeout", "include_plain_repos", "output"}), "policy"
+        raw,
+        frozenset({"max_concurrent", "timeout", "include_plain_repos", "output", "max_budget_usd"}),
+        "policy",
     )
     max_concurrent = _coerce_positive_int(raw.get("max_concurrent", 1), "max_concurrent")
     timeout = _coerce_positive_float(raw.get("timeout", _DEFAULT_TIMEOUT), "timeout")
+    max_budget_usd = _coerce_positive_float(
+        raw.get("max_budget_usd", runs.DEFAULT_BUDGET_USD), "max_budget_usd"
+    )
     output = str(raw.get("output", "text"))
     if output not in OUTPUT_FORMATS:
         message = f"'output' must be one of {', '.join(sorted(OUTPUT_FORMATS))}, not '{output}'"
@@ -171,6 +182,7 @@ def _parse_policy(raw: object) -> Policy:
         timeout=timeout,
         include_plain_repos=bool(raw.get("include_plain_repos", False)),
         output=output,
+        max_budget_usd=max_budget_usd,
     )
 
 
@@ -199,8 +211,12 @@ def _coerce_positive_float(value: object, field_name: str) -> float:
     except (TypeError, ValueError) as exc:
         message = f"'{field_name}' must be a positive number"
         raise CampaignError(message) from exc
-    if result <= 0:
-        message = f"'{field_name}' must be greater than 0, not {result}"
+    # ``nan``/``inf`` survive ``float()`` and every ``> 0`` test (``nan <= 0`` and
+    # ``inf <= 0`` are both False), so they must be rejected explicitly. An ``inf``
+    # timeout is a runaway that never gets reaped; an ``inf`` budget is a cost cap
+    # that caps nothing — each is the silent negation of the very limit it sets.
+    if not math.isfinite(result) or result <= 0:
+        message = f"'{field_name}' must be a finite number greater than 0, not {result}"
         raise CampaignError(message)
     return result
 
@@ -368,7 +384,7 @@ class Seams:
     process ever spawned.
     """
 
-    launch: Callable[[ProjectDescriptor, str], runs.AgentRun]
+    launch: Callable[[ProjectDescriptor, str, float], runs.AgentRun]
     poll: Callable[[str], runs.AgentRun | None]
     stop: Callable[[str], runs.AgentRun | None]
     clock: Callable[[], float]
@@ -412,7 +428,7 @@ def _fill(
     """Launch runs until the concurrency ceiling is hit or nothing is left."""
     while pending and len(active) < campaign.policy.max_concurrent:
         descriptor = pending.pop(0)
-        run = seams.launch(descriptor, campaign.task)
+        run = seams.launch(descriptor, campaign.task, campaign.policy.max_budget_usd)
         if run.is_terminal:
             # Failed to even start (no worktree, no wrapper): a terminal outcome
             # with nothing to supervise.

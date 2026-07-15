@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import json
+import math
 import sys
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -767,6 +768,16 @@ def _cmd_work(args: argparse.Namespace) -> int:
             return 2
         return 0
 
+    # Guard the cap before either launch path (single or --where fan-out): a run
+    # must never start under a budget the operator fat-fingered. ``nan``/``inf``
+    # pass ``> 0`` (both ``<= 0`` comparisons are False), and an ``inf`` cap is no
+    # cap — so reject non-finite values explicitly, not just non-positive ones.
+    if not math.isfinite(args.budget) or args.budget <= 0:
+        print(
+            f"work: --budget must be a finite positive number, not {args.budget}", file=sys.stderr
+        )
+        return 2
+
     if args.where:
         return _cmd_work_fanout(args)
 
@@ -781,7 +792,7 @@ def _cmd_work(args: argparse.Namespace) -> int:
     descriptor = _resolve_project(args)
     if descriptor is None:
         return 2
-    run = work.launch(descriptor, args.task)
+    run = work.launch(descriptor, args.task, args.budget)
     print(_render_run(run))
     # A run that failed to even start (no worktree, no wrapper) is a nonzero exit;
     # a launched run is success — its OUTCOME is observed later via --list.
@@ -822,7 +833,7 @@ def _cmd_work_fanout(args: argparse.Namespace) -> int:
 
     failures = 0
     for snapshot in selected:
-        run = work.launch(snapshot.descriptor, task)
+        run = work.launch(snapshot.descriptor, task, args.budget)
         print(_render_run(run))
         failures += run.state == runs.FAILED
     return 1 if failures else 0
@@ -1181,6 +1192,13 @@ def _add_work_arguments(sub: argparse._SubParsersAction[argparse.ArgumentParser]
     )
     work_sp.add_argument(
         "-n", "--lines", type=int, default=work.DEFAULT_LOG_LINES, help="trailing --logs lines"
+    )
+    work_sp.add_argument(
+        "--budget",
+        type=float,
+        default=work.DEFAULT_BUDGET_USD,
+        metavar="USD",
+        help=f"per-run spend cap in USD (default {work.DEFAULT_BUDGET_USD:.2f})",
     )
     sub.choices[work.RUNNER_SUBCOMMAND].add_argument("run_id")
 

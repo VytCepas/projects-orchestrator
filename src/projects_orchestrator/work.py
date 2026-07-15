@@ -29,6 +29,7 @@ the caller renders.
 
 from __future__ import annotations
 
+import functools
 import subprocess
 import sys
 import tempfile
@@ -43,7 +44,13 @@ from projects_orchestrator.naming import safe_component
 from projects_orchestrator.procs import terminate_group
 
 AGENT_TIMEOUT = 1800.0  # a real task may take many tool calls
-_MAX_BUDGET_USD = "5.00"
+
+#: Re-exported from :mod:`runs`, where the run record's ``budget_usd`` default
+#: lives (defining it there avoids a ``work`` -> ``runs`` import cycle). A default,
+#: not a constant: a campaign sets it via ``policy.max_budget_usd`` and a single
+#: run via ``work --budget``, and it rides on the run record so the detached
+#: wrapper enforces the launcher's cap, not whatever this file said at spawn time.
+DEFAULT_BUDGET_USD = runs.DEFAULT_BUDGET_USD
 _STOP_GRACE_SECONDS = 5.0
 DEFAULT_LOG_LINES = 40
 
@@ -100,13 +107,14 @@ def _default_spawn(argv: list[str], log_path: Path) -> int:
     return process.pid
 
 
-def _default_agent(worktree: Path, prompt: str, log_path: Path) -> bool:
+def _default_agent(worktree: Path, prompt: str, log_path: Path, *, budget_usd: float) -> bool:
     """Run the ``claude`` CLI in ``worktree`` with the data plane scrubbed out.
 
     Returns whether the process exited 0. Output streams to ``log_path`` so a
     detached run can be tailed. The environment carries no operator credential
     and a fresh HOME (:mod:`sandbox`), so even the general Bash tool cannot reach
-    production.
+    production. ``budget_usd`` is the run's own cap (:data:`DEFAULT_BUDGET_USD`
+    unless the launcher chose otherwise), bound in by :func:`run_agent`.
     """
     command = [
         "claude",
@@ -119,7 +127,7 @@ def _default_agent(worktree: Path, prompt: str, log_path: Path) -> bool:
         "--allowedTools",
         _AGENT_TOOLS,
         "--max-budget-usd",
-        _MAX_BUDGET_USD,
+        f"{budget_usd:.2f}",
     ]
     try:
         with (
@@ -176,7 +184,11 @@ def _default_land(run: runs.AgentRun) -> runs.AgentRun:
 
 
 def launch(
-    descriptor: ProjectDescriptor, task: str, *, spawn: Spawn | None = None
+    descriptor: ProjectDescriptor,
+    task: str,
+    budget_usd: float = DEFAULT_BUDGET_USD,
+    *,
+    spawn: Spawn | None = None,
 ) -> runs.AgentRun:
     """Start a tracked, detached agent run against ``descriptor``; never raises.
 
@@ -185,13 +197,18 @@ def launch(
     silently inside a detached process they would only discover via ``--list``.
     Only the agent itself is detached.
 
+    ``budget_usd`` is this run's spend cap — the campaign's ``policy.max_budget_usd``
+    or ``work --budget``, defaulting to :data:`DEFAULT_BUDGET_USD`. It is positional
+    (before the keyword-only ``spawn``) so the campaign :class:`~campaign.Seams`
+    can wire ``launch`` directly with no adapter.
+
     ``spawn`` defaults to :func:`_default_spawn`, resolved at CALL time (not bound
     as a default argument) so a test — or the CLI — can substitute it. A default
     argument would capture the original function and defeat monkeypatching, which
     is exactly the flake that taught this lesson.
     """
     spawn = spawn or _default_spawn
-    run = runs.new_run(descriptor.name, task)
+    run = replace(runs.new_run(descriptor.name, task), budget_usd=budget_usd)
 
     wt.prune_expired(descriptor.path, descriptor.name)
     slug = wt.run_slug()
@@ -233,7 +250,6 @@ def run_agent(
     ``failed`` otherwise (the worktree is kept as evidence, ADR-007). ``agent`` and
     ``land`` resolve at call time for the same monkeypatch reason as ``launch``.
     """
-    agent = agent or _default_agent
     land = land or _default_land
     run = runs.load(run_id)
     if run is None:
@@ -248,6 +264,11 @@ def run_agent(
     prompt = _read_prompt(run_id)
     if prompt is None:
         return runs.finish(run, runs.FAILED, detail="the staged briefing was missing")
+
+    # Bind the run's own budget into the production agent here, not at the top:
+    # only now is the run (and its budget_usd) loaded from disk. A substituted
+    # ``agent`` — a test's — is used verbatim; the seam stays a plain 3-arg callable.
+    agent = agent or functools.partial(_default_agent, budget_usd=run.budget_usd)
 
     worktree = Path(run.worktree)
     # Snapshot the marker BEFORE the run: a repo may already ship a `NEEDS_HUMAN.md`
