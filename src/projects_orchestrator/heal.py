@@ -78,6 +78,12 @@ PUSH_FAILED = "push_failed"
 PR_FAILED = "pr_failed"
 FIXED = "fixed"
 
+# Outcomes reached WITHOUT ever launching the agent: nothing was failing, or a
+# worktree could not be cut. Their cost is None because no run happened — not
+# because a run went unmetered — so a fleet spend total must exclude them rather
+# than count them as unmetered runs (which would falsely warn spend is higher).
+_PRE_AGENT_STATUSES = frozenset({NO_FAILURES, WORKTREE_FAILED})
+
 
 @dataclass(frozen=True)
 class AgentOutcome:
@@ -528,8 +534,18 @@ class FleetHealReport:
 
     @property
     def spend(self) -> cost_mod.CostTotal:
-        """What the pass's agent runs cost, keeping the unmetered runs visible."""
-        return cost_mod.total(result.cost for result in self.results)
+        """What the pass's agent runs cost, keeping the truly-unmetered ones visible.
+
+        Only results whose heal actually reached the agent contribute. A
+        ``WORKTREE_FAILED`` (or ``NO_FAILURES``) result has ``cost=None`` because
+        *no run happened* — counting it would report it as an unmetered run and
+        make the total warn "true spend is higher" when nothing was spawned. A
+        run that reached the agent but could not be metered (killed/timed-out)
+        still shows as unmetered, which is the honest confidence interval.
+        """
+        return cost_mod.total(
+            result.cost for result in self.results if result.status not in _PRE_AGENT_STATUSES
+        )
 
 
 def heal_fleet(

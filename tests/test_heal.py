@@ -637,3 +637,23 @@ def test_render_fleet_heal_report_lists_deferred_and_tally() -> None:
     assert "alpha" in rendered
     assert "deferred 2 more (limit 1): beta, gamma" in rendered
     assert "healed 0/1 attempted" in rendered
+
+
+def test_heal_fleet_spend_excludes_projects_that_never_reached_the_agent(fleet_dir: Path) -> None:
+    # alpha is a real repo: the agent runs and is metered. beta is NOT a git repo,
+    # so its worktree can't be cut -> WORKTREE_FAILED with no agent and cost=None.
+    alpha = _failing(fleet_dir, "alpha")
+    beta_project = make_project(fleet_dir, "beta", tooling={"lint": "test -f fixed.txt"})
+    beta = load_descriptor(beta_project)
+    targets = [(alpha, _cached_fail("alpha")), (beta, _cached_fail("beta"))]
+
+    def paid_agent(_descriptor: object, _prompt: str) -> AgentOutcome:
+        return AgentOutcome(ok=True, summary="noop", cost=RunCost(usd=0.5))
+
+    report = heal_fleet(targets, limit=5, agent_run=paid_agent)
+    statuses = {result.project: result.status for result in report.results}
+    assert statuses["beta"] == WORKTREE_FAILED  # never launched an agent
+    # beta must NOT count as an unmetered run — nothing was spawned for it.
+    assert report.spend.metered == 1
+    assert report.spend.unmetered == 0
+    assert report.spend.usd == pytest.approx(0.5)
