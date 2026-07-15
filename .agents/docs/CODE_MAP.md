@@ -286,6 +286,9 @@ Autonomous fix dispatch — spawn a scoped coding agent to repair a failing gate
 - `def build_heal_prompt` — Render the fix-scoping prompt handed to the coding agent (pure).
 - `def heal_project` — Attempt to fix one project's failing lint/test gate end to end; never raises.
 - `def render_heal_result` — Render one heal outcome as a single human-readable line (pure).
+- `class FleetHealReport` — Outcome of one fleet-wide heal pass — the scheduled trigger's report.
+- `def heal_fleet` — Heal every project with a pending lint/test failure, up to ``limit``; never raises.
+- `def render_fleet_heal_report` — Render a fleet heal pass as human-readable lines (pure).
 
 ### `projects_orchestrator/history.py`
 
