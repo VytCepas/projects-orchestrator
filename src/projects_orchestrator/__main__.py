@@ -1229,6 +1229,60 @@ def _cmd_notify(args: argparse.Namespace) -> int:
     return 1 if alerts else 0
 
 
+def _cmd_watch(args: argparse.Namespace) -> int:
+    """One scheduled watch pass: refresh gates, record history, push alerts.
+
+    Chains what ``checks`` and ``notify`` do separately, so a timer needs a
+    single invocation: run the declared gates fleet-wide, merge the results
+    into the cache, append them to history, then compute threshold alerts from
+    the refreshed fleet view and (optionally) POST them to a webhook.
+
+    Exits **1** when the pass was eventful (any alert — something for the
+    operator to look at), **0** when the fleet is within thresholds, and **2**
+    when no fleet was found: a watch timer pointed at an empty root is a
+    misconfiguration that must not masquerade as a permanently quiet fleet.
+    """
+    fleet = _discover(args)
+    if not fleet.descriptors:
+        print(
+            "watch: no projects discovered — check --root/--fleet (or PO_FLEET_ROOT)",
+            file=sys.stderr,
+        )
+        return 2
+    tasks = tuple(args.task) if args.task else DEFAULT_TASKS
+    cached = cache.load_results() if args.changed_only else {}
+    per_project = map_ordered(
+        lambda d: _project_checks(d, tasks, cached.get(d.name), args.changed_only),
+        list(fleet.descriptors),
+        jobs=args.jobs,
+    )
+    pairs = [pair for project_pairs in per_project for pair in project_pairs]
+    fresh = [result for result, reused in pairs if not reused]
+    cache.save_results(fresh)
+    history_record(fresh)
+    alerts = fleet_alerts(fleet_snapshots(fleet))
+    delivered = post_webhook(args.webhook, alerts) if args.webhook and alerts else None
+    if args.json:
+        _emit_json(
+            {
+                "checks": [{**asdict(r), "cached": reused} for r, reused in pairs],
+                **alerts_payload(alerts),
+                "webhook": None if delivered is None else ("delivered" if delivered else "failed"),
+            }
+        )
+        return 1 if alerts else 0
+    reused_count = len(pairs) - len(fresh)
+    cached_note = f" ({reused_count} cached)" if reused_count else ""
+    print(
+        f"watch: {len(fleet.descriptors)} project(s), "
+        f"{len(fresh)} gate(s) refreshed{cached_note}, {len(alerts)} alert(s)"
+    )
+    print(render_alerts(alerts))
+    if delivered is not None:
+        print(f"webhook: {'delivered' if delivered else 'delivery failed'}", file=sys.stderr)
+    return 1 if alerts else 0
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     """Serve the live fleet dashboard over HTTP until interrupted."""
     if args.enable_actions and not is_loopback(args.host):
@@ -1433,6 +1487,12 @@ def _build_parser() -> argparse.ArgumentParser:
             True,
         ),
         (
+            "watch",
+            "one scheduled pass: refresh gates, record history, push threshold alerts",
+            _cmd_watch,
+            True,
+        ),
+        (
             "deploy",
             "dispatch a project's deploy workflow (deploy/rollback/restart; --apply)",
             _cmd_deploy,
@@ -1524,6 +1584,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.choices["notify"].add_argument(
         "--webhook", help="POST alerts as JSON to this URL (Slack-compatible)"
     )
+    _add_watch_arguments(sub)
     for name in ("start", "stop", "logs", "deploy"):
         sub.choices[name].add_argument("project", help="project to act on")
     sub.choices["deploy"].add_argument(
@@ -1594,6 +1655,21 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.choices["memory"].add_argument("query", nargs="+", help="text to search for")
     _add_serve_arguments(sub)
     return parser
+
+
+def _add_watch_arguments(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Wire `watch`'s gate-selection and webhook flags onto its subparser."""
+    watch_sp = sub.choices["watch"]
+    watch_sp.add_argument("--webhook", help="POST alerts as JSON to this URL (Slack-compatible)")
+    watch_sp.add_argument(
+        "--task", action="append", help="gate to run (repeatable; default: lint, test)"
+    )
+    watch_sp.add_argument("--jobs", type=int, help="parallel projects (default: min(8, cpu count))")
+    watch_sp.add_argument(
+        "--changed-only",
+        action="store_true",
+        help="skip gates whose last cached pass is at the current clean HEAD",
+    )
 
 
 def _add_serve_arguments(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:

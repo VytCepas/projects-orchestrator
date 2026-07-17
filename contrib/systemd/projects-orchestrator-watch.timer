@@ -1,0 +1,20 @@
+[Unit]
+Description=Run the projects-orchestrator watch pass on an hourly cadence
+Documentation=https://github.com/VytCepas/projects-orchestrator/blob/main/docs/how-to/scheduled-watch.md
+
+[Timer]
+# Hourly, because the pass is cheap by construction: the service runs with
+# --changed-only, so a quiet healthy fleet is almost all cache hits. This is
+# the fleet's pulse — the daily digest summarizes, the daily heal repairs, the
+# hourly watch is what notices.
+OnCalendar=hourly
+
+# The usual host is a laptop that sleeps: run a missed firing on the next
+# boot rather than losing it, so a reopened lid gets a current fleet view.
+Persistent=true
+
+# Don't stampede with every other hourly timer on the minute.
+RandomizedDelaySec=5m
+
+[Install]
+WantedBy=timers.target

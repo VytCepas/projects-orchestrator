@@ -1,0 +1,38 @@
+[Unit]
+Description=projects-orchestrator watch pass — refresh gates, record history, push threshold alerts
+Documentation=https://github.com/VytCepas/projects-orchestrator/blob/main/docs/how-to/scheduled-watch.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+# A *user* unit like the digest and heal timers: the fleet is discovered on
+# local disk (sibling directories carrying .agents/config.yaml), and the pass
+# writes the checks cache and history under this user's XDG directories — the
+# same state the dashboard and `status` trend column read. root would watch an
+# empty fleet and record into state nobody reads.
+WorkingDirectory=%h
+
+# Optional config. Create the file with mode 600 and put in it:
+#   PO_FLEET_ROOT=/path/to/your/projects     (if your fleet is not ~/projects)
+#   PO_WATCH_WEBHOOK=https://hooks.example/… (POST alerts here when any fire)
+# The leading `-` makes the file optional: with no override the unit watches
+# ~/projects and only prints alerts to the journal.
+EnvironmentFile=-%h/.config/projects-orchestrator/watch.env
+
+# --changed-only keeps an hourly cadence affordable: a gate whose last cached
+# PASS is at the project's current clean HEAD is reused, so untouched healthy
+# projects cost nothing — while failing or freshly-edited projects rerun every
+# firing (a fail is never reused, so recovery is noticed). Drop the flag in
+# your copy if you want every firing to run every gate from scratch.
+ExecStart=/bin/sh -c 'exec %h/.local/bin/projects-orchestrator watch --changed-only --root "${PO_FLEET_ROOT:-%h/projects}" ${PO_WATCH_WEBHOOK:+--webhook "$PO_WATCH_WEBHOOK"}'
+
+# `watch` exits 1 when the pass was EVENTFUL — an alert fired and (if
+# configured) was pushed. That is a run that worked and has something for you
+# to look at, not a failed unit; 2 (no fleet found) still marks the unit
+# failed, which is exactly right for a mispointed PO_FLEET_ROOT.
+SuccessExitStatus=1
+
+[Install]
+WantedBy=default.target

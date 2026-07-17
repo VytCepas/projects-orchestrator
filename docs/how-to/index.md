@@ -4,6 +4,8 @@ Goal-oriented recipes for someone already working with the project: "How do
 I X?" Each guide solves one real problem, assumes basic familiarity, and
 skips teaching.
 
+- [Watch the fleet on a schedule](scheduled-watch.md) — hourly, refresh the
+  gates, record the trend, and push threshold alerts the moment they appear.
 - [Run the audit digest on a schedule](scheduled-audit-digest.md) — report only
   what changed in the fleet, daily, with an optional Slack sink.
 - [Heal the fleet on a schedule](scheduled-heal.md) — open PRs that fix red
