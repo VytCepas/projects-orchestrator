@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -16,7 +17,10 @@ from projects_orchestrator.heal import (
     AGENT_FAILED,
     BRANCH_FAILED,
     FIXED,
+    MODE_FIX,
+    MODE_NOTIFY,
     NO_FAILURES,
+    NOTIFIED,
     PUSH_FAILED,
     VERIFY_FAILED,
     WORKTREE_FAILED,
@@ -688,3 +692,62 @@ def test_heal_fleet_spend_excludes_projects_that_never_reached_the_agent(fleet_d
     assert report.spend.metered == 1
     assert report.spend.unmetered == 0
     assert report.spend.usd == pytest.approx(0.5)
+
+
+def _exploding_agent(_descriptor: object, _prompt: str) -> AgentOutcome:
+    message = "notify mode must never reach the agent"
+    raise AssertionError(message)
+
+
+def test_heal_project_notify_mode_reports_without_an_agent(fleet_dir: Path) -> None:
+    descriptor = _failing(fleet_dir, "alpha")
+    result = heal_project(
+        descriptor, _cached_fail("alpha"), agent_run=_exploding_agent, mode=MODE_NOTIFY
+    )
+    assert result.status == NOTIFIED
+
+
+def test_notify_result_names_what_failed_and_what_to_do_next(fleet_dir: Path) -> None:
+    descriptor = _failing(fleet_dir, "alpha")
+    result = heal_project(descriptor, _cached_fail("alpha"), mode=MODE_NOTIFY)
+    assert "lint failing" in result.detail and "heal alpha" in result.detail
+
+
+def test_heal_fleet_declared_notify_override_beats_a_fix_run(fleet_dir: Path) -> None:
+    # The child's word wins: a fleet pass in (default) fix mode must not spend
+    # an agent on a project that declared heal.mode notify.
+    alpha = replace(_failing(fleet_dir, "alpha"), heal_mode=MODE_NOTIFY)
+    report = heal_fleet([(alpha, _cached_fail("alpha"))], limit=5, agent_run=_exploding_agent)
+    assert [result.status for result in report.results] == [NOTIFIED]
+
+
+def test_heal_fleet_declared_fix_override_beats_a_notify_run(fleet_dir: Path) -> None:
+    alpha = replace(_failing(fleet_dir, "alpha"), heal_mode=MODE_FIX)
+    report = heal_fleet(
+        [(alpha, _cached_fail("alpha"))], limit=5, agent_run=_noop_agent, mode=MODE_NOTIFY
+    )
+    assert report.results[0].status != NOTIFIED
+
+
+def test_heal_fleet_notify_projects_never_consume_the_paid_limit(fleet_dir: Path) -> None:
+    # alpha is notify (free); beta must still get the single paid slot.
+    alpha = replace(_failing(fleet_dir, "alpha"), heal_mode=MODE_NOTIFY)
+    beta = _failing(fleet_dir, "beta")
+    targets = [(alpha, _cached_fail("alpha")), (beta, _cached_fail("beta"))]
+    report = heal_fleet(targets, limit=1, agent_run=_noop_agent)
+    assert report.deferred == ()
+
+
+def test_heal_fleet_run_wide_notify_spawns_nothing(fleet_dir: Path) -> None:
+    descriptors = [_failing(fleet_dir, name) for name in ("alpha", "beta")]
+    targets = [(d, _cached_fail(d.name)) for d in descriptors]
+    report = heal_fleet(targets, limit=5, agent_run=_exploding_agent, mode=MODE_NOTIFY)
+    assert [result.status for result in report.results] == [NOTIFIED, NOTIFIED]
+
+
+def test_heal_fleet_spend_excludes_notified_projects(fleet_dir: Path) -> None:
+    # A notified project never spawned anything — it must not read as an
+    # unmetered run (which would warn "true spend is higher").
+    alpha = replace(_failing(fleet_dir, "alpha"), heal_mode=MODE_NOTIFY)
+    report = heal_fleet([(alpha, _cached_fail("alpha"))], limit=5)
+    assert (report.spend.metered, report.spend.unmetered) == (0, 0)
