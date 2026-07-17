@@ -1,0 +1,37 @@
+[Unit]
+Description=projects-orchestrator live fleet dashboard — the fleet at http://127.0.0.1:8787
+Documentation=https://github.com/VytCepas/projects-orchestrator/blob/main/docs/how-to/serve-dashboard.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Long-running, unlike the heal/digest oneshots: `serve` blocks until stopped.
+Type=simple
+
+# A *user* unit for the same reason the timers are: the fleet is discovered on
+# local disk (sibling directories carrying .agents/config.yaml), and the
+# drill-in pages read state — runs, history, the checks cache — written under
+# this user's XDG directories. root would see an empty fleet.
+WorkingDirectory=%h
+
+# Optional config. Create the file with mode 600 and put in it:
+#   PO_FLEET_ROOT=/path/to/your/projects   (if your fleet is not ~/projects)
+#   PO_SERVE_PORT=8787                     (bind port)
+#   PO_SERVE_ACTIONS=1                     (enable the re-check/heal buttons)
+# The leading `-` makes the file optional: with no override the unit serves
+# ~/projects read-only on 127.0.0.1:8787.
+EnvironmentFile=-%h/.config/projects-orchestrator/serve.env
+
+# Loopback on purpose, and not configurable here: the dashboard is a local
+# operator surface, and `serve` itself refuses --enable-actions on any
+# non-loopback bind (PO-156). Reach it from another device over an SSH tunnel
+# or tailscale, not by widening the bind.
+ExecStart=/bin/sh -c 'exec %h/.local/bin/projects-orchestrator serve --root "${PO_FLEET_ROOT:-%h/projects}" --host 127.0.0.1 --port "${PO_SERVE_PORT:-8787}" ${PO_SERVE_ACTIONS:+--enable-actions}'
+
+# A crashed dashboard should come back on its own; a broken config should not
+# flap forever. on-failure plus a small delay gives both.
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
