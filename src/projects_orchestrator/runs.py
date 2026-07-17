@@ -296,8 +296,21 @@ def latest_open_run(runs: list[AgentRun]) -> AgentRun | None:
 
 
 def mark_running(run: AgentRun, pid: int) -> AgentRun:
-    """Record that ``run``'s agent is live under ``pid``, and persist it."""
-    started = replace(run, state=RUNNING, pid=pid, start_ticks=proc_start_ticks(pid))
+    """Record that ``run``'s agent is live under ``pid``, and persist it.
+
+    Re-reads before writing, for the same first-writer-wins reason as
+    :func:`finish` and :func:`record_cost` — and the race is not hypothetical
+    here, it is the ordering :func:`~work.launch` requires: the detached agent is
+    spawned *before* this is called, because there is no pid to record until it
+    is. A run that fails instantly (a missing agent binary) or is settled by a
+    racing ``work --stop`` in that window is already terminal on disk, and
+    writing our pre-spawn copy would rewind it to ``running`` — resurrecting a
+    settled run as live work, with a pid that is gone or, worse, recycled.
+    """
+    base = _read(run.id) or run
+    if base.is_terminal:
+        return base
+    started = replace(base, state=RUNNING, pid=pid, start_ticks=proc_start_ticks(pid))
     save(started)
     return started
 

@@ -396,6 +396,35 @@ def test_a_cost_survives_a_finish() -> None:
     assert load(run.id).cost.usd == 0.5
 
 
+def test_mark_running_does_not_rewind_a_run_that_already_finished() -> None:
+    # `launch` spawns the detached agent and only THEN calls mark_running — there
+    # is no pid to record until it has. An agent that fails instantly, or a racing
+    # `work --stop`, settles the record inside that window; writing the pre-spawn
+    # copy would resurrect a finished run as live work.
+    run = new_run("alpha", "t")
+    save(run)
+    finish(run, PR_OPENED, pr_url="https://x/pr/1")  # the agent beat us to it
+    mark_running(run, 1234)
+    assert load(run.id).state == PR_OPENED
+
+
+def test_mark_running_does_not_bury_the_pr_url_of_a_run_that_already_landed() -> None:
+    # The PR is the whole product of the run; rewinding to `running` makes it
+    # invisible to every listing.
+    run = new_run("alpha", "t")
+    save(run)
+    finish(run, PR_OPENED, pr_url="https://x/pr/1")
+    mark_running(run, 1234)
+    assert load(run.id).pr_url == "https://x/pr/1"
+
+
+def test_mark_running_returns_the_settled_record_not_a_running_one() -> None:
+    run = new_run("alpha", "t")
+    save(run)
+    finish(run, ABANDONED, detail="operator stopped it")
+    assert mark_running(run, 1234).state == ABANDONED
+
+
 def test_record_cost_does_not_rewind_a_run_another_process_already_stopped() -> None:
     # THE race: the wrapper holds a stale `running` copy; `work --stop` settled the
     # same id to `abandoned` meanwhile. Saving our stale copy "just to add a cost"

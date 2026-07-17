@@ -19,6 +19,12 @@ DEFAULT_TIMEOUT = 300.0
 
 _OUTPUT_CAP = 20_000
 
+#: How long to wait for a killed command's pipes to close before abandoning its
+#: output (:func:`_drain`). Deliberately short: the process group has already been
+#: SIGKILLed, so anything still holding a pipe has escaped that group and is not
+#: about to let go — waiting longer only delays a result we already have.
+_DRAIN_TIMEOUT = 2.0
+
 
 @dataclass(frozen=True)
 class RunResult:
@@ -92,12 +98,12 @@ def run_command(command: str, cwd: Path, timeout: float = DEFAULT_TIMEOUT) -> Ru
         stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         _kill_tree(proc)
-        stdout, stderr = proc.communicate()
+        stdout, stderr = _drain(proc)
         return RunResult(
             command=command,
             returncode=None,
-            stdout=_cap(_decode(stdout)),
-            stderr=_cap(_decode(stderr)),
+            stdout=_cap(stdout),
+            stderr=_cap(stderr),
             duration=time.monotonic() - start,
             timed_out=True,
         )
@@ -116,6 +122,32 @@ def _kill_tree(proc: subprocess.Popen[str]) -> None:
         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
     with contextlib.suppress(OSError):
         proc.kill()
+
+
+def _drain(proc: subprocess.Popen[str]) -> tuple[str, str]:
+    """Collect a killed command's output without inheriting its hang.
+
+    SIGKILLing the process group does **not** guarantee the pipes close. A
+    grandchild that called ``setsid()`` for itself is no longer in the group
+    ``killpg`` targets: it survives the kill and keeps the inherited write end
+    open. An unbounded ``communicate()`` then waits for *that* process to exit,
+    so a 1-second gate whose child daemonised takes as long as the daemon lives
+    — forever, for a real daemon. The timeout stops bounding anything, and the
+    hang moves out of the child and into the orchestrator, which is precisely
+    what the timeout existed to prevent.
+
+    So the drain is bounded too. Losing a timed-out command's tail is strictly
+    better than never returning from it.
+    """
+    try:
+        stdout, stderr = proc.communicate(timeout=_DRAIN_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        for pipe in (proc.stdout, proc.stderr):
+            if pipe is not None:
+                with contextlib.suppress(OSError):
+                    pipe.close()
+        return "", "(output lost: a child survived the kill and held the pipe open)"
+    return _decode(stdout), _decode(stderr)
 
 
 def _decode(data: str | bytes | None) -> str:

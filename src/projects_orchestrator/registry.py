@@ -231,10 +231,17 @@ def register_project(fleet_file: Path, project: Path) -> RegisterOutcome:
         return RegisterOutcome(fleet_file, resolved, added=False, warnings=warnings)
 
     projects = sorted({*listed, resolved}, key=str)
-    document = {
+    document: dict[str, object] = {
         "projects": [str(p) for p in projects],
         "roots": [str(p) for p in (existing.roots if existing is not None else ())],
     }
+    # Preserve fields the loader treats as first-class but this rewrite would
+    # otherwise silently drop — an omitted `exclude` re-admits excluded repos and
+    # a dropped `include_plain_repos` flips discovery, both invisibly.
+    if existing is not None and existing.exclude:
+        document["exclude"] = list(existing.exclude)
+    if existing is not None and existing.include_plain_repos:
+        document["include_plain_repos"] = existing.include_plain_repos
     try:
         fleet_file.parent.mkdir(parents=True, exist_ok=True)
         fleet_file.write_text(yaml.safe_dump(document, sort_keys=True), encoding="utf-8")

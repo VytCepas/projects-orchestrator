@@ -19,6 +19,7 @@ from projects_orchestrator.registry import FleetConfig
 from projects_orchestrator.server import (
     ActionTracker,
     _action_for_path,
+    host_header_is_loopback,
     is_loopback,
     make_server,
     project_payload,
@@ -162,6 +163,26 @@ def test_is_loopback_classifies_bind_hosts(host: str, loopback: bool) -> None:
     assert is_loopback(host) is loopback
 
 
+@pytest.mark.parametrize(
+    ("header", "trusted"),
+    [
+        ("127.0.0.1:8787", True),
+        ("127.0.0.1", True),
+        ("localhost:8787", True),
+        ("localhost", True),
+        ("[::1]:8787", True),
+        ("[::1]", True),
+        ("attacker.com", False),  # DNS-rebinding: attacker domain pointed at 127.0.0.1
+        ("attacker.com:8787", False),
+        ("192.168.1.10:8787", False),
+        ("", False),
+        (None, False),  # HTTP/1.1 requires a Host header; absence is not loopback
+    ],
+)
+def test_host_header_is_loopback_parses_and_classifies(header: str | None, trusted: bool) -> None:
+    assert host_header_is_loopback(header) is trusted
+
+
 def test_render_page_disables_actions_by_default() -> None:
     page = render_page()
     # The button-building JS is static; the runtime flag is what gates it.
@@ -299,6 +320,49 @@ def test_recheck_with_token_starts_and_completes(_action_server: tuple[str, str]
             break
         time.sleep(0.05)
     assert actions["alpha"]["state"] == "done"
+
+
+def _request_with_host(url: str, host: str, method: str) -> tuple[int, str]:
+    request = urllib.request.Request(url, method=method)
+    request.add_unredirected_header("Host", host)  # forge the Host header verbatim
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return response.status, response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read().decode("utf-8")
+
+
+def test_rebinding_post_is_refused_before_token_check(_action_server: tuple[str, str]) -> None:
+    # A forged (non-loopback) Host is the DNS-rebinding signature; reject it even
+    # with a valid token, so a stolen token cannot be replayed from a rebound tab.
+    base, token = _action_server
+    request = urllib.request.Request(f"{base}/api/project/alpha/recheck", method="POST")
+    request.add_unredirected_header("Host", "attacker.com")
+    request.add_header("X-PO-Token", token)
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            status = response.status
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+    assert status == 403
+
+
+def test_rebinding_get_refused_and_leaks_no_token(_action_server: tuple[str, str]) -> None:
+    # The page embeds the CSRF token; a rebound GET must be refused before it can
+    # be read back out of the inline script.
+    base, token = _action_server
+    status, body = _request_with_host(f"{base}/", "attacker.com", "GET")
+    assert status == 403
+    assert token not in body
+
+
+def test_loopback_host_with_port_is_accepted(_action_server: tuple[str, str]) -> None:
+    # The guard must not break the normal case: a real browser sends Host with the port.
+    base, token = _action_server
+    port = base.rsplit(":", 1)[1]
+    status, body = _request_with_host(f"{base}/", f"127.0.0.1:{port}", "GET")
+    assert status == 200
+    assert token in body  # actions-enabled page still serves the token to a loopback origin
 
 
 def test_read_only_server_refuses_actions(_server: str) -> None:

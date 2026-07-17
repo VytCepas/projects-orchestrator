@@ -19,7 +19,7 @@ from pathlib import Path
 from projects_orchestrator import cache
 from projects_orchestrator.adapters.cloud import as_check_results as cloud_check_results
 from projects_orchestrator.adapters.cloud import collect_cloud, trigger_deploy
-from projects_orchestrator.adapters.github import as_check_results, collect_github
+from projects_orchestrator.adapters.forge import probe_ci
 from projects_orchestrator.adapters.project_init import latest_upstream_version
 from projects_orchestrator.audit import audit_project
 from projects_orchestrator.checks import collect_checks
@@ -281,18 +281,24 @@ def _dispatch_audit(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
 
 
 def _dispatch_ci(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
-    """Probe CI conclusion + open-PR count per project (via gh); cache them."""
+    """Probe CI conclusion + open PR/MR count per project; cache them.
+
+    Routed through :func:`~projects_orchestrator.adapters.forge.probe_ci` — the
+    same dispatcher the ``ci`` CLI uses — rather than calling ``gh`` directly.
+    Asking ``gh`` about a GitLab project (or one with a declared status URL)
+    returns ``unknown``, and this caches what it probes: the REPL would write
+    that ``unknown`` over the correct answer the CLI had recorded.
+    """
     selected = _select_projects(ctx, intent.target)
     if isinstance(selected, str):
         yield selected
         return
-    checked_at = _dt.datetime.now(tz=_dt.UTC).isoformat(timespec="seconds")
     results = []
     for descriptor in selected:
-        status = collect_github(descriptor)
-        results.extend(as_check_results(status, checked_at))
-        prs = "?" if status.open_prs is None else str(status.open_prs)
-        yield f"{status.project}: CI {status.ci}, {prs} open PR(s)"
+        payload, probed, _failed = probe_ci(descriptor)
+        results.extend(probed)
+        count = "?" if payload["count"] is None else str(payload["count"])
+        yield f"{payload['project']}: CI {payload['ci']}, {count} open {payload['unit']}(s)"
     cache.save_results(results, ctx.cache_file)
 
 
