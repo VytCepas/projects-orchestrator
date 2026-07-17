@@ -25,7 +25,9 @@ EnvironmentFile=-%h/.config/projects-orchestrator/watch.env
 # PASS is at the project's current clean HEAD is reused, so untouched healthy
 # projects cost nothing — while failing or freshly-edited projects rerun every
 # firing (a fail is never reused, so recovery is noticed). Drop the flag in
-# your copy if you want every firing to run every gate from scratch.
+# your copy if you want every firing to run every gate from scratch. The CI
+# and cloud probes always run regardless — remote state moves without any
+# local edit, so it is refreshed every firing.
 ExecStart=/bin/sh -c 'exec %h/.local/bin/projects-orchestrator watch --changed-only --root "${PO_FLEET_ROOT:-%h/projects}" ${PO_WATCH_WEBHOOK:+--webhook "$PO_WATCH_WEBHOOK"}'
 
 # `watch` exits 1 when the pass was EVENTFUL — an alert fired and (if

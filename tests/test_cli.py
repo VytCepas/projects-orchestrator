@@ -548,6 +548,33 @@ def test_watch_quiet_fleet_never_calls_the_webhook(fleet_dir: Path, monkeypatch)
     assert calls == []
 
 
+def test_watch_probes_remote_ci_before_alerting(fleet_dir: Path, monkeypatch) -> None:
+    # Local gates green, but the forge turned red after the last manual `ci`
+    # run: the scheduled watch must refresh remote state itself, not sleep on
+    # a stale cache (PR #176 review).
+    make_project(fleet_dir, "alpha", tooling={"lint": "true", "test": "true"})
+    red = cli.CheckResult(
+        project="alpha", task="ci", status="fail", checked_at="2026-07-17T00:00:00+00:00"
+    )
+    monkeypatch.setattr(
+        cli,
+        "probe_ci",
+        lambda d: ({"project": d.name, "ci": "fail", "count": 0, "unit": "PR"}, [red], True),
+    )
+    assert main(["watch", "--root", str(fleet_dir)]) == 1
+
+
+def test_watch_probes_cloud_state_before_alerting(fleet_dir: Path, monkeypatch, capsys) -> None:
+    # Same for a deployment that went unhealthy since the last cloud-status run.
+    make_project(fleet_dir, "alpha", tooling={"lint": "true", "test": "true"})
+    sick = cli.CheckResult(
+        project="alpha", task="cloud", status="fail", checked_at="2026-07-17T00:00:00+00:00"
+    )
+    monkeypatch.setattr(cli, "cloud_check_results", lambda _s, _at: [sick])
+    main(["watch", "--root", str(fleet_dir)])
+    assert "deployment is unhealthy" in capsys.readouterr().out
+
+
 def test_watch_json_carries_checks_and_alerts(fleet_dir: Path, capsys) -> None:
     make_project(fleet_dir, "alpha", tooling={"test": "false"})
     main(["watch", "--root", str(fleet_dir), "--json"])

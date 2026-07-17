@@ -1192,10 +1192,17 @@ def _cmd_notify(args: argparse.Namespace) -> int:
 def _cmd_watch(args: argparse.Namespace) -> int:
     """One scheduled watch pass: refresh gates, record history, push alerts.
 
-    Chains what ``checks`` and ``notify`` do separately, so a timer needs a
-    single invocation: run the declared gates fleet-wide, merge the results
-    into the cache, append them to history, then compute threshold alerts from
-    the refreshed fleet view and (optionally) POST them to a webhook.
+    Chains what ``checks``, ``ci``, ``cloud-status`` and ``notify`` do
+    separately, so a timer needs a single invocation: run the declared gates
+    fleet-wide, probe each project's CI and cloud state, merge everything into
+    the cache, append it to history, then compute threshold alerts from the
+    refreshed fleet view and (optionally) POST them to a webhook.
+
+    The remote probes always run — ``--changed-only`` economizes on the local
+    gates only, because a cached pass at an unchanged HEAD says nothing about
+    a forge or a deployment, whose state moves without any local edit. An
+    hourly watch that read CI/cloud from the last manual run would sleep
+    through exactly the reds it exists to notice.
 
     Exits **1** when the pass was eventful (any alert — something for the
     operator to look at), **0** when the fleet is within thresholds, and **2**
@@ -1209,23 +1216,31 @@ def _cmd_watch(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
+    descriptors = list(fleet.descriptors)
     tasks = tuple(args.task) if args.task else DEFAULT_TASKS
     cached = cache.load_results() if args.changed_only else {}
     per_project = map_ordered(
         lambda d: _project_checks(d, tasks, cached.get(d.name), args.changed_only),
-        list(fleet.descriptors),
+        descriptors,
         jobs=args.jobs,
     )
     pairs = [pair for project_pairs in per_project for pair in project_pairs]
     fresh = [result for result, reused in pairs if not reused]
-    cache.save_results(fresh)
-    history_record(fresh)
+    probes = map_ordered(probe_ci, descriptors, jobs=args.jobs)
+    checked_at = _dt.datetime.now(tz=_dt.UTC).isoformat(timespec="seconds")
+    statuses = map_ordered(collect_cloud, descriptors, jobs=args.jobs)
+    remote = [r for _, results, _ in probes for r in results] + [
+        r for s in statuses for r in cloud_check_results(s, checked_at)
+    ]
+    cache.save_results(fresh + remote)
+    history_record(fresh + remote)
     alerts = fleet_alerts(fleet_snapshots(fleet))
     delivered = post_webhook(args.webhook, alerts) if args.webhook and alerts else None
     if args.json:
         _emit_json(
             {
-                "checks": [{**asdict(r), "cached": reused} for r, reused in pairs],
+                "checks": [{**asdict(r), "cached": reused} for r, reused in pairs]
+                + [{**asdict(r), "cached": False} for r in remote],
                 **alerts_payload(alerts),
                 "webhook": None if delivered is None else ("delivered" if delivered else "failed"),
             }
@@ -1235,7 +1250,8 @@ def _cmd_watch(args: argparse.Namespace) -> int:
     cached_note = f" ({reused_count} cached)" if reused_count else ""
     print(
         f"watch: {len(fleet.descriptors)} project(s), "
-        f"{len(fresh)} gate(s) refreshed{cached_note}, {len(alerts)} alert(s)"
+        f"{len(fresh)} gate(s) refreshed{cached_note}, "
+        f"{len(remote)} remote probe(s), {len(alerts)} alert(s)"
     )
     print(render_alerts(alerts))
     if delivered is not None:

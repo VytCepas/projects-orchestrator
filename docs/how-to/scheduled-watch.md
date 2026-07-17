@@ -1,11 +1,12 @@
 # Watch the fleet on a schedule
 
 `watch` is one pass of everything a scheduled observer needs: it runs the
-declared gates fleet-wide, merges the results into the checks cache, appends
-them to history (the trend column), then computes threshold alerts from the
+declared gates fleet-wide, probes each project's CI (via the forge its host
+names) and cloud state, merges everything into the checks cache, appends it
+to history (the trend column), then computes threshold alerts from the
 refreshed view and — when a webhook is configured — pushes them. It chains
-what `checks` and `notify` do separately, so a timer needs a single
-invocation.
+what `checks`, `ci`, `cloud-status` and `notify` do separately, so a timer
+needs a single invocation.
 
 ```bash
 projects-orchestrator watch --root ~/projects --webhook "$SLACK_WEBHOOK"
@@ -46,6 +47,11 @@ project's current clean HEAD is reused, so an untouched healthy project costs
 nothing per firing. Fails are never reused — a red gate reruns every hour, so
 recovery is noticed within one firing. Drop the flag from your copy of the
 service file to force every gate to run from scratch each time.
+
+The CI and cloud probes always run regardless of `--changed-only` — an
+unchanged local HEAD says nothing about a forge or a deployment, whose state
+moves without any local edit. They stay cheap: a couple of forge calls per
+project, and `deploy: none` projects cost nothing.
 
 ## Check it
 
