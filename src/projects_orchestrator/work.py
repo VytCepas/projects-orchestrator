@@ -323,7 +323,15 @@ def list_runs(project: str = "") -> list[runs.AgentRun]:
 
 
 def logs(run_id: str, lines: int = DEFAULT_LOG_LINES) -> list[str]:
-    """The tail of a run's captured agent output; ``[]`` when there is none yet."""
+    """The tail of a run's captured agent output; ``[]`` when there is none yet.
+
+    ``lines <= 0`` returns nothing, like ``tail -n 0``. The guard is not
+    defensive padding: ``[-0:]`` is ``[0:]``, so asking for zero lines would
+    otherwise print the **entire** agent log — the opposite of the request, and
+    an unbounded dump of the largest file this command touches.
+    """
+    if lines <= 0:
+        return []
     run = runs.load(run_id)
     if run is None or not run.log_path:
         return []

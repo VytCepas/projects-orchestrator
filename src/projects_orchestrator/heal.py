@@ -343,21 +343,35 @@ def _default_open_pr(
     return PrOutcome(ok=True, url=landed.pr_url)
 
 
+def _why_failed(result: RunResult) -> str:
+    """Explain a failed git subcommand, wherever it chose to explain itself.
+
+    Reading only ``stderr`` loses the two cases that matter most, and loses them
+    as an **empty string** — a BRANCH_FAILED with no reason, which is the least
+    actionable thing this can report.
+
+    ``git commit`` with nothing staged exits 1 and writes "nothing to commit,
+    working tree clean" to **stdout**. That is not an obscure edge: it is what
+    happens whenever the agent declared success without changing a file, so the
+    one message that would have told the operator *why* was the one dropped. And
+    a timeout or OSError never ran git at all — both streams are empty and the
+    reason is in ``error``.
+    """
+    reason = result.stderr.strip() or result.stdout.strip() or (result.error or "").strip()
+    return (reason or f"{result.command} failed with no output")[-300:]
+
+
 def _commit_and_land(
     descriptor: ProjectDescriptor, branch: str, tasks: tuple[str, ...], open_pr: OpenPr
 ) -> HealResult:
     """Commit a verified fix, push the branch, and open a PR."""
     add = _run_argv(["git", "add", "-A"], cwd=descriptor.path)
     if not add.ok:
-        return HealResult(
-            descriptor.name, BRANCH_FAILED, branch=branch, detail=add.stderr.strip()[-300:]
-        )
+        return HealResult(descriptor.name, BRANCH_FAILED, branch=branch, detail=_why_failed(add))
     message = f"fix: repair failing {', '.join(tasks)} (automated)"
     commit = _run_argv(["git", "commit", "-m", message], cwd=descriptor.path)
     if not commit.ok:
-        return HealResult(
-            descriptor.name, BRANCH_FAILED, branch=branch, detail=commit.stderr.strip()[-300:]
-        )
+        return HealResult(descriptor.name, BRANCH_FAILED, branch=branch, detail=_why_failed(commit))
     # Every write leaves through the boundary (ADR-007 §3): a non-protected branch
     # and a draft PR, or nothing. Enforced HERE and not by the child's pre-push
     # hook, because the projects this system most needs to touch are the ones that

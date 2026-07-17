@@ -22,7 +22,6 @@ below); everything else is reusable by any agent.
 - [`.agents/docs/`](.agents/docs/) — system of record: ADRs and development guides
 - `.agents/docs/CODE_MAP.md` — generated map of what each module does; **read before grepping** (generate/refresh with `just code-map`)
 - [`.agents/CAPABILITIES.md`](.agents/CAPABILITIES.md) — generated inventory of the hooks, skills and MCP servers this project ships
->>>>>>> origin/main
 
 ## Skills (load on demand)
 

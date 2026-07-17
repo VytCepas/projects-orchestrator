@@ -47,11 +47,17 @@ def _hook_item(descriptor: ProjectDescriptor) -> HardeningItem | None:
     health = hook_health(descriptor)
     if health not in {"missing", "partial"}:
         return None
+    # Resolve against the descriptor's own config root — ``.agents/scripts`` on a
+    # PI-627 scaffold, ``.claude/scripts`` on a legacy one — never a hardcoded
+    # prefix, for the same reason as :func:`_memory_items` below. An action line
+    # naming a path that does not exist is worse than no action line: the only
+    # item whose whole job is to tell the operator what to run, and it was a 404.
+    script = descriptor.path / descriptor.config_root / "scripts" / "install_hooks.sh"
     return HardeningItem(
         category="hooks",
         status=WARN,
         detail=f"git hooks {health}; local enforcement is inactive",
-        action=f"run {descriptor.path / '.claude/scripts/install_hooks.sh'}",
+        action=f"run {script}",
     )
 
 

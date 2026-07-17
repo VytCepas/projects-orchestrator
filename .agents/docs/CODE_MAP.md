@@ -42,6 +42,12 @@ Per-project deploy/runtime status, driven by the contract-v2 deploy block.
 - `def classify_run` — Map one gh run record to a settlement state (pure).
 - `def wait_for_deploy` — Follow a dispatched deploy to its conclusion; never raises.
 
+### `projects_orchestrator/adapters/forge.py`
+
+Route a project to the CI adapter its own descriptor names.
+
+- `def probe_ci` — Probe one project's CI via the forge its host names; never raises.
+
 ### `projects_orchestrator/adapters/gcp.py`
 
 Read-only GCP inventory — list what is live, and never touch it.
@@ -101,7 +107,6 @@ CI state from a declared status URL — for projects whose CI is not a forge's.
 
 Optional LLM ``/ask`` mode — English in, an existing intent out.
 
-- `def ask_enabled` — Return whether the operator has opted into /ask.
 - `def build_prompt` — Render the intent-selection prompt (pure).
 - `def parse_intent_reply` — Extract a valid intent from the model's reply (pure).
 - `def resolve_ask` — Resolve a natural-language question to an intent, or an error line.
@@ -446,6 +451,7 @@ Live fleet dashboard — a read-only view that can, opt-in, act on the fleet.
 - `class ActionStatus` — The latest mutating action tracked for one project.
 - `class ActionTracker` — Thread-safe record of the most recent mutating action per project.
 - `def is_loopback` — Whether binding to ``host`` keeps the server loopback-only (pure).
+- `def host_header_is_loopback` — Whether a request's ``Host`` header names a loopback target (pure).
 - `def run_recheck` — Re-run one project's declared gates and refresh the cache; never raises.
 - `def run_heal` — Heal one project's red lint/test gate end to end; never raises.
 - `def snapshot_payload` — Build the fleet-overview JSON payload (pure w.r.t. ``generated_at``).

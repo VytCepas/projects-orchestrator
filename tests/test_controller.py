@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 from conftest import add_memory, make_project, make_project_v2
 
-from projects_orchestrator.adapters import cloud
+from projects_orchestrator import cache
+from projects_orchestrator.adapters import cloud, forge
 from projects_orchestrator.controller import ControllerContext, dispatch, parse_command
 from projects_orchestrator.registry import FleetConfig
 
@@ -242,6 +243,42 @@ def test_dispatch_ci_reports_per_project(fleet_dir: Path) -> None:
     make_project(fleet_dir, "alpha")
     lines = list(dispatch(parse_command("ci"), _ctx(fleet_dir)))
     assert lines[0].startswith("alpha: CI ")
+
+
+_CI_URL_CONFIG = (
+    "project:\n  name: alpha\n  project_init_contract_version: 2\n"
+    "  project_init_host: github.com\nlanguage: python\n"
+    'ci:\n  status_url: "http://jenkins.example/job/alpha/lastBuild/api/json"\n'
+)
+
+
+def test_dispatch_ci_honors_a_declared_status_url(fleet_dir: Path, monkeypatch) -> None:
+    # /ci called `gh` unconditionally while the `ci` CLI routed by forge. A
+    # project declaring "my CI is Jenkins" got asked `gh` from the REPL, which
+    # answers `unknown` — and /ci CACHES what it probes, so the REPL wrote that
+    # `unknown` over the correct answer the CLI had recorded.
+    monkeypatch.setattr(forge, "probe_status_url", lambda _d: "fail")
+    monkeypatch.setattr(forge, "collect_github", _unreachable_forge)
+    make_project(fleet_dir, "alpha", config_text=_CI_URL_CONFIG)
+    lines = list(dispatch(parse_command("ci"), _ctx(fleet_dir)))
+    assert lines[0].startswith("alpha: CI fail")
+
+
+def test_dispatch_ci_caches_the_routed_result_not_an_unknown(
+    fleet_dir: Path, tmp_path: Path, monkeypatch
+) -> None:
+    # The cache is the damage: a wrong probe that only printed would be a nuisance.
+    monkeypatch.setattr(forge, "probe_status_url", lambda _d: "fail")
+    monkeypatch.setattr(forge, "collect_github", _unreachable_forge)
+    make_project(fleet_dir, "alpha", config_text=_CI_URL_CONFIG)
+    cache_file = tmp_path / "checks.json"
+    ctx = ControllerContext(config=FleetConfig(roots=(fleet_dir,)), cache_file=cache_file)
+    list(dispatch(parse_command("ci"), ctx))
+    assert cache.load_results(cache_file)["alpha"]["ci"].status == "fail"
+
+
+def _unreachable_forge(_descriptor):
+    raise AssertionError("gh must not be probed when the project declares a status_url")
 
 
 def test_dispatch_upgrade_reports_per_project(fleet_dir: Path) -> None:

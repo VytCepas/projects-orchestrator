@@ -191,6 +191,23 @@ def test_logs_on_an_unknown_run_is_empty() -> None:
     assert work.logs("no-such-run") == []
 
 
+def test_logs_of_zero_lines_returns_nothing_not_everything(fleet_dir: Path) -> None:
+    # `[-0:]` is `[0:]`, so `work --logs <id> -n 0` printed the ENTIRE agent log —
+    # the exact opposite of the request, and an unbounded dump of the biggest file
+    # this command touches. `-n 0` is reachable straight from the CLI (type=int).
+    run = _launched(fleet_dir)
+    Path(run.log_path).write_text("line one\nline two\nline three\n", encoding="utf-8")
+    assert work.logs(run.id, lines=0) == []
+
+
+def test_logs_of_negative_lines_returns_nothing_too(fleet_dir: Path) -> None:
+    # `-n -2` would otherwise slice `[2:]` — dropping the HEAD and keeping the
+    # tail-but-not-really, which is nobody's idea of "minus two lines".
+    run = _launched(fleet_dir)
+    Path(run.log_path).write_text("line one\nline two\nline three\n", encoding="utf-8")
+    assert work.logs(run.id, lines=-2) == []
+
+
 def test_logs_before_anything_is_written_is_empty(fleet_dir: Path) -> None:
     run = _launched(fleet_dir)
     Path(run.log_path).unlink(missing_ok=True)

@@ -41,15 +41,13 @@ from projects_orchestrator.adapters.cloud import (
     wait_for_deploy,
 )
 from projects_orchestrator.adapters.cloud import as_check_results as cloud_check_results
-from projects_orchestrator.adapters.github import as_check_results, collect_github
-from projects_orchestrator.adapters.gitlab import as_check_results as gitlab_check_results
-from projects_orchestrator.adapters.gitlab import collect_gitlab, provider_is_gitlab
+from projects_orchestrator.adapters.forge import probe_ci
+from projects_orchestrator.adapters.gitlab import provider_is_gitlab
 from projects_orchestrator.adapters.project_init import (
     latest_upstream_version,
     parse_scaffold_result,
     trigger_upgrade,
 )
-from projects_orchestrator.adapters.status_url import probe_status_url, status_check_results
 from projects_orchestrator.audit import AuditReport, audit_project, render_markdown
 from projects_orchestrator.capabilities import (
     HOOK,
@@ -430,7 +428,7 @@ def _cmd_ci(args: argparse.Namespace) -> int:
             print(f"unknown project: {args.project}", file=sys.stderr)
             return 2
         selected = [descriptor]
-    probes = map_ordered(_probe_ci, selected)
+    probes = map_ordered(probe_ci, selected)
     cache.save_results([r for _, results, _ in probes for r in results])
     if args.json:
         return _emit_json([payload for payload, _, _ in probes])
@@ -438,44 +436,6 @@ def _cmd_ci(args: argparse.Namespace) -> int:
         count = "?" if payload["count"] is None else str(payload["count"])
         print(f"{payload['project']}: CI {payload['ci']}, {count} open {payload['unit']}(s)")
     return 1 if any(failed for _, _, failed in probes) else 0
-
-
-def _probe_ci(
-    descriptor: ProjectDescriptor,
-) -> tuple[dict[str, object], list[CheckResult], bool]:
-    """Probe one project's CI via the forge its host names; never raises.
-
-    Returns a ``(display payload, cacheable results, ci-failed)`` triple so the
-    ``ci`` command can render, cache, and set its exit code uniformly across
-    GitHub and GitLab.
-    """
-    checked_at = _dt.datetime.now(tz=_dt.UTC).isoformat(timespec="seconds")
-    if descriptor.ci is not None:
-        # An explicitly declared status URL wins over the forge: the project is
-        # telling us its CI is somewhere else (Jenkins, Buildkite, a self-hosted
-        # runner), and `gh`/`glab` would report `unknown` for it forever.
-        ci = probe_status_url(descriptor)
-        payload: dict[str, object] = {
-            "project": descriptor.name,
-            "ci": ci,
-            # A build endpoint reports builds, not code review — there is no
-            # PR/MR count to show, and `?` is the honest cell.
-            "count": None,
-            "unit": "PR",
-        }
-        return payload, status_check_results(descriptor.name, ci, checked_at), ci == "fail"
-    if provider_is_gitlab(descriptor):
-        gl = collect_gitlab(descriptor)
-        payload = {
-            "project": gl.project,
-            "ci": gl.ci,
-            "count": gl.open_mrs,
-            "unit": "MR",
-        }
-        return payload, gitlab_check_results(gl, checked_at), gl.ci == "fail"
-    gh = collect_github(descriptor)
-    payload = {"project": gh.project, "ci": gh.ci, "count": gh.open_prs, "unit": "PR"}
-    return payload, as_check_results(gh, checked_at), gh.ci == "fail"
 
 
 def _cmd_cloud_status(args: argparse.Namespace) -> int:
