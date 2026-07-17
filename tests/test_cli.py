@@ -500,6 +500,98 @@ def test_notify_with_alerts_exits_one(fleet_dir: Path) -> None:
     assert main(["notify", "--root", str(fleet_dir)]) == 1
 
 
+def test_watch_quiet_fleet_exits_zero(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha", tooling={"lint": "true", "test": "true"})
+    assert main(["watch", "--root", str(fleet_dir)]) == 0
+
+
+def test_watch_failing_gate_exits_one(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha", tooling={"test": "false"})
+    assert main(["watch", "--root", str(fleet_dir)]) == 1
+
+
+def test_watch_renders_the_alert(fleet_dir: Path, capsys) -> None:
+    make_project(fleet_dir, "alpha", tooling={"test": "false"})
+    main(["watch", "--root", str(fleet_dir)])
+    assert "[critical] alpha: tests are failing" in capsys.readouterr().out
+
+
+def test_watch_empty_root_exits_two(fleet_dir: Path) -> None:
+    # A watch timer pointed at an empty root is a misconfiguration, not a
+    # permanently quiet fleet — it must fail the unit, not report all-clear.
+    assert main(["watch", "--root", str(fleet_dir)]) == 2
+
+
+def test_watch_records_history_read_back_by_history_command(fleet_dir: Path, capsys) -> None:
+    make_project(fleet_dir, "alpha", tooling={"test": "true"})
+    main(["watch", "--root", str(fleet_dir), "--task", "test"])
+    capsys.readouterr()
+    main(["history", "alpha", "--root", str(fleet_dir)])
+    assert "test:" in capsys.readouterr().out
+
+
+def test_watch_posts_alerts_to_webhook(fleet_dir: Path, monkeypatch) -> None:
+    make_project(fleet_dir, "alpha", tooling={"test": "false"})
+    posted = {}
+    monkeypatch.setattr(
+        cli, "post_webhook", lambda url, alerts: posted.update(url=url, alerts=alerts) or True
+    )
+    main(["watch", "--root", str(fleet_dir), "--webhook", "https://hooks.example/x"])
+    assert posted["url"] == "https://hooks.example/x" and posted["alerts"]
+
+
+def test_watch_quiet_fleet_never_calls_the_webhook(fleet_dir: Path, monkeypatch) -> None:
+    make_project(fleet_dir, "alpha", tooling={"lint": "true", "test": "true"})
+    calls: list[str] = []
+    monkeypatch.setattr(cli, "post_webhook", lambda url, _alerts: calls.append(url) or True)
+    main(["watch", "--root", str(fleet_dir), "--webhook", "https://hooks.example/x"])
+    assert calls == []
+
+
+def test_watch_probes_remote_ci_before_alerting(fleet_dir: Path, monkeypatch) -> None:
+    # Local gates green, but the forge turned red after the last manual `ci`
+    # run: the scheduled watch must refresh remote state itself, not sleep on
+    # a stale cache (PR #176 review).
+    make_project(fleet_dir, "alpha", tooling={"lint": "true", "test": "true"})
+    red = cli.CheckResult(
+        project="alpha", task="ci", status="fail", checked_at="2026-07-17T00:00:00+00:00"
+    )
+    monkeypatch.setattr(
+        cli,
+        "probe_ci",
+        lambda d: ({"project": d.name, "ci": "fail", "count": 0, "unit": "PR"}, [red], True),
+    )
+    assert main(["watch", "--root", str(fleet_dir)]) == 1
+
+
+def test_watch_probes_cloud_state_before_alerting(fleet_dir: Path, monkeypatch, capsys) -> None:
+    # Same for a deployment that went unhealthy since the last cloud-status run.
+    make_project(fleet_dir, "alpha", tooling={"lint": "true", "test": "true"})
+    sick = cli.CheckResult(
+        project="alpha", task="cloud", status="fail", checked_at="2026-07-17T00:00:00+00:00"
+    )
+    monkeypatch.setattr(cli, "cloud_check_results", lambda _s, _at: [sick])
+    main(["watch", "--root", str(fleet_dir)])
+    assert "deployment is unhealthy" in capsys.readouterr().out
+
+
+def test_watch_json_carries_checks_and_alerts(fleet_dir: Path, capsys) -> None:
+    make_project(fleet_dir, "alpha", tooling={"test": "false"})
+    main(["watch", "--root", str(fleet_dir), "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["checks"] and payload["alerts"]
+
+
+def test_watch_changed_only_reuses_a_cached_pass(fleet_dir: Path, capsys) -> None:
+    project = make_project(fleet_dir, "alpha", tooling={"lint": "true"})
+    git_init(project)
+    main(["watch", "--root", str(fleet_dir), "--task", "lint", "--changed-only"])
+    capsys.readouterr()
+    main(["watch", "--root", str(fleet_dir), "--task", "lint", "--changed-only", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["checks"][0]["cached"] is True
+
+
 def test_serve_command_dispatches_to_server(fleet_dir: Path, monkeypatch) -> None:
     # serve() blocks, so verify wiring by capturing the call instead of running it.
     import projects_orchestrator.__main__ as cli
