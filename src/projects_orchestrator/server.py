@@ -157,6 +157,26 @@ def is_loopback(host: str) -> bool:
         return False
 
 
+def host_header_is_loopback(host_header: str | None) -> bool:
+    """Whether a request's ``Host`` header names a loopback target (pure).
+
+    The same-origin defence behind ``--enable-actions`` assumes the browser only
+    reaches this server as ``localhost``/``127.0.0.1``. A DNS-rebinding attacker
+    defeats that assumption by pointing their *own* domain at ``127.0.0.1``: the
+    bind stays loopback, so :func:`is_loopback` on the bind host cannot catch the
+    forged origin — only the request's ``Host`` header reveals it. A missing
+    header (HTTP/1.1 requires one) is rejected.
+    """
+    if not host_header:
+        return False
+    host = host_header
+    if host.startswith("["):  # bracketed IPv6 literal: [::1] or [::1]:port
+        host = host[1:].partition("]")[0]
+    elif host.count(":") == 1:  # host:port (a bare IPv6 has 2+ colons, no port)
+        host = host.partition(":")[0]
+    return is_loopback(host)
+
+
 def run_recheck(descriptor: ProjectDescriptor, cache_file: Path | None) -> str:
     """Re-run one project's declared gates and refresh the cache; never raises.
 
@@ -290,10 +310,28 @@ class _Handler(BaseHTTPRequestHandler):
     token: str = ""
     tracker: ActionTracker
 
+    def _host_untrusted(self) -> bool:
+        """Reject (with 403) a rebinding request when actions are enabled.
+
+        Only meaningful while ``actions_enabled``: that mode embeds the CSRF token
+        in the page and exposes mutating POSTs, and it is reachable only on a
+        loopback bind (``serve`` enforces that), so a non-loopback ``Host`` header
+        can only be a DNS-rebinding forgery. Read-only mode carries no token and
+        may be deliberately shared on a LAN, so it is left unguarded.
+        """
+        if not self.actions_enabled:
+            return False
+        if host_header_is_loopback(self.headers.get("Host")):
+            return False
+        self._send_json({"error": "untrusted Host header"}, status=403)
+        return True
+
     def do_GET(self) -> None:
         """Dispatch a GET to the page or a JSON endpoint."""
         path = self.path.split("?", 1)[0]
         try:
+            if self._host_untrusted():
+                return
             if path in ("/", "/index.html"):
                 page = render_page(self.token, self.actions_enabled)
                 self._send(200, "text/html; charset=utf-8", page.encode("utf-8"))
@@ -320,6 +358,8 @@ class _Handler(BaseHTTPRequestHandler):
                     {"error": "mutating actions are disabled (start serve with --enable-actions)"},
                     status=403,
                 )
+                return
+            if self._host_untrusted():
                 return
             if not secrets.compare_digest(self.headers.get(TOKEN_HEADER, ""), self.token):
                 self._send_json({"error": "missing or invalid CSRF token"}, status=403)

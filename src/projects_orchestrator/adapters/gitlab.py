@@ -26,7 +26,15 @@ CI_RUNNING = "running"
 
 # glab reads the project from the working directory's remote; both degrade offline.
 _CI_COMMAND = "glab ci list -F json -P 1"
+# -P 100 is GitLab's maximum page size (the REST API clamps per_page to 100), so
+# unlike github.py's `--limit 1000` this cannot simply be raised: a project with
+# more than 100 open MRs reports exactly 100. Lifting it needs real pagination
+# (repeated --page requests), not a bigger number. See MR_COUNT_CAP.
 _MR_COMMAND = "glab mr list --output json -P 100"
+
+#: The most open MRs :func:`parse_mr_count` can observe in one ``glab`` call.
+#: Exposed so callers can tell "100 open MRs" from "at least 100 open MRs".
+MR_COUNT_CAP = 100
 
 _GLAB_TIMEOUT = 20.0
 

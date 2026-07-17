@@ -54,9 +54,26 @@ def test_a_traversing_name_cannot_climb_out_when_joined() -> None:
 def test_a_name_that_reduces_to_nothing_still_yields_a_usable_component() -> None:
     # "" would join to the parent directory; "." and ".." traverse. None of
     # those are acceptable outputs, so it must fall back to something inert.
-    assert safe_component("...") == FALLBACK
-    assert safe_component("///") == FALLBACK
-    assert safe_component("") == FALLBACK
+    assert safe_component("...").startswith(FALLBACK)
+    assert safe_component("///").startswith(FALLBACK)
+    assert safe_component("").startswith(FALLBACK)
+
+
+def test_distinct_names_that_clean_identically_stay_distinct() -> None:
+    # "api/foo" and "api foo" both clean to "api-foo". If they shared a
+    # component they would share a supervisor state file — and `stop` on one
+    # could kill the other's PID. Cleaned names carry a hash of the original.
+    assert safe_component("api/foo") != safe_component("api foo")
+
+
+def test_a_cleaned_name_cannot_impersonate_a_literal_sibling() -> None:
+    # A project literally named "api-foo" keeps its component untouched;
+    # "api/foo" must not reduce onto it.
+    assert safe_component("api/foo") != safe_component("api-foo")
+
+
+def test_degenerate_names_do_not_share_the_fallback() -> None:
+    assert safe_component("...") != safe_component("///")
 
 
 def test_a_name_never_starts_with_a_dash() -> None:

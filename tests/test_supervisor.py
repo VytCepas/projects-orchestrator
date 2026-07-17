@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 import pytest
-from conftest import make_project
+from conftest import CONFIG_TEMPLATE, make_project
 
 from projects_orchestrator.__main__ import main
 from projects_orchestrator.descriptor import load_descriptor
@@ -248,3 +248,85 @@ def test_cli_start_refused_exits_1(fleet_dir: Path, monkeypatch) -> None:
     monkeypatch.setattr(sup, "_mem_available_bytes", lambda: 1)
     make_project(fleet_dir, "alpha", tooling={"run": "sleep 30"})
     assert main(["start", "alpha", "--root", str(fleet_dir)]) == 1
+
+
+def test_start_reports_failure_when_it_cannot_record_state(
+    fleet_dir: Path, tmp_path: Path, monkeypatch
+) -> None:
+    import projects_orchestrator.supervisor as sup
+
+    monkeypatch.setattr(sup, "_state_file", lambda _p: tmp_path / "no-such-dir" / "alpha.json")
+    assert "failed to start" in start(_runnable(fleet_dir))
+
+
+def test_start_kills_a_process_whose_state_it_could_not_record(
+    fleet_dir: Path, tmp_path: Path, monkeypatch
+) -> None:
+    # The process is ALREADY RUNNING when the state write happens, so reporting
+    # "failed to start" and walking away strands a process nothing can find:
+    # liveness is looked up via the record that just failed to write, so `stop`
+    # reports "not running" while the port stays bound. The marker proves the
+    # command was actually killed rather than merely reported as failed.
+    import projects_orchestrator.supervisor as sup
+
+    monkeypatch.setattr(sup, "_state_file", lambda _p: tmp_path / "no-such-dir" / "alpha.json")
+    marker = tmp_path / "marker"
+    start(_runnable(fleet_dir, command=f"sleep 2; touch {marker}"))
+    time.sleep(3.0)
+    assert not marker.exists()
+
+
+# --- The project name is a CHILD repo's, not ours ----------------------------
+
+
+def _hostile_named(fleet_dir: Path, name: str):
+    """A project whose config.yaml declares an absolute path as its own name."""
+    return load_descriptor(
+        make_project(
+            fleet_dir,
+            "alpha",
+            config_text=CONFIG_TEMPLATE.format(
+                name=name, tooling='  run_command: "sleep 30"\n', memory_path=".claude/memory"
+            ),
+        )
+    )
+
+
+def test_a_hostile_project_name_cannot_write_state_outside_the_state_dir(
+    fleet_dir: Path, tmp_path: Path
+) -> None:
+    # `state_dir() / "/tmp/owned.json"` IS `/tmp/owned.json` — an absolute
+    # component discards everything to its left. `name` is read verbatim from a
+    # CHILD repo's config.yaml, so a project naming itself this would have had
+    # its state file written exactly where it asked (and unlinked on stop).
+    hostile = str(tmp_path / "pwned")
+    descriptor = _hostile_named(fleet_dir, hostile)
+    try:
+        start(descriptor)
+        assert not Path(f"{hostile}.json").exists()
+    finally:
+        stop(descriptor)
+
+
+def test_a_hostile_project_name_cannot_write_a_log_outside_the_state_dir(
+    fleet_dir: Path, tmp_path: Path
+) -> None:
+    hostile = str(tmp_path / "pwned")
+    descriptor = _hostile_named(fleet_dir, hostile)
+    try:
+        start(descriptor)
+        assert not Path(f"{hostile}.log").exists()
+    finally:
+        stop(descriptor)
+
+
+def test_a_hostile_project_name_still_starts_and_is_tracked(
+    fleet_dir: Path, tmp_path: Path
+) -> None:
+    # Sanitising must not break the project — it is governed like any other.
+    descriptor = _hostile_named(fleet_dir, str(tmp_path / "pwned"))
+    try:
+        start(descriptor)
+        assert running_state(descriptor) is not None
+    finally:
+        stop(descriptor)

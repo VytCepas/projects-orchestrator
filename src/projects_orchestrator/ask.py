@@ -69,11 +69,6 @@ _API_TIMEOUT = 30.0
 Completer = Callable[[str, str], str]
 
 
-def ask_enabled(env: Mapping[str, str] | os._Environ[str]) -> bool:
-    """Return whether the operator has opted into /ask."""
-    return bool(env.get(ASK_MODEL_ENV, "").strip())
-
-
 def build_prompt(question: str, project_names: tuple[str, ...]) -> str:
     """Render the intent-selection prompt (pure).
 

@@ -19,7 +19,7 @@ from conftest import (
 import projects_orchestrator.__main__ as cli
 from projects_orchestrator import __version__
 from projects_orchestrator.__main__ import main
-from projects_orchestrator.adapters import cloud
+from projects_orchestrator.adapters import cloud, forge
 
 
 @pytest.fixture(autouse=True)
@@ -394,8 +394,10 @@ _CI_URL_CONFIG = (
 def test_ci_declared_status_url_beats_the_forge(fleet_dir: Path, monkeypatch, capsys) -> None:
     # The project says "my CI is Jenkins" — even on a github.com host, gh must
     # not be the thing we ask, or we would report `unknown` forever (#100).
-    monkeypatch.setattr(cli, "probe_status_url", lambda _d: "fail")
-    monkeypatch.setattr(cli, "collect_github", _unreachable_forge)
+    # Patched on the forge router, which is where the routing now lives — the
+    # `ci` CLI and the controller's /ci share it rather than each doing their own.
+    monkeypatch.setattr(forge, "probe_status_url", lambda _d: "fail")
+    monkeypatch.setattr(forge, "collect_github", _unreachable_forge)
     make_project(fleet_dir, "alpha", config_text=_CI_URL_CONFIG)
     assert main(["ci", "--root", str(fleet_dir)]) == 1
     assert "CI fail" in capsys.readouterr().out

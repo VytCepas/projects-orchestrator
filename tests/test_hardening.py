@@ -28,6 +28,26 @@ def test_checklist_flags_missing_hooks(fleet_dir: Path) -> None:
     assert any(item.category == "hooks" for item in report[0].items)
 
 
+def test_missing_hooks_action_targets_agents_layout(fleet_dir: Path) -> None:
+    # The hooks item's whole job is to name the script to run. It named
+    # `.claude/scripts/install_hooks.sh` on every project regardless of layout —
+    # a path that does not exist on a PI-627 scaffold, where the lifecycle
+    # scripts live under `.agents/`. An action line that 404s is worse than none.
+    project = make_project(fleet_dir, "alpha", layout=".agents")
+    _with_uninstalled_hook(project)
+    report = checklist([_descriptor(project)], {})
+    action = next(item.action for item in report[0].items if item.category == "hooks")
+    assert action.endswith(".agents/scripts/install_hooks.sh")
+
+
+def test_missing_hooks_action_targets_legacy_layout(fleet_dir: Path) -> None:
+    project = make_project(fleet_dir, "alpha", layout=".claude")
+    _with_uninstalled_hook(project)
+    report = checklist([_descriptor(project)], {})
+    action = next(item.action for item in report[0].items if item.category == "hooks")
+    assert action.endswith(".claude/scripts/install_hooks.sh")
+
+
 def test_checklist_flags_missing_memory(fleet_dir: Path) -> None:
     project = make_project(fleet_dir, "alpha")
     report = checklist([_descriptor(project)], {})
