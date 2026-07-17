@@ -575,6 +575,34 @@ def test_watch_probes_cloud_state_before_alerting(fleet_dir: Path, monkeypatch, 
     assert "deployment is unhealthy" in capsys.readouterr().out
 
 
+def _died_supervised(fleet_dir: Path) -> None:
+    """A project whose supervised process has already died since last seen."""
+    import subprocess
+
+    from projects_orchestrator.descriptor import load_descriptor
+    from projects_orchestrator.supervisor import start as sup_start
+
+    project = make_project(
+        fleet_dir, "alpha", tooling={"lint": "true", "test": "true", "run": "sleep 0.05"}
+    )
+    sup_start(load_descriptor(project))
+    subprocess.run(["sleep", "0.3"], check=True)
+
+
+def test_watch_alerts_on_a_dead_supervised_process(fleet_dir: Path, capsys) -> None:
+    _died_supervised(fleet_dir)
+    assert main(["watch", "--root", str(fleet_dir)]) == 1
+    assert "supervised process died" in capsys.readouterr().out
+
+
+def test_watch_retires_the_process_check_once_supervision_is_gone(fleet_dir: Path) -> None:
+    # The death is observed once; the next pass reads the project as
+    # unsupervised and must drop the stale fail rather than re-alert forever.
+    _died_supervised(fleet_dir)
+    main(["watch", "--root", str(fleet_dir)])
+    assert main(["watch", "--root", str(fleet_dir)]) == 0
+
+
 def test_watch_json_carries_checks_and_alerts(fleet_dir: Path, capsys) -> None:
     make_project(fleet_dir, "alpha", tooling={"test": "false"})
     main(["watch", "--root", str(fleet_dir), "--json"])

@@ -26,6 +26,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from projects_orchestrator.checks import CheckResult
 from projects_orchestrator.descriptor import ProjectDescriptor
 from projects_orchestrator.naming import safe_component
 from projects_orchestrator.procs import pid_alive as _pid_alive
@@ -161,6 +162,50 @@ def running_state(descriptor: ProjectDescriptor) -> RunState | None:
         _clear_state(descriptor.name)
         return None
     return state
+
+
+def liveness_check(descriptor: ProjectDescriptor, checked_at: str) -> CheckResult | None:
+    """Process health as a standard ``CheckResult``, or ``None`` when nothing is supervised.
+
+    Joins the supervisor to the checks pipeline: **pass** while the recorded
+    pid is still the process we launched, **fail** when it died (or was
+    replaced by a pid-reuse impostor) since last seen, and ``None`` — absent,
+    not ``unknown`` — when there is no record at all, so a project that never
+    started (or stopped cleanly) carries no process check to misread.
+
+    A death is observed **once**: the probe shares :func:`running_state`'s
+    cleanup-on-sight, so the fail lands in the cache and history on the pass
+    that notices it, and the next pass reads the project as unsupervised. The
+    caller that maintains the cache is expected to drop the stale ``process``
+    entry when this returns ``None`` (see the ``watch`` command).
+
+    Args:
+        descriptor: The project to probe.
+        checked_at: ISO-8601 timestamp to stamp the result with.
+
+    Returns:
+        A ``process`` task result, or ``None`` when the project has no
+        supervised process on record.
+    """
+    recorded = _load_state(descriptor.name)
+    if recorded is None:
+        return None
+    state = running_state(descriptor)  # cleans the record when the pid is gone
+    if state is None:
+        return CheckResult(
+            project=descriptor.name,
+            task="process",
+            status="fail",
+            detail=f"pid {recorded.pid} died since last seen (started {recorded.started_at})",
+            checked_at=checked_at,
+        )
+    return CheckResult(
+        project=descriptor.name,
+        task="process",
+        status="pass",
+        detail=f"pid {state.pid} up since {state.started_at}",
+        checked_at=checked_at,
+    )
 
 
 def start(descriptor: ProjectDescriptor) -> str:
