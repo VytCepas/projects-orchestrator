@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from projects_orchestrator.cache import cache_path, load_results, save_results
+from projects_orchestrator.cache import cache_path, drop_result, load_results, save_results
 from projects_orchestrator.checks import CheckResult
 
 
@@ -88,3 +88,25 @@ def test_load_integer_duration_is_coerced_to_float(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     assert load_results(path)["app"]["lint"].duration == 3.0
+
+
+def test_drop_result_retires_one_task(tmp_path: Path) -> None:
+    path = tmp_path / "checks.json"
+    save_results([_result(task="lint"), _result(task="process")], path)
+    drop_result("alpha", "process", path)
+    assert set(load_results(path)["alpha"]) == {"lint"}
+
+
+def test_drop_result_removes_an_emptied_project(tmp_path: Path) -> None:
+    path = tmp_path / "checks.json"
+    save_results([_result(task="process")], path)
+    drop_result("alpha", "process", path)
+    assert "alpha" not in load_results(path)
+
+
+def test_drop_result_missing_entry_is_a_no_op(tmp_path: Path) -> None:
+    path = tmp_path / "checks.json"
+    save_results([_result(task="lint")], path)
+    drop_result("alpha", "process", path)
+    drop_result("ghost", "process", path)
+    assert load_results(path)["alpha"]["lint"].status == "pass"

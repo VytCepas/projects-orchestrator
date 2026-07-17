@@ -14,7 +14,7 @@ from projects_orchestrator.__main__ import main
 from projects_orchestrator.descriptor import load_descriptor
 from projects_orchestrator.fleet import fleet_rows, fleet_snapshots
 from projects_orchestrator.registry import FleetConfig, discover
-from projects_orchestrator.supervisor import logs, running_state, start, stop
+from projects_orchestrator.supervisor import liveness_check, logs, running_state, start, stop
 
 
 @pytest.fixture(autouse=True)
@@ -328,5 +328,83 @@ def test_a_hostile_project_name_still_starts_and_is_tracked(
     try:
         start(descriptor)
         assert running_state(descriptor) is not None
+    finally:
+        stop(descriptor)
+
+
+def test_liveness_check_is_absent_without_supervision(fleet_dir: Path) -> None:
+    # Never started: no process check at all — absent, not unknown.
+    descriptor = _runnable(fleet_dir)
+    assert liveness_check(descriptor, "2026-07-17T00:00:00+00:00") is None
+
+
+def test_liveness_check_passes_while_running(fleet_dir: Path) -> None:
+    descriptor = _runnable(fleet_dir)
+    start(descriptor)
+    try:
+        result = liveness_check(descriptor, "2026-07-17T00:00:00+00:00")
+        assert result is not None and (result.task, result.status) == ("process", "pass")
+    finally:
+        stop(descriptor)
+
+
+def test_liveness_check_fails_when_the_process_died(fleet_dir: Path) -> None:
+    descriptor = _runnable(fleet_dir, command="sleep 0.05")
+    start(descriptor)
+    subprocess.run(["sleep", "0.3"], check=True)
+    result = liveness_check(descriptor, "2026-07-17T00:00:00+00:00")
+    assert result is not None and result.status == "fail"
+
+
+def test_liveness_check_observes_a_death_once(fleet_dir: Path) -> None:
+    # Cleanup-on-sight: the fail is recorded on the pass that notices it; the
+    # next probe reads the project as unsupervised again.
+    descriptor = _runnable(fleet_dir, command="sleep 0.05")
+    start(descriptor)
+    subprocess.run(["sleep", "0.3"], check=True)
+    liveness_check(descriptor, "2026-07-17T00:00:00+00:00")
+    assert liveness_check(descriptor, "2026-07-17T00:00:00+00:00") is None
+
+
+def test_liveness_check_is_absent_after_a_clean_stop(fleet_dir: Path) -> None:
+    descriptor = _runnable(fleet_dir)
+    start(descriptor)
+    stop(descriptor)
+    assert liveness_check(descriptor, "2026-07-17T00:00:00+00:00") is None
+
+
+def test_a_death_survives_an_intervening_status_poll(fleet_dir: Path) -> None:
+    # A `status`/dashboard render between the death and the watch pass calls
+    # running_state, which used to delete the only record — the alerting pass
+    # then read the project as never-supervised (PR #177 review). The record
+    # is now retired into a tombstone only liveness_check consumes.
+    descriptor = _runnable(fleet_dir, command="sleep 0.05")
+    start(descriptor)
+    subprocess.run(["sleep", "0.3"], check=True)
+    assert running_state(descriptor) is None  # the intervening poll
+    result = liveness_check(descriptor, "2026-07-17T00:00:00+00:00")
+    assert result is not None and result.status == "fail"
+
+
+def test_a_restart_supersedes_an_unreported_death(fleet_dir: Path) -> None:
+    # The operator who relaunched the service does not need next hour's watch
+    # to tell them the previous incarnation died.
+    import signal
+
+    descriptor = _runnable(fleet_dir)
+    start(descriptor)
+    state = running_state(descriptor)
+    assert state is not None
+    os.kill(state.pid, signal.SIGKILL)
+    # The unreaped child lingers as a zombie os.kill still "sees"; pid_alive
+    # (via running_state) treats a zombie as dead, so poll through it.
+    deadline = time.monotonic() + 5
+    while running_state(descriptor) is not None and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert running_state(descriptor) is None  # death noticed, tombstoned
+    start(descriptor)
+    try:
+        result = liveness_check(descriptor, "2026-07-17T00:00:00+00:00")
+        assert result is not None and result.status == "pass"
     finally:
         stop(descriptor)

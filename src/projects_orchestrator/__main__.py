@@ -104,6 +104,7 @@ from projects_orchestrator.registry import (
 )
 from projects_orchestrator.server import DEFAULT_HOST, DEFAULT_PORT, is_loopback, serve
 from projects_orchestrator.status import clean_worktree_head, collect_status
+from projects_orchestrator.supervisor import liveness_check
 from projects_orchestrator.supervisor import logs as run_logs
 from projects_orchestrator.supervisor import start as run_start
 from projects_orchestrator.supervisor import stop as run_stop
@@ -1194,9 +1195,10 @@ def _cmd_watch(args: argparse.Namespace) -> int:
 
     Chains what ``checks``, ``ci``, ``cloud-status`` and ``notify`` do
     separately, so a timer needs a single invocation: run the declared gates
-    fleet-wide, probe each project's CI and cloud state, merge everything into
-    the cache, append it to history, then compute threshold alerts from the
-    refreshed fleet view and (optionally) POST them to a webhook.
+    fleet-wide, probe each project's CI, cloud state, and supervised-process
+    liveness, merge everything into the cache, append it to history, then
+    compute threshold alerts from the refreshed fleet view and (optionally)
+    POST them to a webhook.
 
     The remote probes always run — ``--changed-only`` economizes on the local
     gates only, because a cached pass at an unchanged HEAD says nothing about
@@ -1232,6 +1234,20 @@ def _cmd_watch(args: argparse.Namespace) -> int:
     remote = [r for _, results, _ in probes for r in results] + [
         r for s in statuses for r in cloud_check_results(s, checked_at)
     ]
+    # Supervised-process liveness joins the pass as one more probe. Where it
+    # is ABSENT (nothing supervised), the stale cache entry is retired rather
+    # than left as a last-known value: a process check must mean "supervised,
+    # and this is its health" — never "was supervised once". A project that
+    # declares its own `process` tooling gate owns that task key outright:
+    # the probe neither overwrites nor retires a user-declared gate's result.
+    for descriptor in descriptors:
+        if "process" in descriptor.tooling:
+            continue
+        result = liveness_check(descriptor, checked_at)
+        if result is None:
+            cache.drop_result(descriptor.name, "process")
+        else:
+            remote.append(result)
     cache.save_results(fresh + remote)
     history_record(fresh + remote)
     alerts = fleet_alerts(fleet_snapshots(fleet))

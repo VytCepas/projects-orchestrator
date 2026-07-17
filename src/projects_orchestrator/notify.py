@@ -63,6 +63,8 @@ def snapshot_alerts(snapshot: ProjectSnapshot) -> list[Alert]:
         alerts.append(Alert(name, CRITICAL, "ci", "CI is red"))
     if check_failed("cloud"):
         alerts.append(Alert(name, CRITICAL, "cloud", "deployment is unhealthy"))
+    if check_failed("process"):
+        alerts.append(Alert(name, CRITICAL, "process", "process is down"))
     if check_failed("lint"):
         alerts.append(Alert(name, WARNING, "lint", "lint is failing"))
     if snapshot.drift.status == "drift":

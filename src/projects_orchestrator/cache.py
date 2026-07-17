@@ -123,6 +123,34 @@ def save_results(
     return merged
 
 
+def drop_result(project: str, task: str, path: Path | None = None) -> None:
+    """Remove one ``(project, task)`` entry from the cache; never raises.
+
+    The merge-only :func:`save_results` can update an entry but not retire
+    one, and some truths are *absences*: a project whose supervised process
+    is gone should carry no ``process`` result at all, not a stale last-known
+    one. A missing entry is a no-op.
+
+    Args:
+        project: The project whose entry to remove.
+        task: The task to remove.
+        path: Cache file override (defaults to :func:`cache_path`).
+    """
+    path = path or cache_path()
+    with _locked(path):
+        merged = load_results(path)
+        if merged.get(project, {}).pop(task, None) is None:
+            return
+        if not merged[project]:
+            del merged[project]
+        serializable = {
+            proj: {t: asdict(result) for t, result in tasks.items()}
+            for proj, tasks in merged.items()
+        }
+        with contextlib.suppress(OSError, ValueError):
+            _atomic_write(path, json.dumps(serializable, indent=2))
+
+
 @contextlib.contextmanager
 def _locked(path: Path) -> Iterator[None]:
     """Hold an exclusive lock across the load-merge-write; best-effort.

@@ -136,3 +136,9 @@ def test_post_payload_never_raises_on_send_error() -> None:
         raise OSError("network down")
 
     assert post_payload("http://hook", {"text": "x"}, send=boom) is False
+
+
+def test_snapshot_alerts_flags_a_dead_process_as_critical(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")
+    alerts = snapshot_alerts(_snapshot(fleet_dir, _cached("process", "fail")))
+    assert Alert("alpha", CRITICAL, "process", "process is down") in alerts
