@@ -14,6 +14,7 @@ from projects_orchestrator.cost import RunCost
 from projects_orchestrator.descriptor import load_descriptor
 from projects_orchestrator.heal import (
     AGENT_FAILED,
+    BRANCH_FAILED,
     FIXED,
     NO_FAILURES,
     PUSH_FAILED,
@@ -25,6 +26,7 @@ from projects_orchestrator.heal import (
     PrOutcome,
     _agent_allowed_tools,
     _decode_agent_output,
+    _why_failed,
     build_heal_prompt,
     heal_fleet,
     heal_project,
@@ -32,6 +34,7 @@ from projects_orchestrator.heal import (
     render_fleet_heal_report,
     render_heal_result,
 )
+from projects_orchestrator.runner import RunResult
 
 
 @pytest.fixture(autouse=True)
@@ -228,6 +231,34 @@ def test_heal_project_verify_failed_when_gate_still_fails(fleet_dir: Path) -> No
     result = heal_project(descriptor, _fail("lint"), agent_run=noop_agent)
     assert result.status == VERIFY_FAILED
     assert "lint" in result.detail
+
+
+def test_a_run_that_changed_nothing_reports_why_not_an_empty_detail(fleet_dir: Path) -> None:
+    # The gate passes on re-verification (it was flaky, or someone else fixed it
+    # meanwhile) but the agent changed no file — so there is nothing to commit.
+    # git says exactly that on STDOUT and exits 1; reading only stderr reported
+    # BRANCH_FAILED with an empty detail, the least actionable thing this can say.
+    project = make_project(fleet_dir, "alpha", tooling={"lint": "true"})
+    git_init(project)
+    descriptor = load_descriptor(project)
+
+    def noop_agent(_descriptor: object, _prompt: str) -> AgentOutcome:
+        return AgentOutcome(ok=True, summary="looked but changed nothing")
+
+    result = heal_project(descriptor, _fail("lint"), agent_run=noop_agent)
+    assert result.status == BRANCH_FAILED
+    assert "nothing to commit" in result.detail
+
+
+def test_why_failed_falls_back_to_the_os_error_when_git_never_ran() -> None:
+    # A timeout or OSError leaves BOTH streams empty; the reason is in `error`.
+    result = RunResult(command="git commit", returncode=None, error="timed out after 60s")
+    assert "timed out after 60s" in _why_failed(result)
+
+
+def test_why_failed_never_returns_an_empty_string() -> None:
+    # Whatever happened, the operator gets something to act on.
+    assert _why_failed(RunResult(command="git commit", returncode=1)) != ""
 
 
 def test_heal_project_push_failed_without_remote(fleet_dir: Path) -> None:

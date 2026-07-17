@@ -202,6 +202,22 @@ def test_a_traversing_slug_cannot_escape_either(fleet_dir: Path) -> None:
     assert worktree_root() in tree.path.resolve().parents
 
 
+def test_prune_does_not_rmtree_outside_the_state_dir_for_an_absolute_name(
+    tmp_path: Path, fleet_dir: Path
+) -> None:
+    # prune builds `worktree_root() / project` and rmtree's stale children under
+    # it. Without sanitizing, an absolute `project` name discards the root and
+    # would iterate — and delete from — an attacker-chosen directory. Plant a
+    # stale dir there and prove prune leaves it untouched.
+    outside = tmp_path / "outside"
+    victim = outside / "stale-victim"
+    victim.mkdir(parents=True)
+    stale = time.time() - 30 * 86400
+    os.utime(victim, (stale, stale))
+    assert prune_expired(_repo(fleet_dir), str(outside)) == 0
+    assert victim.exists()
+
+
 # --- Retention must not deadlock the next run --------------------------------
 
 

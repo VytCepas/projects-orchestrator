@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from projects_orchestrator.descriptor import ProjectDescriptor
+from projects_orchestrator.naming import safe_component
 from projects_orchestrator.procs import pid_alive as _pid_alive
 from projects_orchestrator.procs import proc_start_ticks as _proc_start_ticks
 from projects_orchestrator.procs import terminate_group as _terminate_group
@@ -74,8 +75,19 @@ def state_dir() -> Path:
 
 
 def _state_file(project: str) -> Path:
-    """Return the state-file path for one project."""
-    return state_dir() / f"{project}.json"
+    """Return the state-file path for one project.
+
+    ``project`` is a CHILD repo's declared name, so it is sanitised before it
+    becomes a path: ``state_dir() / "/tmp/owned.json"`` *is* ``/tmp/owned.json``
+    — an absolute component discards everything to its left, and this path is
+    written to, read from, and unlinked. See :mod:`naming`.
+    """
+    return state_dir() / f"{safe_component(project)}.json"
+
+
+def _log_file(project: str) -> Path:
+    """Return the run-log path for one project (name sanitised as above)."""
+    return state_dir() / f"{safe_component(project)}.log"
 
 
 def _mem_available_bytes(meminfo: Path = Path("/proc/meminfo")) -> int | None:
@@ -173,7 +185,7 @@ def start(descriptor: ProjectDescriptor) -> str:
         return f"{descriptor.name}: refusing to start — {free // (1024 * 1024)} MiB free, need {MIN_FREE_MB} MiB"
 
     directory = state_dir()
-    log_path = directory / f"{descriptor.name}.log"
+    log_path = _log_file(descriptor.name)
     try:
         directory.mkdir(parents=True, exist_ok=True)
         with log_path.open("ab") as log_file:
@@ -186,14 +198,18 @@ def start(descriptor: ProjectDescriptor) -> str:
                 stdin=subprocess.DEVNULL,
                 start_new_session=True,
             )
-        state = RunState(
-            project=descriptor.name,
-            pid=process.pid,
-            started_at=_dt.datetime.now(tz=_dt.UTC).isoformat(timespec="seconds"),
-            command=command,
-            log_path=log_path,
-            start_ticks=_proc_start_ticks(process.pid),
-        )
+    except OSError as exc:
+        return f"{descriptor.name}: failed to start — {exc}"
+
+    state = RunState(
+        project=descriptor.name,
+        pid=process.pid,
+        started_at=_dt.datetime.now(tz=_dt.UTC).isoformat(timespec="seconds"),
+        command=command,
+        log_path=log_path,
+        start_ticks=_proc_start_ticks(process.pid),
+    )
+    try:
         _state_file(descriptor.name).write_text(
             json.dumps(
                 {
@@ -208,7 +224,15 @@ def start(descriptor: ProjectDescriptor) -> str:
             encoding="utf-8",
         )
     except OSError as exc:
-        return f"{descriptor.name}: failed to start — {exc}"
+        # The process is ALREADY RUNNING by the time its state is written, so a
+        # failed write (full disk, unwritable state dir) cannot just be reported:
+        # "failed to start" while the thing is alive strands a process nothing can
+        # find. Liveness is looked up through the record we just failed to write,
+        # so `running_state` says None, `stop` says "not running", and the fleet
+        # table shows a dash — while the port stays bound. Untracked-but-running
+        # is not a state this supervisor offers, so the launch is undone.
+        _terminate_group(state.pid, _STOP_GRACE_SECONDS)
+        return f"{descriptor.name}: failed to start — could not record run state ({exc})"
     return f"{descriptor.name}: started (pid {state.pid}, log {log_path})"
 
 
@@ -242,7 +266,7 @@ def logs(descriptor: ProjectDescriptor, lines: int = DEFAULT_LOG_LINES) -> list[
         readable log yet.
     """
     state = _load_state(descriptor.name)
-    log_path = state.log_path if state is not None else state_dir() / f"{descriptor.name}.log"
+    log_path = state.log_path if state is not None else _log_file(descriptor.name)
     try:
         text = log_path.read_text(encoding="utf-8", errors="replace")
     except OSError:

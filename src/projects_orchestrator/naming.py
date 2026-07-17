@@ -19,6 +19,7 @@ to a single, inert path component before it is ever joined.
 
 from __future__ import annotations
 
+import hashlib
 import re
 
 #: Everything outside this set becomes a dash. Note that ``/`` and ``.`` are the
@@ -35,8 +36,15 @@ def safe_component(name: str) -> str:
     """Reduce ``name`` to one inert path component (pure).
 
     Guarantees, in order of how badly you want them: the result contains no path
-    separator, is not ``.`` or ``..``, is not empty, and does not begin with a
-    dash (which would read as a flag were it ever passed to a CLI).
+    separator, is not ``.`` or ``..``, is not empty, does not begin with a dash
+    (which would read as a flag were it ever passed to a CLI) — and is
+    **injective for distinct inputs that needed cleaning**: a name the
+    sanitiser had to alter carries a short hash of the original, so ``api/foo``
+    and ``api.foo`` cannot both reduce to the component that a sibling
+    literally named ``api-foo`` already owns. Two projects sharing one state
+    file means ``stop`` can kill the other project's PID — collision is not a
+    cosmetic problem here. Names that were already safe pass through unchanged,
+    so existing state files keep their paths.
 
     Args:
         name: An untrusted name, typically ``descriptor.name``.
@@ -45,4 +53,7 @@ def safe_component(name: str) -> str:
         A string safe to use as exactly one path segment.
     """
     cleaned = _UNSAFE.sub("-", name).strip(".-")
-    return cleaned or FALLBACK
+    if cleaned == name and name:
+        return name
+    digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:8]
+    return f"{cleaned or FALLBACK}-{digest}"

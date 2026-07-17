@@ -143,3 +143,17 @@ def test_register_project_preserves_existing_entries(tmp_path: Path) -> None:
     register_project(fleet_file, make_project(tmp_path, "alpha"))
     register_project(fleet_file, make_project(tmp_path, "beta"))
     assert set(discover(load_fleet_config(fleet_file)).names) == {"alpha", "beta"}
+
+
+def test_register_project_preserves_exclude(tmp_path: Path) -> None:
+    fleet_file = tmp_path / "fleet.yaml"
+    fleet_file.write_text('projects: []\nexclude: ["archive-*"]\n', encoding="utf-8")
+    register_project(fleet_file, make_project(tmp_path, "alpha"))
+    assert load_fleet_config(fleet_file).exclude == ("archive-*",)
+
+
+def test_register_project_preserves_include_plain_repos(tmp_path: Path) -> None:
+    fleet_file = tmp_path / "fleet.yaml"
+    fleet_file.write_text("projects: []\ninclude_plain_repos: true\n", encoding="utf-8")
+    register_project(fleet_file, make_project(tmp_path, "alpha"))
+    assert load_fleet_config(fleet_file).include_plain_repos is True

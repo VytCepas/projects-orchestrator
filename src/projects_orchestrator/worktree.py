@@ -214,7 +214,7 @@ def prune_expired(repo: Path, project: str, expiry_days: int = DEFAULT_EXPIRY_DA
     """
     cutoff = time.time() - expiry_days * _SECONDS_PER_DAY
     try:
-        entries = list((worktree_root() / project).iterdir())
+        entries = list((worktree_root() / safe_component(project)).iterdir())
     except OSError:
         return 0
     pruned = 0
