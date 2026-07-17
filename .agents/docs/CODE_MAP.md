@@ -135,6 +135,7 @@ Persistent memory of the last known check results.
 - `def cache_path` — Return the checks-cache file path, honoring ``$XDG_CACHE_HOME``.
 - `def load_results` — Load cached check results; never raises.
 - `def save_results` — Merge new results into the cache and write it back; never raises.
+- `def drop_result` — Remove one ``(project, task)`` entry from the cache; never raises.
 
 ### `projects_orchestrator/campaign.py`
 
@@ -475,6 +476,7 @@ Start, stop, and watch long-running project processes.
 - `class RunState` — One supervised process, as recorded at start time.
 - `def state_dir` — Return the supervisor state directory, honoring ``$XDG_STATE_HOME``.
 - `def running_state` — Return the live run state for a project, cleaning up stale records.
+- `def liveness_check` — Process health as a standard ``CheckResult``, or ``None`` when nothing is supervised.
 - `def start` — Launch a project's declared ``run_command`` detached; never raises.
 - `def stop` — Terminate a project's supervised process; never raises.
 - `def logs` — Return the tail of a project's captured run output; never raises.
