@@ -17,7 +17,9 @@ WorkingDirectory=%h
 # Optional config. Create the file with mode 600 and put in it:
 #   PO_FLEET_ROOT=/path/to/your/projects   (if your fleet is not ~/projects)
 #   PO_SERVE_PORT=8787                     (bind port)
-#   PO_SERVE_ACTIONS=1                     (enable the re-check/heal buttons)
+#   PO_SERVE_ACTIONS=1                     (enable the re-check/heal buttons;
+#                                           exactly "1" — anything else,
+#                                           including 0/false, stays read-only)
 # The leading `-` makes the file optional: with no override the unit serves
 # ~/projects read-only on 127.0.0.1:8787.
 EnvironmentFile=-%h/.config/projects-orchestrator/serve.env
@@ -26,7 +28,11 @@ EnvironmentFile=-%h/.config/projects-orchestrator/serve.env
 # operator surface, and `serve` itself refuses --enable-actions on any
 # non-loopback bind (PO-156). Reach it from another device over an SSH tunnel
 # or tailscale, not by widening the bind.
-ExecStart=/bin/sh -c 'exec %h/.local/bin/projects-orchestrator serve --root "${PO_FLEET_ROOT:-%h/projects}" --host 127.0.0.1 --port "${PO_SERVE_PORT:-8787}" ${PO_SERVE_ACTIONS:+--enable-actions}'
+#
+# The actions gate compares against exactly "1", not mere non-emptiness: a
+# mutating surface must never be switched ON by a value that reads as OFF
+# (PO_SERVE_ACTIONS=0 or =false).
+ExecStart=/bin/sh -c 'exec %h/.local/bin/projects-orchestrator serve --root "${PO_FLEET_ROOT:-%h/projects}" --host 127.0.0.1 --port "${PO_SERVE_PORT:-8787}" $([ "${PO_SERVE_ACTIONS:-0}" = 1 ] && echo --enable-actions)'
 
 # A crashed dashboard should come back on its own; a broken config should not
 # flap forever. on-failure plus a small delay gives both.
