@@ -110,10 +110,20 @@ def _mem_available_bytes(meminfo: Path = Path("/proc/meminfo")) -> int | None:
     return None
 
 
+def _died_file(project: str) -> Path:
+    """Tombstone recording a death not yet reported (name sanitised as above)."""
+    return state_dir() / f"{safe_component(project)}.died.json"
+
+
 def _load_state(project: str) -> RunState | None:
     """Read one project's recorded state; ``None`` on any problem."""
+    return _read_record(project, _state_file(project))
+
+
+def _read_record(project: str, path: Path) -> RunState | None:
+    """Parse one recorded run state from ``path``; ``None`` on any problem."""
     try:
-        raw = json.loads(_state_file(project).read_text(encoding="utf-8"))
+        raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     if not isinstance(raw, dict):
@@ -139,6 +149,44 @@ def _clear_state(project: str) -> None:
         _state_file(project).unlink(missing_ok=True)
 
 
+def _serialize(state: RunState) -> str:
+    """Render one run state as the JSON both record files share."""
+    return json.dumps(
+        {
+            "pid": state.pid,
+            "started_at": state.started_at,
+            "command": state.command,
+            "log_path": str(state.log_path),
+            "start_ticks": state.start_ticks,
+        },
+        indent=2,
+    )
+
+
+def _record_death(state: RunState) -> None:
+    """Retire a dead process's record into a tombstone; never raises.
+
+    Deleting the record outright would let ANY observer consume the only
+    death signal: a ``status`` render between the death and the scheduled
+    watch pass would clean the file, and the pass that alerts would read the
+    project as never-supervised. The tombstone keeps "it died since last
+    seen" durable until :func:`liveness_check` reports it (exactly once), or
+    until a restart supersedes it.
+    """
+    with contextlib.suppress(OSError):
+        _died_file(state.project).write_text(_serialize(state), encoding="utf-8")
+    _clear_state(state.project)
+
+
+def _consume_death(project: str) -> RunState | None:
+    """Read and remove one project's death tombstone; ``None`` when there is none."""
+    path = _died_file(project)
+    record = _read_record(project, path)
+    with contextlib.suppress(OSError):
+        path.unlink(missing_ok=True)
+    return record
+
+
 def running_state(descriptor: ProjectDescriptor) -> RunState | None:
     """Return the live run state for a project, cleaning up stale records.
 
@@ -147,19 +195,21 @@ def running_state(descriptor: ProjectDescriptor) -> RunState | None:
 
     Returns:
         The recorded state when its pid is still alive; ``None`` otherwise
-        (a dead pid's state file is deleted on the way out).
+        (a dead pid's record is retired into a death tombstone on the way
+        out, so :func:`liveness_check` can still report the death — see
+        :func:`_record_death`).
     """
     state = _load_state(descriptor.name)
     if state is None:
         return None
     if not _pid_alive(state.pid):
-        _clear_state(descriptor.name)
+        _record_death(state)
         return None
     # Guard against pid reuse: if the pid is live but its start time no longer
     # matches what we recorded at launch, it is a different process — treat the
     # supervised one as gone rather than reporting it up (or signaling it).
     if state.start_ticks is not None and _proc_start_ticks(state.pid) != state.start_ticks:
-        _clear_state(descriptor.name)
+        _record_death(state)
         return None
     return state
 
@@ -173,11 +223,13 @@ def liveness_check(descriptor: ProjectDescriptor, checked_at: str) -> CheckResul
     not ``unknown`` — when there is no record at all, so a project that never
     started (or stopped cleanly) carries no process check to misread.
 
-    A death is observed **once**: the probe shares :func:`running_state`'s
-    cleanup-on-sight, so the fail lands in the cache and history on the pass
-    that notices it, and the next pass reads the project as unsupervised. The
-    caller that maintains the cache is expected to drop the stale ``process``
-    entry when this returns ``None`` (see the ``watch`` command).
+    A death is reported **once**, and it survives being *noticed* elsewhere
+    first: any observer that finds the pid gone (a ``status`` render, the
+    dashboard) retires the record into a tombstone rather than deleting it,
+    and only this probe consumes the tombstone. A successful restart
+    supersedes an unreported death. The caller that maintains the cache is
+    expected to drop the stale ``process`` entry when this returns ``None``
+    (see the ``watch`` command).
 
     Args:
         descriptor: The project to probe.
@@ -187,25 +239,25 @@ def liveness_check(descriptor: ProjectDescriptor, checked_at: str) -> CheckResul
         A ``process`` task result, or ``None`` when the project has no
         supervised process on record.
     """
-    recorded = _load_state(descriptor.name)
-    if recorded is None:
-        return None
-    state = running_state(descriptor)  # cleans the record when the pid is gone
-    if state is None:
+    state = running_state(descriptor)  # a just-noticed death becomes a tombstone
+    if state is not None:
+        return CheckResult(
+            project=descriptor.name,
+            task="process",
+            status="pass",
+            detail=f"pid {state.pid} up since {state.started_at}",
+            checked_at=checked_at,
+        )
+    died = _consume_death(descriptor.name)
+    if died is not None:
         return CheckResult(
             project=descriptor.name,
             task="process",
             status="fail",
-            detail=f"pid {recorded.pid} died since last seen (started {recorded.started_at})",
+            detail=f"pid {died.pid} died since last seen (started {died.started_at})",
             checked_at=checked_at,
         )
-    return CheckResult(
-        project=descriptor.name,
-        task="process",
-        status="pass",
-        detail=f"pid {state.pid} up since {state.started_at}",
-        checked_at=checked_at,
-    )
+    return None
 
 
 def start(descriptor: ProjectDescriptor) -> str:
@@ -255,19 +307,7 @@ def start(descriptor: ProjectDescriptor) -> str:
         start_ticks=_proc_start_ticks(process.pid),
     )
     try:
-        _state_file(descriptor.name).write_text(
-            json.dumps(
-                {
-                    "pid": state.pid,
-                    "started_at": state.started_at,
-                    "command": state.command,
-                    "log_path": str(state.log_path),
-                    "start_ticks": state.start_ticks,
-                },
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
+        _state_file(descriptor.name).write_text(_serialize(state), encoding="utf-8")
     except OSError as exc:
         # The process is ALREADY RUNNING by the time its state is written, so a
         # failed write (full disk, unwritable state dir) cannot just be reported:
@@ -278,6 +318,11 @@ def start(descriptor: ProjectDescriptor) -> str:
         # is not a state this supervisor offers, so the launch is undone.
         _terminate_group(state.pid, _STOP_GRACE_SECONDS)
         return f"{descriptor.name}: failed to start — could not record run state ({exc})"
+    # A successful restart supersedes an unreported death: the operator who
+    # relaunched the service does not need next hour's watch to tell them the
+    # previous incarnation died.
+    with contextlib.suppress(OSError):
+        _died_file(descriptor.name).unlink(missing_ok=True)
     return f"{descriptor.name}: started (pid {state.pid}, log {log_path})"
 
 

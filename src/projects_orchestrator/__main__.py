@@ -1237,8 +1237,12 @@ def _cmd_watch(args: argparse.Namespace) -> int:
     # Supervised-process liveness joins the pass as one more probe. Where it
     # is ABSENT (nothing supervised), the stale cache entry is retired rather
     # than left as a last-known value: a process check must mean "supervised,
-    # and this is its health" — never "was supervised once".
+    # and this is its health" — never "was supervised once". A project that
+    # declares its own `process` tooling gate owns that task key outright:
+    # the probe neither overwrites nor retires a user-declared gate's result.
     for descriptor in descriptors:
+        if "process" in descriptor.tooling:
+            continue
         result = liveness_check(descriptor, checked_at)
         if result is None:
             cache.drop_result(descriptor.name, "process")

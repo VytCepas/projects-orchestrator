@@ -592,7 +592,7 @@ def _died_supervised(fleet_dir: Path) -> None:
 def test_watch_alerts_on_a_dead_supervised_process(fleet_dir: Path, capsys) -> None:
     _died_supervised(fleet_dir)
     assert main(["watch", "--root", str(fleet_dir)]) == 1
-    assert "supervised process died" in capsys.readouterr().out
+    assert "process is down" in capsys.readouterr().out
 
 
 def test_watch_retires_the_process_check_once_supervision_is_gone(fleet_dir: Path) -> None:
@@ -601,6 +601,17 @@ def test_watch_retires_the_process_check_once_supervision_is_gone(fleet_dir: Pat
     _died_supervised(fleet_dir)
     main(["watch", "--root", str(fleet_dir)])
     assert main(["watch", "--root", str(fleet_dir)]) == 0
+
+
+def test_watch_leaves_a_declared_process_gate_alone(fleet_dir: Path) -> None:
+    # `process` can be a user-declared tooling gate; the liveness probe must
+    # neither overwrite nor retire that gate's cached result (PR #177 review).
+    from projects_orchestrator.cache import load_results
+
+    make_project(fleet_dir, "alpha", tooling={"lint": "true", "process": "true"})
+    main(["watch", "--root", str(fleet_dir), "--task", "process"])
+    main(["watch", "--root", str(fleet_dir)])
+    assert load_results()["alpha"]["process"].status == "pass"
 
 
 def test_watch_json_carries_checks_and_alerts(fleet_dir: Path, capsys) -> None:
