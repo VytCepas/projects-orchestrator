@@ -263,7 +263,7 @@ def prereqs_satisfied(node: str, _seen: set[str] | None = None) -> tuple[bool, s
 # allowed through (guard() checks _is_upstream_issue_create first).
 _ISSUE_CREATE_RE = re.compile(r"\bgh\s+issue\s+create\b")
 _ISSUE_REPO_FLAG_RE = re.compile(
-    r"\bgh\s+issue\s+create\b[^;&|]*?(?:-R|--repo)[= ]+['\"]?([\w.-]+/[\w.-]+)"
+    r"\bgh\s+issue\s+create\b[^;&|]*?(?:-R|--repo)[= ]+['\"]?([\w.-]+(?:/[\w.-]+)+)"
 )
 _ORIGIN_SLUG_RE = re.compile(r"[:/]([\w.-]+/[\w.-]+?)(?:\.git)?/?$")
 
@@ -289,7 +289,10 @@ def _is_upstream_issue_create(cmd: str) -> bool:
     m = _ISSUE_REPO_FLAG_RE.search(cmd)
     if not m:
         return False
-    target = m.group(1).lower().removesuffix(".git")
+    # `--repo` accepts an optional host ([HOST/]OWNER/REPO), so compare only the
+    # trailing owner/repo — otherwise `-R github.com/owner/this-repo` parses as
+    # `github.com/owner`, reads as a different repo, and slips past the wrapper.
+    target = "/".join(m.group(1).lower().removesuffix(".git").split("/")[-2:])
     origin = _origin_slug()
     # Unknown origin: an explicit -R is still not this project's issue tracker
     # (create_issue.sh needs origin to work at all) — allow rather than dead-end.
