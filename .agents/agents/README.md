@@ -2,14 +2,13 @@
 
 Claude Code subagent definitions — specialized personas for repeatable tasks.
 They're version-controlled, team-shared, and double as teammate roles for agent
-teams. Two ready-to-use specs ship here:
+teams.
 
-- **`code-reviewer.md`** — read-only review of the current diff.
-- **`explore.md`** — read-only codebase research.
-
-Both use `model: inherit` (run on whatever model the session uses) and a
-read-only-ish tool set, so they work the same on any model and in both plugin
-and non-plugin layouts.
+No specs ship here by default (#848): read-only codebase research is the
+built-in `Explore` agent, and code review comes from the pre-enabled
+`pr-review-toolkit` plugin — a local copy would register twice in the agent
+index every session. A `--no-egress` scaffold (no marketplace plugins) does
+ship **`code-reviewer.md`** as the fallback reviewer.
 
 ## How to create a subagent
 
