@@ -29,6 +29,21 @@
 #   Two fix cycles are required before admin-merge is allowed. This ensures
 #   review feedback (including Copilot comments) is read and addressed at
 #   least once before force-merging.
+#
+# Ignored (informational) checks — PI-837:
+#   `monitor_ignore_checks` in .agents/config.yaml (single-line JSON array of
+#   check names; per-run override: PI_MONITOR_IGNORE_CHECKS, comma-separated)
+#   names checks that are reported but never block the merge. Use it for a
+#   known-dead check: during a GitHub Actions billing lockout, GitHub-hosted
+#   jobs die permanently as zero-step startup failures while self-hosted CI
+#   stays green — without this list one dead check deadlocks every PR.
+#
+#   Gotcha: check runs attach to COMMITS, not PRs. A sibling branch created at
+#   the same head commit shares its check rollup — a failure produced by the
+#   other branch's PR events shows up here too (observed: zarija #130/#131).
+#   Remedy when it happens: give the PR a unique head, e.g.
+#     git commit --allow-empty -m "chore: refresh PR head" && push
+#   which clears the stale failure from this PR's rollup.
 
 set -euo pipefail
 
@@ -129,9 +144,32 @@ if [ "$MODE" != "--merge" ]; then
   fi
 fi
 
+# PI-837: checks treated as informational — reported, never blocking.
+# Precedence: PI_MONITOR_IGNORE_CHECKS env (comma-separated) > config.yaml
+# `monitor_ignore_checks` (single-line JSON array) > none. Normalized to a
+# JSON array once, here; a malformed config value fails loudly rather than
+# silently ignoring nothing.
+IGNORE_CHECKS=$("$PY" -c "
+import json, os, sys
+env = os.environ.get('PI_MONITOR_IGNORE_CHECKS', '')
+if env.strip():
+    names = [n.strip() for n in env.split(',') if n.strip()]
+else:
+    raw = sys.argv[1].strip() or '[]'
+    try:
+        names = json.loads(raw)
+        assert isinstance(names, list) and all(isinstance(n, str) for n in names)
+    except Exception:
+        print(f'monitor_ignore_checks in .agents/config.yaml must be a single-line'
+              f' JSON array of check names; got: {raw}', file=sys.stderr)
+        sys.exit(2)
+print(json.dumps(names))
+" "$(monitor_ignore_checks)")
+
 _count_pending() {
   echo "$1" | "$PY" -c "
 import json, sys
+ignore = set(json.loads(sys.argv[1]))
 data = json.load(sys.stdin)
 # Exclude review/decision; it is a derived commit status that only appears
 # after a review event. We detect review state directly via reviewDecision.
@@ -139,26 +177,37 @@ data = json.load(sys.stdin)
 # cancel), not a hand-rolled state allowlist: just-queued Actions report
 # state=QUEUED (and WAITING/REQUESTED for env-gated jobs), all bucket=pending.
 # An allowlist that omitted those let the CI-wait break before CI ran (#428).
-print(sum(1 for c in data if c.get('name') != 'review/decision' and c.get('bucket') == 'pending'))
-"
+# Ignored checks are excluded too: a check the operator declared informational
+# must not hang the CI wait any more than it may block the merge (PI-837).
+print(sum(1 for c in data
+          if c.get('name') != 'review/decision'
+          and c.get('name') not in ignore
+          and c.get('bucket') == 'pending'))
+" "$IGNORE_CHECKS"
 }
 
 _print_failures() {
   echo "$1" | "$PY" -c "
 import json, sys
+ignore = set(json.loads(sys.argv[1]))
 data = json.load(sys.stdin)
-bad = [
-    c for c in data
-    if c.get('name') != 'review/decision'
-    and (
+bad, informational = [], []
+for c in data:
+    if c.get('name') == 'review/decision':
+        continue
+    failing = (
         c.get('bucket') in ('fail', 'cancel')
         or c.get('state') in ('FAILURE', 'CANCELLED', 'TIMED_OUT', 'ERROR')
     )
-]
+    if not failing:
+        continue
+    (informational if c.get('name') in ignore else bad).append(c)
+for c in informational:
+    print(f\"  {c['name']}: {c.get('state') or c.get('bucket')} — informational (monitor_ignore_checks), not blocking\")
 for c in bad:
     print(f\"  {c['name']}: {c.get('state') or c.get('bucket')}\")
 sys.exit(len(bad))
-"
+" "$IGNORE_CHECKS"
 }
 
 # Print review feedback — inline comments first, falls back to full PR comments view.
@@ -427,7 +476,21 @@ _wait_for_head_sync
 CI_ELAPSED=0
 while true; do
   CHECKS=$(gh pr checks "$PR_NUMBER" --json name,state,bucket 2>/dev/null) || CHECKS="[]"
-  CHECK_COUNT=$(echo "$CHECKS" | "$PY" -c "import json,sys; print(len(json.load(sys.stdin)))")
+  # PI-858: the "checks registered" guard must count only gate-relevant checks
+  # — the same filter _count_pending applies (no review/decision, no ignored
+  # names). An ignored check registers FIRST in practice (board-sync fires on
+  # PR-open while real CI jobs are still queueing), and a raw length here let
+  # the wait break on that ignored-only rollup: _print_failures then saw no
+  # blocking failure and --merge proceeded with real CI never having run.
+  # If only-ignored checks ever exist, the timeout below fails closed.
+  CHECK_COUNT=$(echo "$CHECKS" | "$PY" -c "
+import json, sys
+ignore = set(json.loads(sys.argv[1]))
+data = json.load(sys.stdin)
+print(sum(1 for c in data
+          if c.get('name') != 'review/decision'
+          and c.get('name') not in ignore))
+" "$IGNORE_CHECKS")
   if [ "$CHECK_COUNT" -gt 0 ] && [ "$(_count_pending "$CHECKS")" -eq 0 ]; then
     break
   fi
@@ -613,15 +676,26 @@ if [ -z "$REVIEW_DECISION" ] && [ "$MODE" = "--merge" ]; then
     # feedback nobody answered.
     exit 2
   fi
+  # PI-838: the reviewer-absent path must terminate, and say what it is. With
+  # no approval policy the max-cycles→admin-merge branch above (REVIEW_REQUIRED
+  # only) never applies; this branch is the terminal state for a review agent
+  # that never responds — observed live as a quota-limited bot ignoring an
+  # explicit re-request for hours. Name the condition (CI is green; this is
+  # not a CI problem), say what cycle exhaustion does, and name --no-review —
+  # don't imply a convergence that structurally cannot happen.
   if ! _has_review_activity; then
     if [ "$REVIEW_CYCLE" -lt "$MAX_REVIEW_CYCLES" ]; then
       NEXT=$((REVIEW_CYCLE + 1))
-      echo "PR #$PR_NUMBER: no review has landed after ${REVIEW_TIMEOUT}s."
-      echo "Wait for the review agents, then re-run:"
+      echo "PR #$PR_NUMBER: no review of any state has landed after ${REVIEW_TIMEOUT}s (cycle $REVIEW_CYCLE/$MAX_REVIEW_CYCLES)."
+      echo "CI is green — the review agent has not acted."
+      echo "A quota-limited bot (e.g. a Codex daily cap) may resume later. Re-run to give it another window:"
       echo "  .agents/scripts/monitor_pr.sh $PR_NUMBER --merge --review-cycle $NEXT"
+      echo "After cycle $MAX_REVIEW_CYCLES with no review and no approval policy, the merge proceeds with a REVIEWER ABSENT warning."
+      echo "--no-review skips the review gate entirely."
       exit 2
     fi
-    echo "PR #$PR_NUMBER: no review landed within $MAX_REVIEW_CYCLES cycles — merging on green CI."
+    echo "WARNING: REVIEWER ABSENT — no review of any state landed within $MAX_REVIEW_CYCLES cycles and this branch has no approval policy."
+    echo "  Merging on green CI. Consider a follow-up review once the review agent recovers."
   fi
 fi
 

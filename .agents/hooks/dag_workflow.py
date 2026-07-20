@@ -257,6 +257,45 @@ def prereqs_satisfied(node: str, _seen: set[str] | None = None) -> tuple[bool, s
 # Steering rules: command pattern -> (target_node | None, redirect_message)
 # The first matching rule wins. target_node=None means a hard block with no
 # DAG validation; otherwise, prereqs of target_node are appended to the reason.
+# PI-845: create_issue.sh only files issues in THIS project, so the rule below
+# must not dead-end the report_upstream_issue skill — `gh issue create` with an
+# explicit -R/--repo naming a DIFFERENT repo has no wrapper equivalent and is
+# allowed through (guard() checks _is_upstream_issue_create first).
+_ISSUE_CREATE_RE = re.compile(r"\bgh\s+issue\s+create\b")
+_ISSUE_REPO_FLAG_RE = re.compile(
+    r"\bgh\s+issue\s+create\b[^;&|]*?(?:-R|--repo)[= ]+['\"]?([\w.-]+/[\w.-]+)"
+)
+_ORIGIN_SLUG_RE = re.compile(r"[:/]([\w.-]+/[\w.-]+?)(?:\.git)?/?$")
+
+
+def _origin_slug() -> str | None:
+    """This repo's owner/repo, from the origin remote (no network)."""
+    try:
+        url = subprocess.run(
+            ["git", "config", "--get", "remote.origin.url"],  # noqa: S607 — read-only config probe, fixed argv
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        ).stdout.strip()
+    except Exception:  # noqa: BLE001 — a guard probe must never break the hook
+        return None
+    m = _ORIGIN_SLUG_RE.search(url)
+    return m.group(1).lower() if m else None
+
+
+def _is_upstream_issue_create(cmd: str) -> bool:
+    """True when the issue-create -R/--repo flag names a repo other than this one."""
+    m = _ISSUE_REPO_FLAG_RE.search(cmd)
+    if not m:
+        return False
+    target = m.group(1).lower().removesuffix(".git")
+    origin = _origin_slug()
+    # Unknown origin: an explicit -R is still not this project's issue tracker
+    # (create_issue.sh needs origin to work at all) — allow rather than dead-end.
+    return origin is None or target != origin
+
+
 COMMAND_RULES: list[tuple[re.Pattern[str], str | None, str]] = [
     (
         re.compile(r"git\s+push\b[^|;&\n]*?[\s:]['\"]?(?:refs/heads/)?(?:main|master)(?![\w./-])"),
@@ -304,9 +343,9 @@ COMMAND_RULES: list[tuple[re.Pattern[str], str | None, str]] = [
         "Use .agents/scripts/start_issue.sh (issue-backed) or .agents/scripts/create_nojira_pr.sh (no issue) instead of `gh pr create`.",
     ),
     (
-        re.compile(r"\bgh\s+issue\s+create\b"),
+        _ISSUE_CREATE_RE,
         None,
-        "Use .agents/scripts/create_issue.sh (or the start_task skill) so priority, references, and acceptance criteria are captured.",
+        "Use .agents/scripts/create_issue.sh (or the start_task skill) so priority, references, and acceptance criteria are captured. Filing in ANOTHER repo (report_upstream_issue) is allowed with an explicit -R/--repo naming that repo.",
     ),
     (
         re.compile(r"\bgit\s+push\b"),
@@ -457,6 +496,9 @@ def guard(payload: dict) -> dict | None:
 
     for pattern, target, message in COMMAND_RULES:
         if not pattern.search(cmd_scan):
+            continue
+        # PI-845: upstream issue filing has no wrapper — let it through.
+        if pattern is _ISSUE_CREATE_RE and _is_upstream_issue_create(cmd_scan):
             continue
         # If the redirect points at a wrapper script that doesn't exist in
         # this repo, skip (don't block — there's nothing to redirect to).

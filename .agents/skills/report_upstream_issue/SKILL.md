@@ -98,7 +98,10 @@ etc.). Present the link for the user to open and submit.
 
 Only if the current session is scoped to the upstream repo with write access
 (e.g. you are running *in* project-init, or an MCP/`gh` token can write there),
-create it directly instead of a link:
+create it directly instead of a link. The lifecycle command guard permits this
+exact form — an explicit `-R <owner>/<repo>` naming a repo OTHER than this
+project (PI-845); a flag-less create is still redirected to the local
+issue-create wrapper, so never drop the `-R`:
 
 ```bash
 gh issue create -R <owner>/<repo> --title "<title>" --body "<body>" --label <label>
