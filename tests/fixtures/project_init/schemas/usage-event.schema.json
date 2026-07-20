@@ -24,8 +24,8 @@
     },
     "decision": {
       "type": "string",
-      "enum": ["block", "ask"],
-      "description": "Governance decision made by the guard"
+      "enum": ["allow", "block", "ask"],
+      "description": "Governance decision made by the guard (allow = passed; block = denied; ask = prompted the human)"
     },
     "command": {
       "type": "string",
