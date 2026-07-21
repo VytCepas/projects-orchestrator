@@ -65,6 +65,15 @@ _MAX_BUDGET_USD = "2.00"
 # strings) so the agent can re-run them to verify, and nothing else.
 _BASE_TOOLS = ("Edit", "Write", "Read", "Grep", "Glob")
 
+# Heal-mode policy (ADR-008). `fix` is today's full loop: agent, verify, draft
+# PR. `notify` stops at the diagnosis — report what failed and what to do next,
+# spend nothing, touch nothing. The run sets the default; a project's declared
+# `heal.mode` overrides it (a child that says "never auto-fix me" is obeyed even
+# when the fleet pass runs in fix mode).
+MODE_FIX = "fix"
+MODE_NOTIFY = "notify"
+HEAL_MODES = (MODE_FIX, MODE_NOTIFY)
+
 NO_FAILURES = "no_action"
 # NOTE: there is deliberately no "worktree dirty" outcome any more. Heal used to
 # refuse on a dirty clone because it was about to `checkout -B` *in* it. It now
@@ -77,12 +86,14 @@ VERIFY_FAILED = "verify_failed"
 PUSH_FAILED = "push_failed"
 PR_FAILED = "pr_failed"
 FIXED = "fixed"
+NOTIFIED = "notified"
 
-# Outcomes reached WITHOUT ever launching the agent: nothing was failing, or a
-# worktree could not be cut. Their cost is None because no run happened — not
-# because a run went unmetered — so a fleet spend total must exclude them rather
-# than count them as unmetered runs (which would falsely warn spend is higher).
-_PRE_AGENT_STATUSES = frozenset({NO_FAILURES, WORKTREE_FAILED})
+# Outcomes reached WITHOUT ever launching the agent: nothing was failing, the
+# policy said notify-only, or a worktree could not be cut. Their cost is None
+# because no run happened — not because a run went unmetered — so a fleet spend
+# total must exclude them rather than count them as unmetered runs (which would
+# falsely warn spend is higher).
+_PRE_AGENT_STATUSES = frozenset({NO_FAILURES, NOTIFIED, WORKTREE_FAILED})
 
 
 @dataclass(frozen=True)
@@ -387,11 +398,25 @@ def _commit_and_land(
     return HealResult(descriptor.name, FIXED, branch=branch, pr_url=pr.url)
 
 
+def _notify_result(descriptor: ProjectDescriptor, failing: tuple[CheckResult, ...]) -> HealResult:
+    """Render a notify-mode outcome: what failed, and what to do next (pure)."""
+    tasks = ", ".join(sorted({result.task for result in failing}))
+    return HealResult(
+        descriptor.name,
+        NOTIFIED,
+        detail=(
+            f"{tasks} failing — policy is notify, no agent spawned. "
+            f"Fix by hand, or run: projects-orchestrator heal {descriptor.name}"
+        ),
+    )
+
+
 def heal_project(
     descriptor: ProjectDescriptor,
     cached: dict[str, CheckResult],
     agent_run: AgentRun | None = None,
     open_pr: OpenPr | None = None,
+    mode: str = MODE_FIX,
 ) -> HealResult:
     """Attempt to fix one project's failing lint/test gate end to end; never raises.
 
@@ -401,6 +426,11 @@ def heal_project(
         agent_run: Coding-agent invocation override; ``None`` uses the real
             ``claude`` CLI. Tests inject a fake so no live agent ever runs.
         open_pr: PR-creation override; ``None`` uses the real ``gh`` CLI.
+        mode: The run-wide default heal mode. A project's own declared
+            ``heal.mode`` wins over it (resolved HERE, not by the caller, so the
+            per-project policy holds for every entry point — the fleet pass, the
+            controller, the dashboard). ``notify`` stops at the diagnosis: no
+            worktree, no agent, no spend.
 
     Returns:
         A :class:`HealResult` describing what happened. The operator's clone is
@@ -408,9 +438,16 @@ def heal_project(
         happens in a throwaway worktree (:mod:`worktree`), which is removed on
         success and *kept* on failure so the agent's work can be inspected.
     """
+    # The child's declared policy wins over the run default, in either direction
+    # (ADR-008). Resolving here — not in each caller — is what stops a direct
+    # heal from the controller/dashboard auto-fixing a project that opted into
+    # notify (PO-163 review).
+    mode = descriptor.heal_mode or mode
     failing = pending_failures(cached)
     if not failing:
         return HealResult(descriptor.name, NO_FAILURES, detail="no failing lint/test gate cached")
+    if mode == MODE_NOTIFY:
+        return _notify_result(descriptor, failing)
 
     # Retention has a clock (ADR-007), and this is what makes it tick. Without a
     # caller, "expires after N days" is just a function nobody runs, and kept
@@ -568,6 +605,7 @@ def heal_fleet(
     limit: int,
     agent_run: AgentRun | None = None,
     open_pr: OpenPr | None = None,
+    mode: str = MODE_FIX,
 ) -> FleetHealReport:
     """Heal every project with a pending lint/test failure, up to ``limit``; never raises.
 
@@ -579,6 +617,11 @@ def heal_fleet(
     the cap are recorded as ``deferred`` rather than silently ignored, so the cap
     governing unattended spend is always visible in the report.
 
+    Heal-mode policy (ADR-008): ``mode`` is the run-wide default, and a project's
+    declared ``heal.mode`` overrides it — the child's word beats the run's, in
+    either direction. Notify-mode projects are diagnosed for free (no worktree,
+    no agent), so they never consume the ``limit`` that caps *paid* attempts.
+
     Args:
         targets: ``(descriptor, {task: CheckResult})`` for every project to
             consider — typically the whole fleet paired with its fresh check
@@ -588,22 +631,32 @@ def heal_fleet(
         agent_run: Coding-agent override threaded to :func:`heal_project`; ``None``
             uses the real ``claude`` CLI. Tests inject a fake so no live agent runs.
         open_pr: PR-creation override threaded to :func:`heal_project`.
+        mode: Run-wide heal mode (``fix`` | ``notify``); per-project declarations
+            override it.
 
     Returns:
         A :class:`FleetHealReport` over the attempted projects plus deferred names.
     """
     failing = [(descriptor, cached) for descriptor, cached in targets if pending_failures(cached)]
     cap = max(limit, 0)
-    attempted, held_back = failing[:cap], failing[cap:]
-    results = tuple(
-        heal_project(descriptor, cached, agent_run=agent_run, open_pr=open_pr)
-        for descriptor, cached in attempted
-    )
-    return FleetHealReport(
-        results=results,
-        deferred=tuple(descriptor.name for descriptor, _ in held_back),
-        limit=limit,
-    )
+    results: list[HealResult] = []
+    deferred: list[DeferredProject] = []
+    paid_attempts = 0
+    for descriptor, cached in failing:
+        # Resolve here only to ROUTE (notify is free, fix is capped); heal_project
+        # re-applies the same override to decide behavior, so the two never drift.
+        resolved = descriptor.heal_mode or mode
+        if resolved == MODE_NOTIFY:
+            results.append(heal_project(descriptor, cached, mode=mode))
+            continue
+        if paid_attempts >= cap:
+            deferred.append(descriptor.name)
+            continue
+        paid_attempts += 1
+        results.append(
+            heal_project(descriptor, cached, agent_run=agent_run, open_pr=open_pr, mode=mode)
+        )
+    return FleetHealReport(results=tuple(results), deferred=tuple(deferred), limit=limit)
 
 
 def render_fleet_heal_report(report: FleetHealReport) -> str:
@@ -619,6 +672,17 @@ def render_fleet_heal_report(report: FleetHealReport) -> str:
     """
     if not report.eventful:
         return "heal: no failing lint/test gate in the fleet — nothing to do"
+    lines = [render_heal_result(result) for result in report.results]
+    if report.deferred:
+        lines.append(
+            f"deferred {len(report.deferred)} more (limit {report.limit}): "
+            f"{', '.join(report.deferred)}"
+        )
+    lines.append(
+        f"healed {len(report.fixed)}/{len(report.results)} attempted — "
+        f"spend {cost_mod.format_total(report.spend)}"
+    )
+    return "\n".join(lines)
     lines = [render_heal_result(result) for result in report.results]
     if report.deferred:
         lines.append(

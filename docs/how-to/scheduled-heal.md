@@ -65,6 +65,13 @@ printf 'PO_FLEET_ROOT=%s\nPO_HEAL_LIMIT=%s\n' "$HOME/projects" 2 \
 
 Skip that step to accept the defaults (`~/projects`, limit 3).
 
+The same file takes `PO_HEAL_MODE=notify` to make the whole pass diagnose
+instead of fix: no agent, no spend — each failing project is reported with
+what failed and what to do next. Either way, a project's own descriptor may
+declare `heal: { mode: fix | notify }` and that declaration wins over the
+run's mode, in both directions (ADR-008). `--limit` caps *paid* attempts
+only; notify-mode diagnoses are free and uncapped.
+
 ```bash
 mkdir -p ~/.config/systemd/user
 cp contrib/systemd/projects-orchestrator-heal.* ~/.config/systemd/user/

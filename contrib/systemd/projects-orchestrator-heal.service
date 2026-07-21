@@ -21,6 +21,9 @@ WorkingDirectory=%h
 # Optional config. Create the file with mode 600 and put in it:
 #   PO_FLEET_ROOT=/path/to/your/projects   (if your fleet is not ~/projects)
 #   PO_HEAL_LIMIT=3                         (max projects to spend on per run)
+#   PO_HEAL_MODE=fix                        (fix | notify — run-wide default;
+#                                            a project's declared heal.mode
+#                                            overrides it, ADR-008)
 # The leading `-` makes the file optional: with no override the unit heals
 # ~/projects and attempts at most PO_HEAL_LIMIT (default 3) projects per firing.
 EnvironmentFile=-%h/.config/projects-orchestrator/heal.env
@@ -30,7 +33,7 @@ EnvironmentFile=-%h/.config/projects-orchestrator/heal.env
 # a coding agent on (each agent is itself capped at a small per-run budget), so a
 # fleet that goes red overnight cannot fan out unbounded spend. Start LOW and
 # raise it once you trust the PRs it opens.
-ExecStart=/bin/sh -c 'exec %h/.local/bin/projects-orchestrator heal --all --root "${PO_FLEET_ROOT:-%h/projects}" --limit "${PO_HEAL_LIMIT:-3}"'
+ExecStart=/bin/sh -c 'exec %h/.local/bin/projects-orchestrator heal --all --root "${PO_FLEET_ROOT:-%h/projects}" --limit "${PO_HEAL_LIMIT:-3}" --mode "${PO_HEAL_MODE:-fix}"'
 
 # `heal --all` exits 1 when the pass was EVENTFUL — it opened a PR, a heal failed
 # to verify, or projects were deferred past the limit. That is a run that worked

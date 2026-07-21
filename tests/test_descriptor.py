@@ -313,3 +313,27 @@ class TestScaffoldLayout:
     def test_observability_dir_defaults_under_config_root(self, tmp_path: Path) -> None:
         d = parse_config('project:\n  name: "o"\n', tmp_path, config_root=".agents")
         assert observability_dir(d) == tmp_path / ".agents" / "observability"
+
+
+def test_declared_heal_mode_notify_is_parsed(tmp_path: Path) -> None:
+    project = make_project(
+        tmp_path, "alpha", config_text="project:\n  name: alpha\nheal:\n  mode: notify\n"
+    )
+    descriptor = load_descriptor(project)
+    assert descriptor is not None and descriptor.heal_mode == "notify"
+
+
+def test_heal_mode_defaults_to_empty_when_undeclared(tmp_path: Path) -> None:
+    descriptor = load_descriptor(make_project(tmp_path, "alpha"))
+    assert descriptor is not None and descriptor.heal_mode == ""
+
+
+def test_unknown_heal_mode_is_ignored_with_a_warning(tmp_path: Path) -> None:
+    # A typo'd mode must not silently switch a project between "spends money
+    # and opens PRs" and "tells me and stops" — ignore it, loudly.
+    project = make_project(
+        tmp_path, "alpha", config_text="project:\n  name: alpha\nheal:\n  mode: yolo\n"
+    )
+    descriptor = load_descriptor(project)
+    assert descriptor is not None
+    assert descriptor.heal_mode == "" and any("heal.mode" in w for w in descriptor.warnings)

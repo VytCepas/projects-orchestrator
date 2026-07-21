@@ -138,6 +138,9 @@ class ProjectDescriptor:
         ci: Declared non-forge CI status endpoint; ``None`` when the child omits
             the block or leaves ``status_url`` empty — the overwhelmingly common
             case, in which the forge adapters probe CI as before.
+        heal_mode: The project's declared heal-mode override (``fix`` |
+            ``notify``); empty when undeclared, in which case the run-wide
+            mode applies (ADR-008).
         warnings: Human-readable parse problems, empty when the config is clean.
     """
 
@@ -160,6 +163,7 @@ class ProjectDescriptor:
     hooks_expected: tuple[str, ...] = ()
     host: str = ""
     ci: CiConfig | None = None
+    heal_mode: str = ""
     warnings: tuple[str, ...] = ()
 
     def has_task(self, task: str) -> bool:
@@ -225,6 +229,28 @@ def _extract_ci(raw: dict[str, Any]) -> CiConfig | None:
         status_url=status_url,
         status_field=str(block.get("status_field") or "").strip(),
     )
+
+
+#: Heal-mode values a child may declare (ADR-008): ``fix`` spawns the scoped
+#: agent and lands a draft PR; ``notify`` reports the failure and spends nothing.
+HEAL_MODES = ("fix", "notify")
+
+
+def _extract_heal_mode(raw: dict[str, Any], warnings: list[str]) -> str:
+    """Parse the optional ``heal.mode`` override; ``""`` when absent.
+
+    Feature-detected like ``ci``, not version-gated. An unknown value is
+    ignored WITH a warning rather than obeyed or guessed: a typo'd mode must
+    not silently switch a project between "spends money and opens PRs" and
+    "tells me and stops".
+    """
+    mode = str(_as_mapping(raw.get("heal")).get("mode") or "").strip()
+    if not mode:
+        return ""
+    if mode not in HEAL_MODES:
+        warnings.append(f"heal.mode '{mode}' is not one of {'|'.join(HEAL_MODES)} — ignored")
+        return ""
+    return mode
 
 
 def _contained_path(project_dir: Path, relative: str) -> Path | None:
@@ -379,6 +405,7 @@ def parse_config(text: str, project_dir: Path, config_root: str = ".claude") -> 
         # §4's rule is to detect the surface, not infer it from a version. A v1
         # child that hand-adds the block is honoured too, which costs nothing.
         ci=_extract_ci(raw),
+        heal_mode=_extract_heal_mode(raw, warnings),
         warnings=tuple(warnings),
     )
 

@@ -74,7 +74,9 @@ from projects_orchestrator.fleet import ProjectSnapshot, fleet_rows, fleet_snaps
 from projects_orchestrator.hardening import checklist as hardening_checklist
 from projects_orchestrator.hardening import render_text as render_hardening
 from projects_orchestrator.heal import (
+    HEAL_MODES,
     HEALABLE_TASKS,
+    MODE_FIX,
     FleetHealReport,
     heal_fleet,
     render_fleet_heal_report,
@@ -1064,7 +1066,7 @@ def _cmd_heal(args: argparse.Namespace) -> int:
         descriptors, limit = list(fleet.descriptors), args.limit
 
     targets = _heal_targets(descriptors, cached=args.cached, jobs=args.jobs)
-    report = heal_fleet(targets, limit=limit)
+    report = heal_fleet(targets, limit=limit, mode=args.mode)
     if args.json:
         _emit_json(_fleet_heal_json(report))
     else:
@@ -1385,6 +1387,14 @@ def _add_heal_arguments(sub: argparse._SubParsersAction[argparse.ArgumentParser]
         "--jobs",
         type=int,
         help="parallel projects when running fresh checks (default: min(8, cpu))",
+    )
+    heal_sp.add_argument(
+        "--mode",
+        choices=HEAL_MODES,
+        default=MODE_FIX,
+        help="run-wide heal mode: fix spawns the scoped agent and opens a draft PR "
+        "(default); notify only reports what failed and what to do next. A project's "
+        "declared heal.mode overrides this (ADR-008)",
     )
 
 

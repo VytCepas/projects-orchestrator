@@ -913,6 +913,14 @@ def test_heal_unknown_project_exits_two(fleet_dir: Path, capsys) -> None:
     assert "unknown project: ghost" in capsys.readouterr().err
 
 
+def test_heal_all_notify_mode_reports_without_spawning(fleet_dir: Path, capsys) -> None:
+    # The _no_live_heal_agent fuse proves no agent is reached: a red gate under
+    # --mode notify is diagnosed, not fixed, and the pass is still eventful.
+    make_project(fleet_dir, "alpha", tooling={"lint": "false"})
+    assert main(["heal", "--all", "--mode", "notify", "--root", str(fleet_dir)]) == 1
+    assert "notified" in capsys.readouterr().out
+
+
 def test_heal_all_is_quiet_and_exits_zero_when_fleet_is_green(fleet_dir: Path, capsys) -> None:
     # lint passes for both -> nothing failing -> no agent is ever reached, exit 0.
     make_project(fleet_dir, "alpha", tooling={"lint": "true"})
