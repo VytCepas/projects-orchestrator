@@ -713,6 +713,17 @@ def test_notify_result_names_what_failed_and_what_to_do_next(fleet_dir: Path) ->
     assert "lint failing" in result.detail and "heal alpha" in result.detail
 
 
+def test_heal_project_honors_a_declared_notify_without_the_caller_resolving(
+    fleet_dir: Path,
+) -> None:
+    # The controller and dashboard call heal_project(descriptor, cached) with no
+    # mode — a project that declared heal.mode notify must NOT be auto-fixed there
+    # (PO-163 review). heal_project resolves the override itself.
+    alpha = replace(_failing(fleet_dir, "alpha"), heal_mode=MODE_NOTIFY)
+    result = heal_project(alpha, _cached_fail("alpha"), agent_run=_exploding_agent)
+    assert result.status == NOTIFIED
+
+
 def test_heal_fleet_declared_notify_override_beats_a_fix_run(fleet_dir: Path) -> None:
     # The child's word wins: a fleet pass in (default) fix mode must not spend
     # an agent on a project that declared heal.mode notify.

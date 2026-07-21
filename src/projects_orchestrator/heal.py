@@ -426,9 +426,11 @@ def heal_project(
         agent_run: Coding-agent invocation override; ``None`` uses the real
             ``claude`` CLI. Tests inject a fake so no live agent ever runs.
         open_pr: PR-creation override; ``None`` uses the real ``gh`` CLI.
-        mode: The resolved heal mode for THIS project (the caller applies the
-            project's declared override — see :func:`heal_fleet`). ``notify``
-            stops at the diagnosis: no worktree, no agent, no spend.
+        mode: The run-wide default heal mode. A project's own declared
+            ``heal.mode`` wins over it (resolved HERE, not by the caller, so the
+            per-project policy holds for every entry point — the fleet pass, the
+            controller, the dashboard). ``notify`` stops at the diagnosis: no
+            worktree, no agent, no spend.
 
     Returns:
         A :class:`HealResult` describing what happened. The operator's clone is
@@ -436,6 +438,11 @@ def heal_project(
         happens in a throwaway worktree (:mod:`worktree`), which is removed on
         success and *kept* on failure so the agent's work can be inspected.
     """
+    # The child's declared policy wins over the run default, in either direction
+    # (ADR-008). Resolving here — not in each caller — is what stops a direct
+    # heal from the controller/dashboard auto-fixing a project that opted into
+    # notify (PO-163 review).
+    mode = descriptor.heal_mode or mode
     failing = pending_failures(cached)
     if not failing:
         return HealResult(descriptor.name, NO_FAILURES, detail="no failing lint/test gate cached")
@@ -636,15 +643,19 @@ def heal_fleet(
     deferred: list[DeferredProject] = []
     paid_attempts = 0
     for descriptor, cached in failing:
+        # Resolve here only to ROUTE (notify is free, fix is capped); heal_project
+        # re-applies the same override to decide behavior, so the two never drift.
         resolved = descriptor.heal_mode or mode
         if resolved == MODE_NOTIFY:
-            results.append(heal_project(descriptor, cached, mode=MODE_NOTIFY))
+            results.append(heal_project(descriptor, cached, mode=mode))
             continue
         if paid_attempts >= cap:
             deferred.append(descriptor.name)
             continue
         paid_attempts += 1
-        results.append(heal_project(descriptor, cached, agent_run=agent_run, open_pr=open_pr))
+        results.append(
+            heal_project(descriptor, cached, agent_run=agent_run, open_pr=open_pr, mode=mode)
+        )
     return FleetHealReport(results=tuple(results), deferred=tuple(deferred), limit=limit)
 
 
