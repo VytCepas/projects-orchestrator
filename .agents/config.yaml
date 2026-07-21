@@ -13,6 +13,8 @@ project:
   project_init_host: github.com  # upstream GitHub host (github.com | *.ghe.com | GHES) — #255/#259
   project_key: ""          # e.g. "PI" → branches use feat/PI-42-slug, PR titles use feat(PI-42):
   github_project_number: 7 # numeric GitHub Project V2 board number (used by board-automation.yml and create_issue.sh)
+  review_cycles: 2       # review-fix passes monitor_pr.sh runs before it stops asking (#714); 0 = no review control, merge on green CI. Override per-run with PI_REVIEW_CYCLES.
+  monitor_ignore_checks: []  # single-line JSON array of check names monitor_pr.sh treats as informational — reported, never blocking (#837), e.g. ["board-sync"] when a GitHub-hosted job is billing-locked while real CI runs self-hosted. Override per-run with PI_MONITOR_IGNORE_CHECKS (comma-separated).
 
 language: python            # python | node | go | none
 
@@ -41,6 +43,17 @@ tooling:
   lint_command: "uv run ruff check ."
   format_command: "uv run ruff format ."
   test_command: "uv run pytest"
+
+ci:
+  # Where a root orchestrator can read this project's build status when CI is
+  # NOT the forge's own (Jenkins, Buildkite, Drone, a self-hosted runner).
+  # Empty = the orchestrator falls back to `gh`/`glab`, which is what almost
+  # every project wants. Set status_url to a JSON endpoint reporting the latest
+  # build, e.g. https://jenkins.example.com/job/app/lastBuild/api/json
+  status_url: ""
+  # Optional dot-path to the status value inside that JSON (e.g. "data.outcome").
+  # Empty = auto-detect the usual keys (result, status, conclusion, state).
+  status_field: ""
 
 # Extra files never overwritten or reported as drift on `upgrade` (and on
 # `project-init` re-runs) (#243): a single-line JSON array of globs.
