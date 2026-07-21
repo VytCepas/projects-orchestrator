@@ -80,6 +80,20 @@ review_cycles() {
   printf '%s\n' "${n:-2}"
 }
 
+# Check names monitor_pr.sh treats as informational — reported, never blocking
+# (#837). Echoes the raw single-line JSON array from config.yaml (e.g.
+# ["board-sync"]), or nothing when the key is absent/empty. Use for checks that
+# are known-dead — a billing-locked GitHub-hosted job dies permanently as a
+# zero-step startup failure while self-hosted CI stays green — so one dead
+# check cannot deadlock every PR's merge path. Anchored on this file's
+# location for the same reason gh_profile is.
+monitor_ignore_checks() {
+  local cfg raw=""
+  cfg="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../config.yaml"
+  [ -f "$cfg" ] && raw=$(sed -nE 's/^[[:space:]]*monitor_ignore_checks:[[:space:]]*(\[[^]]*\]).*/\1/p' "$cfg" | head -1)
+  printf '%s\n' "$raw"
+}
+
 # Base branch for feature PRs. Single trunk: the scaffolder pins the rendered
 # workflows (ci.yml, validate-pr.yml) to 'main', so this MUST return 'main' too —
 # resolving the live default branch instead would let start_issue.sh target a

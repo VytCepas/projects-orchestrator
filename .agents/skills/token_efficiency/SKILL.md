@@ -45,8 +45,14 @@ transcript.
 **Searches: delegate sweeps, not lookups.**
 
 - For broad multi-file searches ("where is X handled?", naming-convention
-  hunts), use the `explore` subagent (`.agents/agents/explore.md`): the file
+  hunts), use the built-in `Explore` subagent: the file
   dumps stay in the subagent's context and only the conclusion returns.
+- Orientation contract (#687, was explore.md's job before PI-848): when
+  delegating a sweep, tell the agent to consult `.agents/docs/CODE_MAP.md`,
+  `.agents/memory/MEMORY.md`, and `.agents/CAPABILITIES.md` first — each
+  may be absent. Verify in the source before asserting any specific value;
+  a mapped path that no longer exists means the map is stale. Report the
+  staleness you found alongside the answer.
 - Caveat: a subagent costs ~4× the tokens of doing it inline — it saves your
   *main context*, not total spend. For a single-file lookup where you know the
   symbol, just search directly.

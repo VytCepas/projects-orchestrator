@@ -56,6 +56,17 @@ intact. Revert any time with `just ci-local-off`.
 **Do not set the variable before the runner is online** — jobs queue forever,
 which is quieter and worse than the billing error.
 
+**Known-dead checks still block merges (PI-837).** The secret/PAT-bearing
+workflows stay GitHub-hosted (see safety rails) and keep failing as zero-step
+`startup_failure` runs while the lockout lasts — and the lifecycle PR merge
+monitor (where installed) blocks on any failing check. Name them in `.agents/config.yaml`, e.g.
+`monitor_ignore_checks: ["board-sync"]` (per-run:
+`PI_MONITOR_IGNORE_CHECKS=board-sync`): they are then reported as
+informational instead of blocking. Remove the entry once billing recovers.
+Note check runs attach to *commits*, not PRs — a stale failure inherited from
+a sibling branch at the same head clears with an empty head-refresh commit
+(details: `.agents/docs/guides/self-hosted-ci-runner.md`).
+
 ## 4. Honest alternatives
 
 - Make the repo **public** — Actions becomes free.
