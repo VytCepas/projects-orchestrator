@@ -83,9 +83,27 @@ _AUTONOMOUS_MODES = {"bypassPermissions", "dangerouslySkipPermissions"}
 
 
 def _find_config(start: Path) -> Path | None:
-    """Walk up from *start* to the project's .agents/config.yaml, if any."""
+    """Walk up from *start* to the project's .agents/config.yaml, if any.
+
+    A SYMLINKED marker is refused and the walk continues (PI-903; harbor#4 M13,
+    harbor CONTRACTS/marker.md). ``is_file()`` follows symlinks, so this used to
+    accept an ``.agents/`` — or an ``.agents/config.yaml`` — pointing anywhere on
+    disk. That matters more here than it does for a boundary verdict: this
+    function locates the file ``safety.allow`` is read from, so a link planted
+    outside the repo supplies its own allowlist and switches the destructive-
+    command deny table off wholesale. A symlink is writable from outside the
+    repo's own review, which is exactly what the guard is defending.
+
+    Refusing is the safe direction (no allowlist ⇒ keep guarding), and it makes
+    this walk agree with harbor's ``floor_in_repo``, which has refused symlinked
+    markers since the 2026-07-24 marker-forgery finding. Nothing surfaced the
+    disagreement while it existed.
+    """
     for candidate in (start, *start.parents):
-        config = candidate / ".agents" / "config.yaml"
+        agents = candidate / ".agents"
+        config = agents / "config.yaml"
+        if agents.is_symlink() or config.is_symlink():
+            continue
         if config.is_file():
             return config
     return None
