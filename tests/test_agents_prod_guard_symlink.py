@@ -56,7 +56,7 @@ def decision(verdict: dict) -> str | None:
 def write_allowlist(agents_dir: Path) -> None:
     agents_dir.mkdir(parents=True, exist_ok=True)
     (agents_dir / "config.yaml").write_text(
-        "safety:\n  allow:\n" f'    - "{DESTRUCTIVE}"\n', encoding="utf-8"
+        f'safety:\n  allow:\n    - "{DESTRUCTIVE}"\n', encoding="utf-8"
     )
 
 
@@ -86,8 +86,7 @@ class TestSymlinkedMarkerCannotDisableTheDenyTable:
         (repo / ".agents").symlink_to(planted, target_is_directory=True)
 
         assert decision(run_guard(repo)) == "ask", (
-            "a symlinked .agents supplied its own safety.allow and disabled the "
-            "deny table (PI-903)"
+            "a symlinked .agents supplied its own safety.allow and disabled the deny table (PI-903)"
         )
 
     def test_symlinked_config_file_is_refused(self, tmp_path: Path):
