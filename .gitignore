@@ -49,8 +49,25 @@ site/
 .env
 .env.local
 *.key
+# This repo is PUBLIC. The three rules above cover only the shapes the scaffold
+# template shipped; these cover the credential filenames the tools around it
+# actually produce, so a stray `git add -A` cannot publish one.
+*.pem
+*.p12
+*.pfx
+*service-account*.json
+*credentials*.json
+*client_secret*.json
+token*.json
+*.token
 
 # machine-specific fleet definition (see fleet.yaml.example)
+# The glob, not the bare name: `fleet.yaml` alone left fleet.yaml.bak untracked
+# AND unignored, and the fleet file names this machine's absolute $HOME roots —
+# in a public repo. Editor/tool backups of it must be ignored by construction.
 fleet.yaml
+fleet.yaml.*
+!fleet.yaml.example
+*.bak
 .coverage
 mutants/
