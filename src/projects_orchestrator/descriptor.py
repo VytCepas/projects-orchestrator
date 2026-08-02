@@ -33,6 +33,18 @@ CONFIG_RELPATH = Path(".claude") / _CONFIG_BASENAME
 def resolve_config(project_dir: Path) -> tuple[Path, str] | None:
     """Locate a project's descriptor across scaffold layouts.
 
+    A SYMLINKED marker is refused and the next layout is tried (harbor#4 M13 and
+    M24, frozen in harbor's ``CONTRACTS/marker.md``). ``is_file()`` follows
+    symlinks, so a planted ``.agents`` — or an ``.agents/config.yaml`` — pointing
+    anywhere on disk used to hand the fleet a descriptor authored outside the
+    project's own review, and everything downstream is read from it: the safety
+    allowlist, the hooks the scaffold is expected to carry, the observability
+    path, the heal mode. A symlink is writable from outside the repo, which is
+    exactly what makes it a forgery rather than a declaration. Refusing is the
+    safe direction — an undiscovered project is visibly absent from the fleet,
+    while a forged one is silently obeyed. project-init closed the same hole in
+    its own walker in PI-903.
+
     Args:
         project_dir: Candidate project root.
 
@@ -42,7 +54,10 @@ def resolve_config(project_dir: Path) -> tuple[Path, str] | None:
         ``None`` when neither layout has a config.
     """
     for root in _LAYOUT_DIRS:
-        candidate = project_dir / root / _CONFIG_BASENAME
+        layout = project_dir / root
+        candidate = layout / _CONFIG_BASENAME
+        if layout.is_symlink() or candidate.is_symlink():
+            continue
         if candidate.is_file():
             return candidate, root
     return None
@@ -141,6 +156,16 @@ class ProjectDescriptor:
         heal_mode: The project's declared heal-mode override (``fix`` |
             ``notify``); empty when undeclared, in which case the run-wide
             mode applies (ADR-008).
+        context: Detect-and-defer boundary declaration (``repo`` | ``ambient``);
+            empty when undeclared. ``repo`` — this project governs itself and an
+            ambient agent layer stands down inside it. ``ambient`` — the owner
+            opted out and the global layer keeps acting here. Empty means
+            UNKNOWN and never ``ambient``: every descriptor scaffolded before
+            project-init PI-901 lacks the key, so reading absence as an opt-out
+            would un-declare the whole installed base at once. The fleet does
+            not act on this — it manages a project either way — it reports it,
+            so the value stops being a field three repos write and nobody reads
+            (harbor#4 H1, harbor ``CONTRACTS/marker.md``).
         warnings: Human-readable parse problems, empty when the config is clean.
     """
 
@@ -164,6 +189,7 @@ class ProjectDescriptor:
     host: str = ""
     ci: CiConfig | None = None
     heal_mode: str = ""
+    context: str = ""
     warnings: tuple[str, ...] = ()
 
     def has_task(self, task: str) -> bool:
@@ -235,6 +261,10 @@ def _extract_ci(raw: dict[str, Any]) -> CiConfig | None:
 #: agent and lands a draft PR; ``notify`` reports the failure and spends nothing.
 HEAL_MODES = ("fix", "notify")
 
+# Detect-and-defer boundary values, frozen in harbor's CONTRACTS/marker.md and
+# mirrored by project-init's descriptor schema enum (harbor#4 H1).
+CONTEXT_VALUES = ("repo", "ambient")
+
 
 def _extract_heal_mode(raw: dict[str, Any], warnings: list[str]) -> str:
     """Parse the optional ``heal.mode`` override; ``""`` when absent.
@@ -251,6 +281,44 @@ def _extract_heal_mode(raw: dict[str, Any], warnings: list[str]) -> str:
         warnings.append(f"heal.mode '{mode}' is not one of {'|'.join(HEAL_MODES)} — ignored")
         return ""
     return mode
+
+
+def _extract_context(raw: dict[str, Any], warnings: list[str]) -> str:
+    """Parse the top-level ``context`` boundary marker; ``""`` when absent.
+
+    The value is TOP-LEVEL by contract, which YAML gives for free here: a
+    ``context:`` indented under some other block parses as that block's key and
+    is never seen, and a commented-out one is not a key at all. Both are rules
+    the shell and regex readers of this same field have to spell out.
+
+    An unknown value is ignored WITH a warning rather than guessed. For a key
+    three implementations in two languages read, the realistic failure is a
+    near-miss (``Repo``, ``project``) that looks marked to a human and resolves
+    to nothing in code — project-init's descriptor schema constrains it to an
+    enum for the same reason.
+    """
+    if "context" not in raw:
+        return ""
+    value = raw.get("context")
+    if value is None:
+        # `context:` with nothing after it. YAML gives None, and that is the one
+        # shape genuinely indistinguishable from an absent key — the writer got
+        # as far as the key and no further.
+        return ""
+    # PRESENT BUT NOT A STRING is malformed, not absent (PR #200 review). `context:
+    # true`, `123`, a list or a mapping used to be coerced to "" and returned
+    # silently, which made an invalid boundary marker read exactly like a
+    # deliberate omission — and absence has a defined meaning here (M21: fall back
+    # to marker presence). A reader that cannot tell them apart hands the operator
+    # a repo that looks unmarked and is actually mis-marked.
+    if not isinstance(value, str) or not value.strip():
+        warnings.append(f"context must be one of {'|'.join(CONTEXT_VALUES)} — ignored: {value!r}")
+        return ""
+    context = value.strip()
+    if context not in CONTEXT_VALUES:
+        warnings.append(f"context '{context}' is not one of {'|'.join(CONTEXT_VALUES)} — ignored")
+        return ""
+    return context
 
 
 def _contained_path(project_dir: Path, relative: str) -> Path | None:
@@ -406,6 +474,7 @@ def parse_config(text: str, project_dir: Path, config_root: str = ".claude") -> 
         # child that hand-adds the block is honoured too, which costs nothing.
         ci=_extract_ci(raw),
         heal_mode=_extract_heal_mode(raw, warnings),
+        context=_extract_context(raw, warnings),
         warnings=tuple(warnings),
     )
 
