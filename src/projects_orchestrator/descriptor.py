@@ -297,10 +297,24 @@ def _extract_context(raw: dict[str, Any], warnings: list[str]) -> str:
     to nothing in code — project-init's descriptor schema constrains it to an
     enum for the same reason.
     """
-    value = raw.get("context")
-    context = value.strip() if isinstance(value, str) else ""
-    if not context:
+    if "context" not in raw:
         return ""
+    value = raw.get("context")
+    if value is None:
+        # `context:` with nothing after it. YAML gives None, and that is the one
+        # shape genuinely indistinguishable from an absent key — the writer got
+        # as far as the key and no further.
+        return ""
+    # PRESENT BUT NOT A STRING is malformed, not absent (PR #200 review). `context:
+    # true`, `123`, a list or a mapping used to be coerced to "" and returned
+    # silently, which made an invalid boundary marker read exactly like a
+    # deliberate omission — and absence has a defined meaning here (M21: fall back
+    # to marker presence). A reader that cannot tell them apart hands the operator
+    # a repo that looks unmarked and is actually mis-marked.
+    if not isinstance(value, str) or not value.strip():
+        warnings.append(f"context must be one of {'|'.join(CONTEXT_VALUES)} — ignored: {value!r}")
+        return ""
+    context = value.strip()
     if context not in CONTEXT_VALUES:
         warnings.append(f"context '{context}' is not one of {'|'.join(CONTEXT_VALUES)} — ignored")
         return ""

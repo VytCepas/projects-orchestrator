@@ -421,6 +421,37 @@ class TestBoundaryMarkerValue:
         assert descriptor.context == ""
         assert any("context" in w for w in descriptor.warnings)
 
+    def test_a_non_string_context_is_malformed_not_absent(self, tmp_path: Path) -> None:
+        """PR #200 review (P2). `context: true` parses as a bool and used to be
+        coerced to "" and returned silently — so an invalid boundary marker read
+        exactly like a deliberate omission, and absence has a DEFINED meaning
+        here (M21: fall back to marker presence). Malformed must be visible."""
+        project = make_project(
+            tmp_path, "alpha", config_text="context: true\nproject:\n  name: alpha\n"
+        )
+        descriptor = load_descriptor(project)
+        assert descriptor is not None
+        assert descriptor.context == ""
+        assert any("context" in w for w in descriptor.warnings)
+
+    def test_a_list_valued_context_also_warns(self, tmp_path: Path) -> None:
+        """The other shapes YAML will hand back: a sequence, and a mapping."""
+        project = make_project(
+            tmp_path, "alpha", config_text="context:\n  - repo\nproject:\n  name: alpha\n"
+        )
+        descriptor = load_descriptor(project)
+        assert descriptor is not None
+        assert descriptor.context == "" and descriptor.warnings
+
+    def test_a_bare_context_key_is_absent_not_malformed(self, tmp_path: Path) -> None:
+        """`context:` with nothing after it is the one shape genuinely
+        indistinguishable from an absent key — the writer got as far as the key
+        and no further. It must stay silent, or every half-typed config warns."""
+        project = make_project(tmp_path, "alpha", config_text="context:\nproject:\n  name: alpha\n")
+        descriptor = load_descriptor(project)
+        assert descriptor is not None
+        assert descriptor.context == "" and not descriptor.warnings
+
     def test_context_reaches_the_json_surface(self, tmp_path: Path) -> None:
         """The reason to read it at all is to be able to report it. ``asdict``
         is generic, so this pins the field against a future hand-rolled
