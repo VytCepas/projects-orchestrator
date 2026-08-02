@@ -1,3 +1,4 @@
+context: repo
 # project-init: record of choices made at init time.
 # Safe to hand-edit; re-running `project-init` will reconcile with this file.
 
