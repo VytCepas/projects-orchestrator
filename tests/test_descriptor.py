@@ -337,3 +337,155 @@ def test_unknown_heal_mode_is_ignored_with_a_warning(tmp_path: Path) -> None:
     descriptor = load_descriptor(project)
     assert descriptor is not None
     assert descriptor.heal_mode == "" and any("heal.mode" in w for w in descriptor.warnings)
+
+
+class TestBoundaryMarkerValue:
+    """harbor#4 H1 — the detect-and-defer ``context:`` declaration.
+
+    project-init has emitted this key since PI-901 and harbor's floor has read
+    it since 2026-07-25; the fleet read it nowhere, so a value written by one
+    layer and honoured by another was invisible to the layer that reports on
+    both. Case ids are harbor's shared fixtures (``fixtures/marker/cases.json``)
+    so a divergence is traceable to one line of one contract.
+
+    The fleet does not ACT on the value — an opted-out project is still a
+    project it manages — it surfaces it. Dropping such a project from discovery
+    would delete it from ``projects``, ``snapshot``, ``audit`` and ``heal`` on
+    the strength of a field about which *agent layer* governs.
+    """
+
+    def test_context_repo_is_read(self, tmp_path: Path) -> None:
+        """M20: what every fresh scaffold emits."""
+        project = make_project(
+            tmp_path, "alpha", config_text="context: repo\nproject:\n  name: alpha\n"
+        )
+        descriptor = load_descriptor(project)
+        assert descriptor is not None and descriptor.context == "repo"
+
+    def test_context_ambient_is_read(self, tmp_path: Path) -> None:
+        """M18: the owner opting back in to the ambient layer."""
+        project = make_project(
+            tmp_path, "alpha", config_text="context: ambient\nproject:\n  name: alpha\n"
+        )
+        descriptor = load_descriptor(project)
+        assert descriptor is not None and descriptor.context == "ambient"
+
+    def test_an_opted_out_project_is_still_managed(self, tmp_path: Path) -> None:
+        """`ambient` says which agent layer governs INSIDE the repo. It is not
+        a request to be forgotten by the fleet, and reading it as one would
+        silently remove a project from every command."""
+        project = make_project(
+            tmp_path, "alpha", config_text="context: ambient\nproject:\n  name: alpha\n"
+        )
+        descriptor = load_descriptor(project)
+        assert descriptor is not None
+        assert descriptor.name == "alpha"
+        assert not descriptor.warnings
+
+    def test_absent_context_is_empty_and_never_ambient(self, tmp_path: Path) -> None:
+        """M21: every descriptor scaffolded before PI-901 lacks the key, which
+        is why it is optional in the schema. Absence is UNKNOWN — reading it as
+        an opt-out would re-label the whole installed base at once."""
+        descriptor = load_descriptor(make_project(tmp_path, "alpha"))
+        assert descriptor is not None and descriptor.context == ""
+
+    def test_a_nested_context_key_is_a_different_key(self, tmp_path: Path) -> None:
+        """M23: ``context`` is top-level. One indented under an unrelated block
+        shares a name and nothing else. Real YAML parsing gives this for free —
+        the shell and regex readers of the same field have to spell it out."""
+        project = make_project(
+            tmp_path,
+            "alpha",
+            config_text="project:\n  name: alpha\ntooling:\n  context: ambient\n",
+        )
+        descriptor = load_descriptor(project)
+        assert descriptor is not None and descriptor.context == ""
+
+    def test_a_commented_out_context_is_not_a_declaration(self, tmp_path: Path) -> None:
+        """M22: ``# context: ambient`` is a note someone wrote."""
+        project = make_project(
+            tmp_path, "alpha", config_text="# context: ambient\nproject:\n  name: alpha\n"
+        )
+        descriptor = load_descriptor(project)
+        assert descriptor is not None and descriptor.context == ""
+
+    def test_a_near_miss_value_is_ignored_with_a_warning(self, tmp_path: Path) -> None:
+        """For a key three implementations in two languages read, the realistic
+        failure is a value that looks marked to a human and resolves to nothing
+        in code. Ignore it — loudly, like heal.mode."""
+        project = make_project(
+            tmp_path, "alpha", config_text="context: Repo\nproject:\n  name: alpha\n"
+        )
+        descriptor = load_descriptor(project)
+        assert descriptor is not None
+        assert descriptor.context == ""
+        assert any("context" in w for w in descriptor.warnings)
+
+    def test_context_reaches_the_json_surface(self, tmp_path: Path) -> None:
+        """The reason to read it at all is to be able to report it. ``asdict``
+        is generic, so this pins the field against a future hand-rolled
+        serializer that enumerates keys and quietly drops the new one."""
+        from dataclasses import asdict
+
+        project = make_project(
+            tmp_path, "alpha", config_text="context: ambient\nproject:\n  name: alpha\n"
+        )
+        descriptor = load_descriptor(project)
+        assert descriptor is not None
+        assert asdict(descriptor)["context"] == "ambient"
+
+
+class TestSymlinkedMarkerIsRefused:
+    """harbor#4 M13/M24 — a symlinked marker is refused and the walk continues.
+
+    ``is_file()`` follows symlinks, so a planted ``.agents`` (or an
+    ``.agents/config.yaml``) pointing outside the project handed the fleet a
+    descriptor authored outside that project's review — and the fleet reads the
+    safety allowlist, the expected hooks, the observability path and the heal
+    mode from it. project-init closed the same hole in PI-903; this side stayed
+    open, measured 2026-08-02.
+    """
+
+    def test_a_symlinked_layout_dir_is_refused(self, tmp_path: Path) -> None:
+        outside = tmp_path / "outside" / ".agents"
+        outside.mkdir(parents=True)
+        (outside / "config.yaml").write_text('project:\n  name: "forged"\n', encoding="utf-8")
+        project = tmp_path / "victim"
+        project.mkdir()
+        (project / ".agents").symlink_to(outside, target_is_directory=True)
+        assert resolve_config(project) is None
+        assert load_descriptor(project) is None
+
+    def test_a_symlinked_config_file_is_refused(self, tmp_path: Path) -> None:
+        planted = tmp_path / "outside" / "config.yaml"
+        planted.parent.mkdir(parents=True)
+        planted.write_text('project:\n  name: "forged"\n', encoding="utf-8")
+        project = tmp_path / "victim"
+        (project / ".agents").mkdir(parents=True)
+        (project / ".agents" / "config.yaml").symlink_to(planted)
+        assert resolve_config(project) is None
+
+    def test_a_refused_link_falls_through_to_the_legacy_layout(self, tmp_path: Path) -> None:
+        """Refusing must mean 'try the next layout', not 'give up': a planted
+        ``.agents`` link must not shadow a real legacy ``.claude`` descriptor."""
+        outside = tmp_path / "outside" / ".agents"
+        outside.mkdir(parents=True)
+        (outside / "config.yaml").write_text('project:\n  name: "forged"\n', encoding="utf-8")
+        project = tmp_path / "victim"
+        (project / ".claude").mkdir(parents=True)
+        (project / ".claude" / "config.yaml").write_text(
+            'project:\n  name: "real"\n', encoding="utf-8"
+        )
+        (project / ".agents").symlink_to(outside, target_is_directory=True)
+        resolved = resolve_config(project)
+        assert resolved is not None and resolved[1] == ".claude"
+        descriptor = load_descriptor(project)
+        assert descriptor is not None and descriptor.name == "real"
+
+    def test_a_real_marker_is_still_discovered(self, fleet_dir: Path) -> None:
+        """The case that proves the refusal discriminates rather than simply
+        rejecting: every governed repo on a real machine is an ordinary
+        directory, and a refusal that caught them would empty the fleet."""
+        project = make_project(fleet_dir, "ordinary", layout=".agents")
+        resolved = resolve_config(project)
+        assert resolved is not None and resolved[1] == ".agents"
