@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import shutil
 import time
 from pathlib import Path
+
+import pytest
 
 from projects_orchestrator import runner
 from projects_orchestrator.runner import run_command
@@ -51,6 +54,17 @@ def test_a_child_that_escapes_the_kill_cannot_outlast_the_timeout(tmp_path: Path
     assert time.monotonic() - start < 10.0
 
 
+# THE DEPENDENCY IS THE BINARY, NOT THE OS (issue #205). This test detaches a
+# child with `setsid`, which is util-linux and has no macOS equivalent on PATH,
+# so the child never escaped and the assertion saw a shell error instead:
+#     assert 'output lost' in '/bin/sh: setsid: command not found\n'
+# Guarding on `which` rather than `sys.platform` keeps it running anywhere the
+# binary exists — including a Mac with util-linux from Homebrew — and it is the
+# thing actually required.
+@pytest.mark.skipif(
+    shutil.which("setsid") is None,
+    reason="needs setsid to detach the child — see issue #205",
+)
 def test_output_lost_to_an_escaped_child_is_reported_not_silently_empty(
     tmp_path: Path, monkeypatch
 ) -> None:
