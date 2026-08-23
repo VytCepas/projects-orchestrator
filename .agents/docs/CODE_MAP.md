@@ -271,6 +271,13 @@ Is the vendored project-init contract still the contract upstream ships?
 - `def load_vendored_schema` — Read the vendored schema; ``None`` when unreadable.
 - `def fetch_upstream_schema` — Fetch project-init's shipped schema; ``None`` on any problem (never raises).
 
+### `projects_orchestrator/gcloud_identity.py`
+
+Pin every ``gcloud`` subprocess to one named credential directory.
+
+- `def gcloud_config_dir` — The credential directory every gcloud subprocess must use (pure).
+- `def gcloud_env` — Build the environment a gcloud subprocess must see (pure).
+
 ### `projects_orchestrator/hardening.py`
 
 Fleet setup-readiness checklist with concrete next actions.
