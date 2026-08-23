@@ -112,6 +112,52 @@ def test_default_fleet_config_falls_back_to_parent_scan(tmp_path: Path) -> None:
     assert default_fleet_config(cwd).roots == (tmp_path,)
 
 
+def test_po_fleet_root_is_read_when_no_fleet_file(tmp_path: Path) -> None:
+    """#204: the variable `watch` told people to check was read by nothing.
+
+    Its failure message named `PO_FLEET_ROOT`, and `grep -rn PO_FLEET_ROOT src/`
+    matched only that message — the variable lived solely in the docs' cron
+    recipes, where the shell expands it into `--root`. So the advice given at
+    the moment of confusion was a dead end.
+    """
+    cwd = tmp_path / "somewhere-with-no-fleet-file"
+    cwd.mkdir()
+    declared = tmp_path / "the-fleet"
+    declared.mkdir()
+    config = default_fleet_config(cwd, env={"PO_FLEET_ROOT": str(declared)})
+    assert config.roots == (declared.resolve(),)
+
+
+def test_a_local_fleet_file_still_beats_po_fleet_root(tmp_path: Path) -> None:
+    """A file in the directory is a more specific statement than an env default."""
+    (tmp_path / "fleet.yaml").write_text('roots: ["kids"]\n', encoding="utf-8")
+    other = tmp_path / "ignored"
+    other.mkdir()
+    config = default_fleet_config(tmp_path, env={"PO_FLEET_ROOT": str(other)})
+    assert config.roots == (tmp_path / "kids",)
+
+
+def test_an_unusable_po_fleet_root_warns_instead_of_silently_scanning(
+    tmp_path: Path,
+) -> None:
+    """Set but not a directory is a typo, and a typo must not read as an answer."""
+    cwd = tmp_path / "orchestrator"
+    cwd.mkdir()
+    config = default_fleet_config(cwd, env={"PO_FLEET_ROOT": str(tmp_path / "nope")})
+    assert config.roots == (tmp_path,), "must fall back to the parent scan"
+    assert any("is not a directory" in w for w in config.warnings)
+
+
+def test_po_fleet_root_empty_or_blank_is_ignored(tmp_path: Path) -> None:
+    """An exported-but-empty variable is not a configuration."""
+    cwd = tmp_path / "orchestrator"
+    cwd.mkdir()
+    for value in ("", "   "):
+        config = default_fleet_config(cwd, env={"PO_FLEET_ROOT": value})
+        assert config.roots == (tmp_path,)
+        assert config.warnings == ()
+
+
 def test_register_project_creates_fleet_file(tmp_path: Path) -> None:
     fleet_file = tmp_path / "fleet.yaml"
     project = make_project(tmp_path, "alpha")

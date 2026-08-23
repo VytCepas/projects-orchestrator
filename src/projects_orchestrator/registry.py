@@ -16,6 +16,8 @@ path, and the result is sorted by name for stable rendering.
 from __future__ import annotations
 
 import fnmatch
+import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -121,20 +123,55 @@ def load_fleet_config(fleet_file: Path) -> FleetConfig:
     )
 
 
-def default_fleet_config(cwd: Path | None = None) -> FleetConfig:
+FLEET_ROOT_ENV = "PO_FLEET_ROOT"
+
+
+def default_fleet_config(
+    cwd: Path | None = None, env: Mapping[str, str] | None = None
+) -> FleetConfig:
     """Build the config used when no fleet file exists.
 
     Args:
         cwd: Directory to anchor discovery at (defaults to the process cwd).
+        env: Environment to read ``PO_FLEET_ROOT`` from (defaults to the real one).
 
     Returns:
-        ``fleet.yaml`` in ``cwd`` when present, else a config scanning the
-        parent directory of ``cwd`` (the sibling-checkout convention).
+        ``fleet.yaml`` in ``cwd`` when present; else ``$PO_FLEET_ROOT`` when set
+        to a directory; else a config scanning the parent directory of ``cwd``
+        (the sibling-checkout convention).
+
+    ``PO_FLEET_ROOT`` IS READ HERE BECAUSE IT WAS ALREADY ADVERTISED (#204). The
+    `watch` failure message told the operator to check it and nothing in the
+    codebase read it — it existed only in the docs' cron recipes, where the
+    SHELL expands it into `--root "$PO_FLEET_ROOT"`. So the one piece of advice
+    offered at the moment of confusion was a dead end.
+
+    It also fixes the cwd-dependence that made the advice necessary. With the
+    orchestrator installed as a `uv tool` there is no checkout to sit beside, so
+    a flat `$HOME/<repo>` layout resolved the whole fleet from inside any
+    governed repo and NOTHING from `$HOME` itself, where `cwd.parent` is
+    `/Users` or `/home`. An exported root is cwd-independent, which is the
+    property that was missing.
+
+    Precedence puts the file first on purpose: a `fleet.yaml` in the directory
+    is a more specific statement than an environment default.
     """
     cwd = (cwd or Path.cwd()).resolve()
     fleet_file = cwd / FLEET_FILENAME
     if fleet_file.is_file():
         return load_fleet_config(fleet_file)
+    source = os.environ if env is None else env
+    declared = (source.get(FLEET_ROOT_ENV) or "").strip()
+    if declared:
+        candidate = Path(declared).expanduser()
+        if candidate.is_dir():
+            return FleetConfig(roots=(candidate.resolve(),))
+        # Set but unusable. Saying so beats silently scanning somewhere else and
+        # reporting an empty fleet the operator cannot explain.
+        return FleetConfig(
+            roots=(cwd.parent,),
+            warnings=(f"{FLEET_ROOT_ENV}={declared!r} is not a directory — ignoring it",),
+        )
     return FleetConfig(roots=(cwd.parent,))
 
 

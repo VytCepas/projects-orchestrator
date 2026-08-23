@@ -97,6 +97,7 @@ from projects_orchestrator.observability import filter_since, load_events
 from projects_orchestrator.pool import map_ordered
 from projects_orchestrator.registry import (
     FLEET_FILENAME,
+    FLEET_ROOT_ENV,
     Fleet,
     FleetConfig,
     default_fleet_config,
@@ -123,10 +124,40 @@ def _fleet_config(args: argparse.Namespace) -> FleetConfig:
 
 
 def _discover(args: argparse.Namespace) -> Fleet:
-    """Discover the fleet, surfacing warnings on stderr."""
+    """Discover the fleet, surfacing warnings on stderr.
+
+    An empty result says WHERE IT LOOKED (#204). Every command but `watch`
+    reports an unresolved fleet as "no projects discovered" and exit 0 — and
+    `doctor`, `drift` and `audit` print nothing at all — which is
+    indistinguishable from a fully conformant fleet. The exit codes are left
+    alone here deliberately (see below); what changes is that the operator is
+    told which roots were scanned and which config, if any, was read, so a
+    misconfiguration stops looking like a clean bill of health.
+
+    NOT AN EXIT-CODE CHANGE, and that is not an oversight. `watch` exits 2 on an
+    empty fleet and the same reasoning covers the reporting commands, but this
+    helper is shared by all 20 discovery call sites — including `register`,
+    where an empty fleet is the NORMAL first-run state. Failing here would break
+    the first registration on a new machine. Doing it properly means opting the
+    reporting commands in one at a time, which is its own change.
+    """
     fleet = discover(_fleet_config(args))
     for warning in fleet.warnings:
         print(f"warning: {warning}", file=sys.stderr)
+    if not fleet.descriptors:
+        config = fleet.config
+        if config.source is not None:
+            where = f"fleet file {config.source}"
+        elif config.roots:
+            where = "scanned " + ", ".join(str(r) for r in config.roots)
+        else:
+            where = "no roots configured"
+        print(
+            f"warning: no projects discovered ({where}). A project needs"
+            " .agents/config.yaml (or a legacy .claude/ one). Point discovery"
+            f" with --root/--fleet, or export {FLEET_ROOT_ENV}.",
+            file=sys.stderr,
+        )
     return fleet
 
 
