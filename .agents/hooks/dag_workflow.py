@@ -265,11 +265,13 @@ _ISSUE_CREATE_RE = re.compile(r"\bgh\s+issue\s+create\b")
 _ISSUE_REPO_FLAG_RE = re.compile(
     r"\bgh\s+issue\s+create\b[^;&|]*?(?:-R|--repo)[= ]+['\"]?([\w.-]+(?:/[\w.-]+)+)"
 )
-_ORIGIN_SLUG_RE = re.compile(r"[:/]([\w.-]+/[\w.-]+?)(?:\.git)?/?$")
+# origin URL → (host, owner/repo): strip scheme, then any `user@`, leaving
+# `host[:port][:/]path`. Covers https, ssh://, and scp-like `git@host:owner/repo`.
+_ORIGIN_URL_RE = re.compile(r"^(?:\w+://)?(?:[^@/]+@)?([\w.-]+)(?::\d+)?[:/](.+)$")
 
 
-def _origin_slug() -> str | None:
-    """This repo's owner/repo, from the origin remote (no network)."""
+def _origin_host_slug() -> tuple[str, str] | None:
+    """This repo's (host, owner/repo) from the origin remote (no network)."""
     try:
         url = subprocess.run(
             ["git", "config", "--get", "remote.origin.url"],  # noqa: S607 — read-only config probe, fixed argv
@@ -280,8 +282,13 @@ def _origin_slug() -> str | None:
         ).stdout.strip()
     except Exception:  # noqa: BLE001 — a guard probe must never break the hook
         return None
-    m = _ORIGIN_SLUG_RE.search(url)
-    return m.group(1).lower() if m else None
+    m = _ORIGIN_URL_RE.match(url)
+    if not m:
+        return None
+    parts = m.group(2).lower().removesuffix(".git").strip("/").split("/")
+    if len(parts) < 2:
+        return None
+    return m.group(1).lower(), "/".join(parts[-2:])
 
 
 def _is_upstream_issue_create(cmd: str) -> bool:
@@ -289,14 +296,26 @@ def _is_upstream_issue_create(cmd: str) -> bool:
     m = _ISSUE_REPO_FLAG_RE.search(cmd)
     if not m:
         return False
-    # `--repo` accepts an optional host ([HOST/]OWNER/REPO), so compare only the
-    # trailing owner/repo — otherwise `-R github.com/owner/this-repo` parses as
-    # `github.com/owner`, reads as a different repo, and slips past the wrapper.
-    target = "/".join(m.group(1).lower().removesuffix(".git").split("/")[-2:])
-    origin = _origin_slug()
+    # `gh --repo` accepts an optional host ([HOST/]OWNER/REPO). Compare the
+    # owner/repo, and — when the flag carries an explicit host — the host too:
+    # otherwise `-R github.com/OWNER/this-repo` parses as `github.com/OWNER` and
+    # slips past the wrapper (PI-882), while a genuinely cross-host filing to a
+    # same-named repo (e.g. a GHES project reporting to github.com/OWNER/REPO)
+    # must still be allowed through (PI-882 review).
+    parts = m.group(1).lower().removesuffix(".git").split("/")
+    flag_host = parts[-3] if len(parts) >= 3 else None
+    flag_slug = "/".join(parts[-2:])
+    origin = _origin_host_slug()
     # Unknown origin: an explicit -R is still not this project's issue tracker
     # (create_issue.sh needs origin to work at all) — allow rather than dead-end.
-    return origin is None or target != origin
+    if origin is None:
+        return True
+    origin_host, origin_slug = origin
+    if flag_slug != origin_slug:
+        return True
+    # Same owner/repo: an upstream filing only when an explicit, different host
+    # is named; a bare or matching host is this project's own tracker.
+    return flag_host is not None and flag_host != origin_host
 
 
 COMMAND_RULES: list[tuple[re.Pattern[str], str | None, str]] = [
@@ -794,7 +813,11 @@ def cmd_create_pr_nojira(type_: str, title: str, branch: str | None, base: str |
     # `gh pr view` with no selector also resolves the most recent CLOSED/MERGED
     # PR for the branch — reusing a branch name after a merge must open a new
     # PR, not report the merged one as "already exists" (matches check_pr_opened).
-    code, out = _gh(["pr", "view", "--json", "url,state"])
+    # Selector passed explicitly: with none, gh resolves the branch through its
+    # local remote-tracking ref, which a --single-branch/--depth clone never
+    # creates for anything but the default branch (see _create_pr in
+    # start_issue.sh). Naming the branch keeps the CLOSED/MERGED semantics above.
+    code, out = _gh(["pr", "view", branch, "--json", "url,state"])
     if code == 0:
         try:
             data = json.loads(out or "{}")
@@ -808,7 +831,9 @@ def cmd_create_pr_nojira(type_: str, title: str, branch: str | None, base: str |
     pr_title = f"{type_}: {title}"
     pr_body = "No linked issue (nojira)."
     # Single trunk: with no explicit --base, gh targets the repo default branch.
-    args = ["pr", "create", "--draft", "--title", pr_title, "--body", pr_body]
+    # --head explicit for the same reason as the selector above: gh's inference
+    # depends on a remote-tracking ref that a narrow fetch refspec never creates.
+    args = ["pr", "create", "--draft", "--head", branch, "--title", pr_title, "--body", pr_body]
     if base:
         args += ["--base", base]
     code, out = _gh(args)

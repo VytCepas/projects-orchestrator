@@ -14,6 +14,16 @@ jobs:
       - name: Validate required planning metadata
         env:
           GH_TOKEN: ${{ github.token }}
+          # This job has no actions/checkout — it only needs the issue payload,
+          # not the tree. But `gh` falls back to reading the git remote to work
+          # out which repo it is talking to, and with no checkout there is no
+          # git repo, so every `gh issue edit` / `gh label create` below died
+          # with "failed to run git: fatal: not a git repository" and the job
+          # exited 1. It had NEVER passed in any scaffolded repo — 100% failure
+          # across every run in three of them, which is why nobody read it.
+          # GH_REPO tells gh the repo directly and skips the git lookup, which
+          # is cheaper than adding a checkout just to satisfy a remote lookup.
+          GH_REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_BODY: ${{ github.event.issue.body }}
           LABELS_JSON: ${{ toJson(github.event.issue.labels) }}

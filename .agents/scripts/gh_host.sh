@@ -94,6 +94,18 @@ monitor_ignore_checks() {
   printf '%s\n' "$raw"
 }
 
+# Co-Authored-By: Claude trailer preference recorded in .agents/config.yaml
+# (commit.coauthor, #888). Echoes "true" when the project opted in, else nothing,
+# so callers can gate the trailer with [ "$(coauthor)" = "true" ]. Anchored on
+# this file's location like the other readers. Absent key ⇒ off (a pre-#888
+# scaffold never had the trailer).
+coauthor() {
+  local cfg v=""
+  cfg="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../config.yaml"
+  [ -f "$cfg" ] && v=$(sed -nE 's/^[[:space:]]*coauthor:[[:space:]]*(true|false).*/\1/p' "$cfg" | head -1)
+  [ "$v" = "true" ] && printf 'true\n'
+}
+
 # Base branch for feature PRs. Single trunk: the scaffolder pins the rendered
 # workflows (ci.yml, validate-pr.yml) to 'main', so this MUST return 'main' too —
 # resolving the live default branch instead would let start_issue.sh target a

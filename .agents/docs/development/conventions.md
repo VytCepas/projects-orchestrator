@@ -17,6 +17,7 @@ Types: `feat`, `fix`, `test`, `docs`, `chore`
 
 Example: `feat(PI-42): Add OAuth login`
 
+
 ## Pull requests
 
 - Title: `type(PROJECT-123): Short description`
