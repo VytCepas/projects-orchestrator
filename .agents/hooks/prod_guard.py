@@ -494,8 +494,12 @@ def _statements(command: str) -> list[str]:
         if inner:
             pending.extend(inner)
             chunk = _SUBSTITUTION.sub(" ", chunk)
-        # `&&` and `||` before the single-character forms, or they split wrongly.
-        out.extend(re.split(r"(?:&&|\|\||;|&|\n)+", chunk))
+        # `&&` and `||` FIRST, or they split wrongly. And a bare `&` is only a
+        # separator when it is not part of a redirection: splitting on any `&`
+        # broke `2>&1`, `&>` and `|&`, which tore a producer away from its
+        # downstream reader and REINTRODUCED the bypass — measured,
+        # `ls .env 2>&1 | xargs cat` went back to allow (PR #952 review).
+        out.extend(re.split(r"(?:&&|\|\||;|\n|(?<![>&|])&(?![>&]))+", chunk))
     return out
 
 
