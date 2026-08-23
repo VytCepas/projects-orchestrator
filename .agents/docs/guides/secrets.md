@@ -44,6 +44,42 @@ deny-list is a guardrail, not a guarantee (ADR-012). The guarantee is that
   an agent runs in.
 - A guard cannot delete what the session cannot reach.
 
+## Keeping secret files out of the transcript
+
+Even a dev-only `.env` is worth not reading. Anything an agent reads enters
+the transcript, which is re-sent on every following turn and outlives the
+session that read it. Two controls, because neither covers the other:
+
+- **`permissions.deny` in `.claude/settings.json`** closes the `Read` tool
+  for `.env` and its non-example variants, private keys, `*service-account*`
+  and `*credentials*` JSON, and anything under `secrets/`.
+- **The `prod_guard` hook** closes the Bash route — reading, sourcing,
+  copying or POSTing the file. A permission rule matches a tool's arguments,
+  and Bash's single argument is an opaque command string, so the rule above
+  cannot see into it.
+
+The example files stay readable on purpose. `.env.example`, `.env.sample`,
+`.env.template` and `.env.dist` are committed, carry no values, and are how
+an agent learns which variables a project needs — blocking them would break
+the safe half of the convention to protect nothing.
+
+Listing, creating, deleting and `chmod`-ing a secret file are not reads and
+are not flagged; neither is appending its name to `.gitignore`. If a read is
+genuinely needed, add a regex to `safety.allow` in `.agents/config.yaml` —
+but prefer having the value injected as an environment variable, which
+leaves nothing to read.
+
+If an allowlist entry does not take effect, the guard now says so in the
+permission prompt itself rather than failing silently. Either spelling works:
+
+```yaml
+safety:
+  allow: ["^cat \.env$"]     # inline
+  # or
+  allow:
+    - "^cat \.env$"          # multi-line
+```
+
 ## CI secrets
 
 Use the platform's mechanism (GitHub Actions secrets/environments), never

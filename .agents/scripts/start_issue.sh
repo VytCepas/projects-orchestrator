@@ -208,8 +208,15 @@ fi
 # `git commit --allow-empty` still commits whatever is currently staged, which
 # would silently fold unrelated work into the generated seed commit (#446).
 _seed_commit() {
-  SEED_COMMIT=$(git commit-tree "HEAD^{tree}" -p HEAD \
-    -m "chore(${ISSUE_REF}): start #${ISSUE_NUMBER} — ${CLEAN_TITLE}")
+  local msg="chore(${ISSUE_REF}): start #${ISSUE_NUMBER} — ${CLEAN_TITLE}"
+  # Honor the recorded commit.coauthor preference (#888) — the seed is the first
+  # commit on the branch, so an opted-in project expects the trailer here too.
+  if [ "$(coauthor)" = "true" ]; then
+    msg="${msg}
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+  fi
+  SEED_COMMIT=$(git commit-tree "HEAD^{tree}" -p HEAD -m "$msg")
   git reset --soft "$SEED_COMMIT"
 }
 
@@ -239,10 +246,20 @@ fi
 PR_TITLE="${TYPE}(${ISSUE_REF}): ${CLEAN_TITLE}"
 PR_BODY="Closes #${ISSUE_NUMBER}"
 
+# --head is explicit rather than inferred. Without it `gh pr create` resolves the
+# head branch through the local remote-tracking ref, so it aborts with "you must
+# first push the current branch to a remote, or use the --head flag" on any clone
+# whose fetch refspec is narrower than +refs/heads/*: a --single-branch or
+# --depth clone configures only
+# `remote.origin.fetch = +refs/heads/main:refs/remotes/origin/main`, and no
+# tracking ref is ever created for the branch we just pushed. The push succeeded
+# and the branch exists on the remote — only gh's inference fails. We know the
+# branch name here, so there is nothing to infer.
 _create_pr() {
   gh pr create \
     --draft \
     --base "$BASE_BRANCH" \
+    --head "$BRANCH" \
     --title "$PR_TITLE" \
     --body "$PR_BODY"
 }

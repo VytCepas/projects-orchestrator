@@ -75,18 +75,43 @@ jobs:
 
           DECISION=$(gh pr view "$PR_NUMBER" --repo "$REPO" \
             --json reviewDecision -q '.reviewDecision // ""')
-          REVIEWS=$(gh pr view "$PR_NUMBER" --repo "$REPO" \
-            --json reviews -q '.reviews | length')
-          UNRESOLVED=$(gh api graphql \
+          # Review count and thread state come from ONE hand-written GraphQL
+          # query, deliberately not from `gh pr view --json reviews`.
+          #
+          # gh expands its `reviews` field to a selection that includes
+          # reviews.nodes[].commit, and reading a commit object needs
+          # contents:read. An explicit `permissions:` block sets every scope it
+          # does not list to none, and this workflow lists only statuses:write
+          # and pull-requests:read. On a PUBLIC repo commits are world-readable
+          # so the selection resolves anyway and nobody notices; on a PRIVATE
+          # repo it fails with
+          #   Resource not accessible by integration
+          #     (repository.pullRequest.reviews.nodes.0.commit)
+          # and this job dies on every pull_request_review and
+          # pull_request_review_comment event. It still passes on the
+          # `pull_request` event because there are no reviews yet, so there is
+          # no nodes[0] whose commit needs resolving — which is what makes the
+          # failure look intermittent rather than total. Measured: green on
+          # every run in a public repo, red on all six review events across
+          # three PRs in a private one, from the byte-identical file.
+          #
+          # Asking for reviews.totalCount needs only pull-requests:read, keeps
+          # the token narrow, and costs one fewer API round-trip.
+          REVIEW_DATA=$(gh api graphql \
             -F owner="$OWNER" -F repo="$REPO_NAME" -F number="$PR_NUMBER" -f query='
               query($owner:String!, $repo:String!, $number:Int!) {
                 repository(owner:$owner, name:$repo) {
                   pullRequest(number:$number) {
+                    reviews(first:1) { totalCount }
                     reviewThreads(first:100) { nodes { isResolved } }
                   }
                 }
-              }' --jq '[.data.repository.pullRequest.reviewThreads.nodes[]
-                       | select(.isResolved == false)] | length')
+              }')
+          REVIEWS=$(printf '%s' "$REVIEW_DATA" \
+            | jq '.data.repository.pullRequest.reviews.totalCount')
+          UNRESOLVED=$(printf '%s' "$REVIEW_DATA" \
+            | jq '[.data.repository.pullRequest.reviewThreads.nodes[]
+                   | select(.isResolved == false)] | length')
 
           if [ "$DECISION" = "CHANGES_REQUESTED" ]; then
             STATE="failure"; DESCRIPTION="Changes requested"

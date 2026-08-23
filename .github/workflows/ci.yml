@@ -169,19 +169,61 @@ jobs:
       # so the command surface is defined exactly once.
       - name: Install just
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        with:
+          # Pin the just binary version (#891): the action's default resolves
+          # "latest" via the releases API, which intermittently returns "no
+          # release matching" under GitHub API throttling and fails the job.
+          just-version: "1.57.0"
 
       # ShellCheck ships preinstalled on ubuntu-24.04 runners; shfmt does not.
+      #
+      # Host-safe and OS/arch aware, because `runs-on` here is
+      # `vars.CI_RUNS_ON || ubuntu-24.04` and `just ci-local-on` sets that
+      # variable to `self-hosted`. Two consequences the original step got wrong:
+      #
+      #   1. A self-hosted runner shares $HOME with its operator. A step that
+      #      writes into ~/.local/bin modifies a real machine, not a throwaway
+      #      VM — so if a usable shfmt is already on PATH, leave it alone.
+      #   2. The asset must match the runner. Hardcoding linux_amd64 installed a
+      #      Linux x86 binary onto a macOS/ARM runner, which then failed the
+      #      lint step with "cannot execute binary file" *after* overwriting the
+      #      operator's working shfmt. A nightly cron repeated it unattended.
       - name: Install shfmt
         run: |
+          set -eu
+          if command -v shfmt >/dev/null 2>&1 && shfmt --version >/dev/null 2>&1; then
+            echo "shfmt $(shfmt --version) already present — leaving the host's copy alone"
+            exit 0
+          fi
+
+          version="3.8.0"
+          case "$(uname -s)" in
+            Linux)  os=linux ;;
+            Darwin) os=darwin ;;
+            *) echo "unsupported OS for shfmt install: $(uname -s)" >&2; exit 1 ;;
+          esac
+          case "$(uname -m)" in
+            x86_64|amd64)  arch=amd64 ;;
+            arm64|aarch64) arch=arm64 ;;
+            *) echo "unsupported arch for shfmt install: $(uname -m)" >&2; exit 1 ;;
+          esac
+          asset="shfmt_v${version}_${os}_${arch}"
+
           mkdir -p "$HOME/.local/bin"
           tmp="$(mktemp -d)"
-          curl -sSfL https://github.com/mvdan/sh/releases/download/v3.8.0/shfmt_v3.8.0_linux_amd64 -o "$tmp/shfmt_v3.8.0_linux_amd64"
+          base="https://github.com/mvdan/sh/releases/download/v${version}"
+          curl -sSfL "$base/$asset" -o "$tmp/$asset"
           # Verify the binary against the release's published checksums before
-          # trusting it — no unverified curl|install of an executable.
-          curl -sSfL https://github.com/mvdan/sh/releases/download/v3.8.0/sha256sums.txt -o "$tmp/sha256sums.txt"
-          ( cd "$tmp" && grep 'shfmt_v3.8.0_linux_amd64$' sha256sums.txt | sha256sum -c - )
-          chmod +x "$tmp/shfmt_v3.8.0_linux_amd64"
-          mv "$tmp/shfmt_v3.8.0_linux_amd64" "$HOME/.local/bin/shfmt"
+          # trusting it — no unverified curl|install of an executable. macOS
+          # ships shasum rather than sha256sum.
+          curl -sSfL "$base/sha256sums.txt" -o "$tmp/sha256sums.txt"
+          if command -v sha256sum >/dev/null 2>&1; then
+            ( cd "$tmp" && grep " $asset\$" sha256sums.txt | sha256sum -c - )
+          else
+            ( cd "$tmp" && grep " $asset\$" sha256sums.txt | shasum -a 256 -c - )
+          fi
+          chmod +x "$tmp/$asset"
+          mv "$tmp/$asset" "$HOME/.local/bin/shfmt"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Sync dev dependencies
@@ -338,16 +380,25 @@ jobs:
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           version: "0.11.7"
-      # Mutmut needs a pyproject.toml (its [tool.mutmut] config lives there);
-      # a fresh scaffold ships none — skip the nightly run instead of failing.
-      - name: Check for pyproject.toml
+      # Mutmut needs a pyproject.toml *carrying a [tool.mutmut] section* — the
+      # comment above this job already says so, and source_paths is not
+      # optional: without it mutmut aborts with "Could not figure out where the
+      # code to mutate is."
+      #
+      # Testing only for the FILE is why this guard did not hold. `uv init`
+      # writes a pyproject.toml on day one with no [tool.mutmut] in it, so the
+      # gate opened on a project that had never configured mutation testing and
+      # the nightly went red from the first commit — the failure this skip was
+      # written to prevent. Test for the section, which is the thing mutmut
+      # actually requires.
+      - name: Check for a mutmut configuration
         id: pyproject
         run: |
-          if [ -f pyproject.toml ]; then
+          if [ -f pyproject.toml ] && grep -q '^\[tool\.mutmut\]' pyproject.toml; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "No pyproject.toml yet — skipping mutation tests."
+            echo "No [tool.mutmut] section yet — skipping mutation tests."
           fi
       - if: steps.pyproject.outputs.exists == 'true'
         run: uv sync --group dev
@@ -388,12 +439,94 @@ jobs:
           # Full history so leaked commits are caught, not just the latest diff
           fetch-depth: 0
 
-      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3
+      # THE BINARY, NOT gitleaks/gitleaks-action (PI-933). The action refuses to
+      # run on an ORGANISATION-owned repo without GITLEAKS_LICENSE — a key from
+      # gitleaks.io — so every org scaffold was born with a permanently red
+      # secret-scan and nothing told its owner why. That is the one job whose
+      # redness is least affordable: it fails WITHOUT SCANNING, so a credential
+      # in the first commit is not caught and the red mark reads as the usual
+      # licence nag. A permanently red gate also trains everyone to ignore red,
+      # which this file argues elsewhere in its own `fail open` comments.
+      #
+      # The binary has no licence gate, reads the same scaffolded .gitleaks.toml,
+      # and is what `just scan` and the pre-commit hook already run — so the
+      # three surfaces now agree instead of CI being the odd one out.
+      #
+      # IT ALSO RETIRES A SELF-HOSTED-RUNNER BUG. The action downloaded to a
+      # FIXED $TMPDIR/gitleaks.tmp, aborted if that path existed, and never
+      # cleaned up. Hosted runners hid it by discarding the machine; on a
+      # self-hosted runner the first GREEN run poisoned every run after it and
+      # the repo silently stopped being scanned while the job merely looked
+      # flaky (measured 2026-08-01: green at 20:43:55, red 88 s later, red for
+      # the following two days). Extracting into $RUNNER_TEMP, which the runner
+      # empties per job on both kinds, makes the path fresh by construction.
+      #
+      # OS AND ARCH ARE READ FROM THE RUNNER, NOT ASSUMED. `runs-on` is
+      # overridable via vars.CI_RUNS_ON, and the runner that found the bug above
+      # was self-hosted macOS — a hardcoded linux_x64 asset would 404 there and
+      # the gate would fail for a reason unrelated to secrets.
+      #
+      # THE DOWNLOAD IS VERIFIED. Replacing a SHA-pinned action with a curl is a
+      # supply-chain downgrade unless the bytes are checked, so the release's own
+      # checksums file is fetched and the tarball verified against it before
+      # anything is executed. That detects a corrupted or truncated download and
+      # a CDN-level substitution; it cannot detect a compromised release, which
+      # is what the version pin below is for.
+      - name: Install gitleaks
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-          # GITLEAKS_LICENSE is required only for organization-owned repos
-          # (free key from gitleaks.io). Personal accounts need no license.
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+          # THE MARKER IS WHAT MAKES THE PIN MAINTAINED, not decoration. Renovate
+          # sees `uses:` digests and lockfiles; a version literal in a shell step
+          # is invisible to every built-in manager, so without this line the
+          # scanner would freeze at 8.30.1 with no signal while everything else
+          # stayed current — a security tool rotting quietly is worse than an
+          # unpinned one. renovate.json's customManagers entry reads it.
+          # renovate: datasource=github-releases depName=gitleaks/gitleaks
+          GITLEAKS_VERSION: 8.30.1
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) os=linux ;;
+            macOS) os=darwin ;;
+            *) echo "::error::unsupported RUNNER_OS=$RUNNER_OS"; exit 1 ;;
+          esac
+          case "$RUNNER_ARCH" in
+            X64) arch=x64 ;;
+            ARM64) arch=arm64 ;;
+            *) echo "::error::unsupported RUNNER_ARCH=$RUNNER_ARCH"; exit 1 ;;
+          esac
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          asset="gitleaks_${GITLEAKS_VERSION}_${os}_${arch}.tar.gz"
+          cd "$RUNNER_TEMP"
+          curl -sSfL --retry 3 -o "$asset" "${base}/${asset}"
+          curl -sSfL --retry 3 -o checksums.txt "${base}/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          # EXACT FIELD MATCH, NOT A grep PATTERN (PR #940 review). `grep
+          # " ${asset}$"` reads as an exact selection and is not one: the asset
+          # name is full of dots and grep treats them as "any character", so the
+          # line whose checksum gets verified is chosen by a regex that also
+          # matches names nobody intended. No sibling asset in this manifest
+          # differs from another only at a dot, so it cannot mis-select today —
+          # which is exactly why it would go unnoticed when a future asset name
+          # makes it possible. awk compares field 2 for equality and prints the
+          # line verbatim, so the format shasum expects is preserved.
+          #
+          # AND IT MUST FAIL WHEN NOTHING MATCHES. `exit !found` is why: an empty
+          # expected.sha256 handed to a verifier is a check that reports success
+          # on no input, which is the shape of a gate that guards nothing.
+          awk -v a="$asset" '$2 == a { print; found = 1 } END { exit !found }' \
+            checksums.txt > expected.sha256
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum -c expected.sha256
+          else
+            shasum -a 256 -c expected.sha256
+          fi
+          tar -xzf "$asset" gitleaks
+          chmod 0755 gitleaks
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          ./gitleaks version
+
+      - name: Scan full history
+        # --redact so a finding never prints the secret into a public log.
+        run: gitleaks git --redact --no-banner --verbose .
 
   # Semgrep: semantic/AST security backstop. gitleaks (above) is string-
   # pattern secret scanning; semgrep catches unsafe subprocess calls, SQL
@@ -450,6 +583,11 @@ jobs:
 
       - name: Install just
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        with:
+          # Pin the just binary version (#891): the action's default resolves
+          # "latest" via the releases API, which intermittently returns "no
+          # release matching" under GitHub API throttling and fails the job.
+          just-version: "1.57.0"
 
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
@@ -503,19 +641,75 @@ jobs:
 
       - name: Install just
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        with:
+          # Pin the just binary version (#891): the action's default resolves
+          # "latest" via the releases API, which intermittently returns "no
+          # release matching" under GitHub API throttling and fails the job.
+          just-version: "1.57.0"
 
-      # A fresh scaffold ships no manifest. Skip rather than fail: a nightly run
-      # that is red from day one is a notification people learn to ignore. Only
-      # one language renders per scaffold, so testing all four names needs no
-      # per-language variable.
-      - name: Check for a project manifest
+      # A fresh scaffold has nothing to fuzz. Skip rather than fail: a nightly
+      # run that is red from day one is a notification people learn to ignore.
+      # Only one language renders per scaffold, so testing all four names needs
+      # no per-language variable.
+      #
+      # A MANIFEST IS NOT THE SAME THING AS SOMETHING TO FUZZ, and testing only
+      # for the manifest is why this guard did not hold. `uv init` (or
+      # `npm init`, `go mod init`, `cargo init`) writes one on day one — long
+      # before the first test exists — which opens the gate on an empty project.
+      # pytest then exits 5, "no tests collected", and the nightly is red from
+      # the first commit: exactly the outcome the skip exists to prevent.
+      # Observed on a scaffold whose pyproject.toml came from `uv init` and
+      # which had no tests/ directory at all.
+      #
+      # The prunes matter: .venv and node_modules are full of third-party test
+      # files, and finding one of those would re-open the gate on a project
+      # that still has none of its own.
+      - name: Check for something to fuzz
         id: manifest
         run: |
-          if [ -f pyproject.toml ] || [ -f package.json ] || [ -f go.mod ] || [ -f Cargo.toml ]; then
+          if [ ! -f pyproject.toml ] && [ ! -f package.json ] && [ ! -f go.mod ] && [ ! -f Cargo.toml ]; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "No project manifest yet — nothing to fuzz."
+          # NO BARE DIRECTORY CHECK. `[ -d tests ]` counted an EMPTY tests/ as
+          # a test, so the gate opened and `just fuzz` then died the way this
+          # step exists to prevent: pytest exits 5 on "no tests collected", and
+          # a placeholder directory is the most common shape of a young repo.
+          # The patterns below already search tests/ recursively, so nothing is
+          # lost by requiring an actual file.
+          elif find . \
+                 \( -name .git -o -name .venv -o -name node_modules \
+                    -o -name target -o -name vendor \) -prune -o \
+                 \( -name 'test_*.py' -o -name '*_test.py' -o -name '*_test.go' \
+                    -o -name '*.test.ts' -o -name '*.test.tsx' -o -name '*.test.js' \
+                    -o -name '*.spec.ts' -o -name '*.spec.tsx' -o -name '*.spec.js' \
+                    -o -name '*_spec.ts' -o -name '*_spec.js' \
+                    -o -path '*/tests/*.rs' \) \
+                 -print -quit | grep -q .; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          # RUST KEEPS ITS TESTS INSIDE THE SOURCE FILE. `#[cfg(test)]` modules and
+          # `proptest!` blocks live in src/*.rs, which matches none of the filename
+          # patterns above — so a Rust crate testing the conventional way scored
+          # exists=false and SILENTLY LOST nightly fuzz coverage the older
+          # manifest-based gate had given it. -F because the literal contains
+          # regex metacharacters.
+          # `#[test]` ALONE IS A TEST. Cargo runs a bare `#[test]` fn with no
+          # surrounding `#[cfg(test)]` module, so requiring the cfg spelling
+          # suppressed the job for a validly tested crate. The search also covers
+          # WORKSPACES via `*/src`, because a Cargo workspace keeps its crates in
+          # subdirectories and grepping only the root src/ found nothing in any of
+          # them. Deliberately NOT `.`: that would sweep target/ and any vendored
+          # crate, so a dependency's tests would open the gate for a crate with
+          # none of its own. An unmatched `*/src` glob stays literal and -s
+          # swallows the resulting error.
+          elif [ -f Cargo.toml ] && find . \
+                 \( -name target -o -name vendor -o -name .git \) -prune -o \
+                 -path '*/src/*' -name '*.rs' \
+                 -exec grep -lsF -e '#[test]' -e '#[cfg(test)]' -e 'proptest!' {} + \
+               2>/dev/null | grep -q .; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "No project manifest yet — nothing to fuzz."
+            echo "Manifest present but no tests yet — nothing to fuzz."
           fi
 
       - name: Install uv

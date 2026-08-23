@@ -10,5 +10,16 @@
   "commitMessagePrefix": "chore:",
   "lockFileMaintenance": {
     "enabled": true
-  }
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "PI-933: tool versions pinned inside a workflow run step. Renovate's built-in managers see action digests (helpers:pinGitHubActionDigests above) and lockfiles, but never a version literal in shell — so a pinned security scanner would rot silently while every other dependency stayed current. The marker comment is what makes such a pin visible, and it is required: with no marker this manager matches nothing and the version freezes with no signal at all.",
+      "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>[a-z-]+) depName=(?<depName>\\S+)\\s+[A-Z_]+:\\s*['\"]?(?<currentValue>[^'\"\\s]+)"
+      ],
+      "versioningTemplate": "semver"
+    }
+  ]
 }

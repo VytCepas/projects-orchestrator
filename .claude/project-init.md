@@ -118,6 +118,7 @@ Commit messages, PR titles, and branch names follow the quick-ref in
 messages use the same format as PR titles.
 Types: `feat` · `fix` · `chore` · `docs` · `test`
 
+
 For minor work without an issue, use `.agents/scripts/create_nojira_pr.sh <type> "description"`.
 It creates or reuses a typed `nojira` branch, pushes through `push_branch.sh`,
 and opens a draft PR titled `type: description` (no scope = no linked issue).

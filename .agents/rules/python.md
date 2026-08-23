@@ -54,9 +54,14 @@ edge-case inputs a hand-written test wouldn't think to try:
 ```python
 from hypothesis import given, strategies as st
 
-@given(st.integers(min_value=-1000, max_value=0), st.integers(min_value=1, max_value=1000), st.integers())
+
+@given(
+    st.integers(min_value=-1000, max_value=0),
+    st.integers(min_value=1, max_value=1000),
+    st.integers(),
+)
 def test_clamp_stays_within_bounds(lo, hi, x):
-    assert lo <= clamp(x, lo, hi) <= hi   # a true invariant; Hypothesis probes x < lo
+    assert lo <= clamp(x, lo, hi) <= hi  # a true invariant; Hypothesis probes x < lo
 ```
 
 Pattern/tooling, **not** a blocking gate — property tests live alongside unit
