@@ -670,12 +670,28 @@ jobs:
           if [ ! -f pyproject.toml ] && [ ! -f package.json ] && [ ! -f go.mod ] && [ ! -f Cargo.toml ]; then
             echo "exists=false" >> "$GITHUB_OUTPUT"
             echo "No project manifest yet — nothing to fuzz."
-          elif [ -d tests ] || [ -d test ] || find . \
+          # NO BARE DIRECTORY CHECK. `[ -d tests ]` counted an EMPTY tests/ as
+          # a test, so the gate opened and `just fuzz` then died the way this
+          # step exists to prevent: pytest exits 5 on "no tests collected", and
+          # a placeholder directory is the most common shape of a young repo.
+          # The patterns below already search tests/ recursively, so nothing is
+          # lost by requiring an actual file.
+          elif find . \
                  \( -name .git -o -name .venv -o -name node_modules \
                     -o -name target -o -name vendor \) -prune -o \
                  \( -name 'test_*.py' -o -name '*_test.py' -o -name '*_test.go' \
-                    -o -name '*.test.ts' -o -name '*.test.tsx' -o -name '*.test.js' \) \
+                    -o -name '*.test.ts' -o -name '*.test.tsx' -o -name '*.test.js' \
+                    -o -path '*/tests/*.rs' \) \
                  -print -quit | grep -q .; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          # RUST KEEPS ITS TESTS INSIDE THE SOURCE FILE. `#[cfg(test)]` modules and
+          # `proptest!` blocks live in src/*.rs, which matches none of the filename
+          # patterns above — so a Rust crate testing the conventional way scored
+          # exists=false and SILENTLY LOST nightly fuzz coverage the older
+          # manifest-based gate had given it. -F because the literal contains
+          # regex metacharacters.
+          elif [ -f Cargo.toml ] && grep -rqsF --include='*.rs' \
+                 -e '#[cfg(test)]' -e 'proptest!' src; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"

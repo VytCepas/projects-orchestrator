@@ -19,6 +19,7 @@
       "Read(**/*.env.prod)",
       "Read(**/*.env.staging)",
       "Read(**/*.pem)",
+      "Read(**/*.key)",
       "Read(**/*.p12)",
       "Read(**/*.pfx)",
       "Read(**/id_rsa)",
