@@ -33,6 +33,7 @@ from typing import Any
 from projects_orchestrator.adapters.gitlab import provider_is_gitlab
 from projects_orchestrator.checks import CheckResult
 from projects_orchestrator.descriptor import DEPLOY_NONE, ProjectDescriptor
+from projects_orchestrator.gcloud_identity import gcloud_env
 from projects_orchestrator.runner import RunResult, run_command
 
 STATE_NONE = "none"
@@ -226,7 +227,10 @@ def collect_cloud(descriptor: ProjectDescriptor, timeout: float = _PROBE_TIMEOUT
         command = _CLOUD_RUN_COMMAND.format(
             app=shlex.quote(deploy.app), region=shlex.quote(deploy.region)
         )
-        result = run_command(command, cwd=descriptor.path, timeout=timeout)
+        # Named identity, never the ambient gcloud account — a describe under the
+        # wrong account cannot see the service and reads as STATE_UNKNOWN with no
+        # breadcrumb saying why (see projects_orchestrator.gcloud_identity).
+        result = run_command(command, cwd=descriptor.path, timeout=timeout, env=gcloud_env())
         state, revision = (
             parse_cloud_run_status(result.stdout) if result.ok else (STATE_UNKNOWN, "")
         )

@@ -21,6 +21,7 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
+from projects_orchestrator.gcloud_identity import gcloud_env
 from projects_orchestrator.runner import run_command
 
 #: The ONLY gcloud verb this module runs. `search-all-resources` is read-only — it
@@ -102,8 +103,16 @@ def search_resources(scope: str, *, timeout: float = _SCAN_TIMEOUT) -> list[GcpR
     non-JSON). ``None`` is *unknown*, distinct from an empty list — a caller must
     never read a failed scan as "no resources", or an unauthenticated run would
     report every service accounted for. Never raises.
+
+    The scan runs under the identity named by
+    :mod:`~projects_orchestrator.gcloud_identity`, never the ambient ``gcloud``
+    account. That is the reason the pin exists: a scan under a *narrower* account
+    exits 0 with a SHORTER inventory, which every caller would read as a complete
+    estate. A misconfigured pin needs no special case — an unauthenticated
+    ``gcloud`` exits non-zero and lands in the ``None`` above, exactly like a
+    missing binary.
     """
-    result = run_command(search_command(scope), cwd=Path.cwd(), timeout=timeout)
+    result = run_command(search_command(scope), cwd=Path.cwd(), timeout=timeout, env=gcloud_env())
     if not result.ok:
         return None
     try:

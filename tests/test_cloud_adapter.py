@@ -33,9 +33,15 @@ def _with_deploy_workflow(project: Path, relpath: str = ".github/workflows/deplo
 
 
 def _spy(calls: list[str], ok: bool = True, stderr: str = ""):
-    """A run_command stand-in that records the command instead of running it."""
+    """A run_command stand-in that records the command instead of running it.
 
-    def fake(command: str, cwd: Path, timeout: float = 0.0) -> RunResult:  # noqa: ARG001
+    ``**_kwargs`` absorbs keyword-only arguments the real ``run_command`` grows —
+    ``env=`` today, for the pinned gcloud identity. A fake with a narrower
+    signature than the function it replaces fails as a TypeError at the call
+    site, which reads as a bug in the code under test rather than in the double.
+    """
+
+    def fake(command: str, **_kwargs: object) -> RunResult:
         calls.append(command)
         return RunResult(
             command=command,

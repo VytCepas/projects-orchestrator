@@ -12,6 +12,7 @@ import os
 import signal
 import subprocess
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -60,13 +61,29 @@ def _cap(text: str) -> str:
     return text if len(text) <= _OUTPUT_CAP else text[-_OUTPUT_CAP:]
 
 
-def run_command(command: str, cwd: Path, timeout: float = DEFAULT_TIMEOUT) -> RunResult:
+def run_command(
+    command: str,
+    cwd: Path,
+    timeout: float = DEFAULT_TIMEOUT,
+    *,
+    env: Mapping[str, str] | None = None,
+) -> RunResult:
     """Run a shell command with a hard timeout; never raises.
 
     Args:
         command: Shell command line (tooling commands are shell strings).
         cwd: Working directory to run in.
         timeout: Kill the process after this many seconds.
+        env: Complete environment for the child, or ``None`` to inherit the
+            parent's. :class:`subprocess.Popen` **replaces** rather than merges,
+            so a caller passing this must pass everything the command needs —
+            build it with
+            :func:`projects_orchestrator.gcloud_identity.gcloud_env` or
+            :func:`projects_orchestrator.sandbox.agent_env` rather than by hand.
+            Inheriting is the right default for git and the forge CLIs; it is
+            *not* right for ``gcloud``, whose identity is ambient state a
+            subprocess would silently pick up (see
+            :mod:`projects_orchestrator.gcloud_identity`).
 
     Returns:
         A :class:`RunResult` describing what happened.
@@ -85,6 +102,7 @@ def run_command(command: str, cwd: Path, timeout: float = DEFAULT_TIMEOUT) -> Ru
             stderr=subprocess.PIPE,
             text=True,
             start_new_session=True,
+            env=env,
         )
     except OSError as exc:
         return RunResult(
