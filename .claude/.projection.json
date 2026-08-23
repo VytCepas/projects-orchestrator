@@ -1,0 +1,12 @@
+{
+  "paths": [
+    "CAPABILITIES.md",
+    "agents/README.md",
+    "project-init.md",
+    "rules/hooks.md",
+    "rules/python.md",
+    "settings.json",
+    "skills/README.md",
+    "skills/plan/SKILL.md"
+  ]
+}
