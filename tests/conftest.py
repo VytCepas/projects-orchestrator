@@ -317,6 +317,16 @@ def git_init(project: Path, commit: bool = True) -> None:
 def _isolate_xdg_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Point every XDG base dir at a per-test tmp dir, suite-wide (PO-158).
 
+    Also clears ``PO_FLEET_ROOT``. Once `default_fleet_config` started reading it
+    (#204), a developer who exported it — which the new failure message and the
+    docs both tell them to do — turned the suite machine-dependent:
+    `test_default_fleet_config_falls_back_to_parent_scan` calls
+    `default_fleet_config(cwd)` with no injected env, so it resolved the exported
+    root instead of `tmp_path`. Measured: green with the variable unset, one
+    failure with `PO_FLEET_ROOT=$HOME`. Adopting the feature broke the tests for
+    it, which is the worst possible welcome. Clearing it here for the same reason
+    the XDG vars are cleared, spelled out below.
+
     The checks cache lives under ``$XDG_CACHE_HOME`` and heal's worktrees under
     ``$XDG_STATE_HOME``. A test that writes there via the *default* path — e.g.
     ``cache.save_results(results)`` with no explicit file, or a code path that
@@ -331,6 +341,10 @@ def _isolate_xdg_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """
     for var in ("XDG_CACHE_HOME", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME"):
         monkeypatch.setenv(var, str(tmp_path / "xdg" / var.lower()))
+    # Tests that MEAN to exercise the variable inject `env=` explicitly, so they
+    # are unaffected by this; what it protects is every test that never thought
+    # about the environment at all.
+    monkeypatch.delenv("PO_FLEET_ROOT", raising=False)
 
 
 @pytest.fixture()
