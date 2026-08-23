@@ -681,6 +681,8 @@ jobs:
                     -o -name target -o -name vendor \) -prune -o \
                  \( -name 'test_*.py' -o -name '*_test.py' -o -name '*_test.go' \
                     -o -name '*.test.ts' -o -name '*.test.tsx' -o -name '*.test.js' \
+                    -o -name '*.spec.ts' -o -name '*.spec.tsx' -o -name '*.spec.js' \
+                    -o -name '*_spec.ts' -o -name '*_spec.js' \
                     -o -path '*/tests/*.rs' \) \
                  -print -quit | grep -q .; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
@@ -690,8 +692,20 @@ jobs:
           # exists=false and SILENTLY LOST nightly fuzz coverage the older
           # manifest-based gate had given it. -F because the literal contains
           # regex metacharacters.
-          elif [ -f Cargo.toml ] && grep -rqsF --include='*.rs' \
-                 -e '#[cfg(test)]' -e 'proptest!' src; then
+          # `#[test]` ALONE IS A TEST. Cargo runs a bare `#[test]` fn with no
+          # surrounding `#[cfg(test)]` module, so requiring the cfg spelling
+          # suppressed the job for a validly tested crate. The search also covers
+          # WORKSPACES via `*/src`, because a Cargo workspace keeps its crates in
+          # subdirectories and grepping only the root src/ found nothing in any of
+          # them. Deliberately NOT `.`: that would sweep target/ and any vendored
+          # crate, so a dependency's tests would open the gate for a crate with
+          # none of its own. An unmatched `*/src` glob stays literal and -s
+          # swallows the resulting error.
+          elif [ -f Cargo.toml ] && find . \
+                 \( -name target -o -name vendor -o -name .git \) -prune -o \
+                 -path '*/src/*' -name '*.rs' \
+                 -exec grep -lsF -e '#[test]' -e '#[cfg(test)]' -e 'proptest!' {} + \
+               2>/dev/null | grep -q .; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"

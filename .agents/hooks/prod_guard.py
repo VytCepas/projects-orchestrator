@@ -478,6 +478,27 @@ def _leaf_commands(command: str) -> list[str]:
     return out
 
 
+def _statements(command: str) -> list[str]:
+    """Split *command* into statements, keeping each pipeline intact.
+
+    `_leaf_commands` collapses `;`, `&` and `|` into one separator, which loses
+    the distinction that matters for the reader check: `a | b` shares a data path
+    and `a && b` does not. Substitutions are inlined the same way, so a read
+    hidden inside one is still judged.
+    """
+    out: list[str] = []
+    pending = [command]
+    while pending and len(out) < 100:
+        chunk = pending.pop()
+        inner = [g for match in _SUBSTITUTION.finditer(chunk) for g in match.groups() if g]
+        if inner:
+            pending.extend(inner)
+            chunk = _SUBSTITUTION.sub(" ", chunk)
+        # `&&` and `||` before the single-character forms, or they split wrongly.
+        out.extend(re.split(r"(?:&&|\|\||;|&|\n)+", chunk))
+    return out
+
+
 def _exposes_secret(command: str) -> str | None:
     """Return a label if *command* could read a secret-bearing file, else None.
 
@@ -485,7 +506,24 @@ def _exposes_secret(command: str) -> str | None:
     second one reads: a whole-string match would be decided by the harmless
     verb that happens to come first.
     """
-    leaves = _leaf_commands(command)
+    # PER STATEMENT, NOT PER COMMAND. Computing the reader set over the whole
+    # string made any reader anywhere taint every safe segment, so
+    # `cat README.md && echo ".env" >> .gitignore` was flagged as a secret read
+    # — `cat` is a reader, `echo` was therefore not exempt, and the `.env` being
+    # written INTO .gitignore matched. Prompting on that is the false positive
+    # this guard cannot afford: it is ordinary work, and a guard that blocks
+    # ordinary work gets switched off. `|` shares a data path, `&&` and `;` do
+    # not, so the reader question is only meaningful inside one pipeline.
+    for statement in _statements(command):
+        found = _statement_exposes(statement)
+        if found:
+            return found
+    return None
+
+
+def _statement_exposes(statement: str) -> str | None:
+    """The original per-segment check, scoped to one statement's pipeline."""
+    leaves = [seg for seg in statement.split("|") if seg.strip()]
     heads = {seg.split()[0].rsplit("/", 1)[-1] for seg in leaves if seg.split()}
     # A PRODUCER IS ONLY SAFE WHILE NOTHING DOWNSTREAM CAN READ WHAT IT NAMES.
     # This gate existed for `find` alone, so every other producer in
@@ -497,7 +535,7 @@ def _exposes_secret(command: str) -> str | None:
     #   ls .env           | xargs cat   -> ALLOWED  (exempt, wrong)
     # The reader segment carries no path of its own, so once the naming segment
     # is skipped nothing is left to match and the contents reach the transcript.
-    producers_are_safe = not _FIND_ACTS.search(command) and not (heads & _READER_VERBS)
+    producers_are_safe = not _FIND_ACTS.search(statement) and not (heads & _READER_VERBS)
     for segment in leaves:
         seg = _MESSAGE_ARG.sub(" ", segment).strip()
         if not seg:
