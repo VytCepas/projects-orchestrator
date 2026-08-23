@@ -13,6 +13,7 @@ from conftest import CONFIG_TEMPLATE, make_project
 from projects_orchestrator.__main__ import main
 from projects_orchestrator.descriptor import load_descriptor
 from projects_orchestrator.fleet import fleet_rows, fleet_snapshots
+from projects_orchestrator.procs import proc_start_ticks
 from projects_orchestrator.registry import FleetConfig, discover
 from projects_orchestrator.supervisor import liveness_check, logs, running_state, start, stop
 
@@ -97,6 +98,24 @@ def test_stale_pid_reads_as_not_running(fleet_dir: Path) -> None:
     assert running_state(descriptor) is None
 
 
+# CAPABILITY, NOT PLATFORM (issue #205). `proc_start_ticks` reads
+# /proc/<pid>/stat, which does not exist on darwin, so these assertions could
+# never hold there and the suite was permanently 4-red on a Mac while CI was
+# green. Worse than noise: `projects-orchestrator checks` reports fleet health,
+# so the tool that answers "is anything broken" reported ITSELF broken, for a
+# reason with nothing to do with its behaviour — and a column already showing
+# `fail` is where the next real failure goes unnoticed.
+#
+# Probing the capability rather than `sys.platform` means these re-enable on
+# their own the day a darwin implementation lands (libproc's proc_pidinfo
+# exposes a start time), instead of staying skipped behind a stale OS check.
+_NO_PROC_START_TICKS = pytest.mark.skipif(
+    proc_start_ticks(os.getpid()) is None,
+    reason="proc_start_ticks is unavailable here (no /proc) — see issue #205",
+)
+
+
+@_NO_PROC_START_TICKS
 def test_start_records_process_start_ticks(fleet_dir: Path) -> None:
     descriptor = _runnable(fleet_dir)
     start(descriptor)
@@ -108,6 +127,7 @@ def test_start_records_process_start_ticks(fleet_dir: Path) -> None:
         stop(descriptor)
 
 
+@_NO_PROC_START_TICKS
 def test_running_state_detects_pid_reuse(fleet_dir: Path) -> None:
     import json
     import signal

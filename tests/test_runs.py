@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from projects_orchestrator.cost import RunCost
+from projects_orchestrator.procs import proc_start_ticks
 from projects_orchestrator.runs import (
     ABANDONED,
     DEFAULT_BUDGET_USD,
@@ -187,6 +188,24 @@ def test_the_listing_reconciles_a_crashed_run_without_being_asked() -> None:
     assert load(run.id).state == FAILED
 
 
+# CAPABILITY, NOT PLATFORM (issue #205). `proc_start_ticks` reads
+# /proc/<pid>/stat, which does not exist on darwin, so these assertions could
+# never hold there and the suite was permanently 4-red on a Mac while CI was
+# green. Worse than noise: `projects-orchestrator checks` reports fleet health,
+# so the tool that answers "is anything broken" reported ITSELF broken, for a
+# reason with nothing to do with its behaviour — and a column already showing
+# `fail` is where the next real failure goes unnoticed.
+#
+# Probing the capability rather than `sys.platform` means these re-enable on
+# their own the day a darwin implementation lands (libproc's proc_pidinfo
+# exposes a start time), instead of staying skipped behind a stale OS check.
+_NO_PROC_START_TICKS = pytest.mark.skipif(
+    proc_start_ticks(os.getpid()) is None,
+    reason="proc_start_ticks is unavailable here (no /proc) — see issue #205",
+)
+
+
+@_NO_PROC_START_TICKS
 def test_a_recycled_pid_is_not_mistaken_for_our_run() -> None:
     # Some other process now holds that pid. Reporting a stranger as "your agent
     # is still running" is worse than reporting nothing.
