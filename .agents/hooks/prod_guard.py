@@ -494,11 +494,20 @@ def _statements(command: str) -> list[str]:
         if inner:
             pending.extend(inner)
             chunk = _SUBSTITUTION.sub(" ", chunk)
+        # `|&` IS A PIPE. Bash's shorthand for `2>&1 |` survives the statement
+        # split intact (the `&` is excluded below), and then the per-stage split
+        # on `|` leaves the downstream segment headed by `&` instead of the real
+        # verb — so no reader is found, the producer is exempted, and the read
+        # goes through. Measured: `ls <dotenv> |& xargs cat` allowed, including
+        # the documented `find … | xargs cat` shape (PR #952 review, second
+        # round). Normalising here fixes both the statement split and the stage
+        # split, because both read this output.
+        chunk = chunk.replace("|&", "|")
         # `&&` and `||` FIRST, or they split wrongly. And a bare `&` is only a
         # separator when it is not part of a redirection: splitting on any `&`
-        # broke `2>&1`, `&>` and `|&`, which tore a producer away from its
-        # downstream reader and REINTRODUCED the bypass — measured,
-        # `ls .env 2>&1 | xargs cat` went back to allow (PR #952 review).
+        # broke `2>&1` and `&>`, which tore a producer away from its downstream
+        # reader and REINTRODUCED the bypass — measured, `ls <dotenv> 2>&1 |
+        # xargs cat` went back to allow.
         out.extend(re.split(r"(?:&&|\|\||;|\n|(?<![>&|])&(?![>&]))+", chunk))
     return out
 
