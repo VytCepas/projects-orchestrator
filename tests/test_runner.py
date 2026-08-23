@@ -41,6 +41,23 @@ def test_run_command_timeout_kills_grandchildren(tmp_path: Path) -> None:
     assert not marker.exists()
 
 
+# THE DEPENDENCY IS THE BINARY, NOT THE OS (issue #205). Both tests below detach
+# a grandchild with `setsid` — util-linux, with no macOS equivalent on PATH — so
+# without it the escape never happens and neither test measures what it claims.
+# Guarding on `which` rather than `sys.platform` keeps them running anywhere the
+# binary exists, including a Mac with util-linux from Homebrew.
+#
+# ONE MARKER FOR BOTH, because guarding them separately is exactly how this went
+# wrong: the first cut of #205 skipped only the test that FAILED and left this
+# one running, where it PASSED without exercising its scenario. Caught in review
+# of PR #206 by Copilot. A shared marker cannot drift the way two copies did.
+_NEEDS_SETSID = pytest.mark.skipif(
+    shutil.which("setsid") is None,
+    reason="needs setsid to detach the child — see issue #205",
+)
+
+
+@_NEEDS_SETSID
 def test_a_child_that_escapes_the_kill_cannot_outlast_the_timeout(tmp_path: Path) -> None:
     # `setsid` puts the grandchild in a session of its own, so it is NOT in the
     # group killpg targets: it survives the kill still holding the inherited
@@ -54,17 +71,7 @@ def test_a_child_that_escapes_the_kill_cannot_outlast_the_timeout(tmp_path: Path
     assert time.monotonic() - start < 10.0
 
 
-# THE DEPENDENCY IS THE BINARY, NOT THE OS (issue #205). This test detaches a
-# child with `setsid`, which is util-linux and has no macOS equivalent on PATH,
-# so the child never escaped and the assertion saw a shell error instead:
-#     assert 'output lost' in '/bin/sh: setsid: command not found\n'
-# Guarding on `which` rather than `sys.platform` keeps it running anywhere the
-# binary exists — including a Mac with util-linux from Homebrew — and it is the
-# thing actually required.
-@pytest.mark.skipif(
-    shutil.which("setsid") is None,
-    reason="needs setsid to detach the child — see issue #205",
-)
+@_NEEDS_SETSID
 def test_output_lost_to_an_escaped_child_is_reported_not_silently_empty(
     tmp_path: Path, monkeypatch
 ) -> None:
