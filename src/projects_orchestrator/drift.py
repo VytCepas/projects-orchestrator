@@ -114,6 +114,57 @@ def compute_drift(descriptor: ProjectDescriptor) -> DriftReport:
     )
 
 
+def _hooks_dir(project: Path) -> Path:
+    """Resolve where git will look for this checkout's hooks.
+
+    In an ordinary clone that is ``.git/hooks``. In a WORKTREE it is not:
+    ``.git`` is a FILE holding ``gitdir: <admin dir>``, and git resolves
+    ``hooks`` to the SHARED common dir, not to the per-worktree admin dir. The
+    old code assumed the directory form, so ``<worktree>/.git/hooks`` never
+    existed and every worktree reported ``missing``.
+
+    That was a false negative, not a conservative one — measured 2026-09-05 on
+    three berths (``estate-wt-access``, ``estate-wt-mcp``,
+    ``gtm-wt-bite-consent``), each reporting ``missing`` while
+    ``git hook run commit-msg`` inside it rejected a malformed message with
+    exit 1 and accepted a valid one with exit 0. A health check that reads red
+    on a healthy tree is the class §2.11 names: it gets ignored, and then it
+    protects nothing.
+
+    ``commondir`` is git's own answer to "where is the shared dir", so it is
+    READ rather than reconstructed by counting ``..`` segments — the admin dir
+    layout is git's to change, and a hand-built relative path would go wrong
+    silently.
+
+    KNOWN LIMIT, stated rather than hidden: ``core.hooksPath`` is not consulted,
+    so a repo that relocates its hooks still reads ``missing``. No repo in this
+    fleet sets it (checked 2026-09-05); reading git config here would mean
+    shelling out from a module that is otherwise pure filesystem, and the
+    honest fix is to add it when a project actually needs it.
+    """
+    dot_git = project / ".git"
+    if dot_git.is_dir():
+        return dot_git / "hooks"
+    try:
+        pointer = dot_git.read_text(encoding="utf-8").strip()
+    except OSError:
+        # Unreadable or absent: fall back to the ordinary layout so a
+        # non-repo answers exactly as it did before.
+        return dot_git / "hooks"
+    if not pointer.startswith("gitdir:"):
+        return dot_git / "hooks"
+    admin = Path(pointer[len("gitdir:") :].strip())
+    if not admin.is_absolute():
+        admin = project / admin
+    try:
+        common_rel = (admin / "commondir").read_text(encoding="utf-8").strip()
+    except OSError:
+        # A gitdir with no commondir is a plain relocated .git (``git init
+        # --separate-git-dir``), not a worktree — its hooks live under it.
+        return admin / "hooks"
+    return (admin / common_rel) / "hooks"
+
+
 def hook_health(descriptor: ProjectDescriptor) -> str:
     """Report whether the project's git hooks are installed in its clone.
 
@@ -135,7 +186,7 @@ def hook_health(descriptor: ProjectDescriptor) -> str:
             declared = []
     if not declared:
         return "-"
-    installed_dir = descriptor.path / ".git" / "hooks"
+    installed_dir = _hooks_dir(descriptor.path)
     installed = sum(1 for name in declared if (installed_dir / name).is_file())
     if installed == len(declared):
         return "ok"

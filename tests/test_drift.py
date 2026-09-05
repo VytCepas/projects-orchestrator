@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import subprocess
 from pathlib import Path
 
-from conftest import make_project, make_project_v2
+from conftest import git_init, make_project, make_project_v2
 
 from projects_orchestrator.descriptor import load_descriptor
 from projects_orchestrator.drift import compute_drift, hook_health
@@ -115,3 +116,38 @@ def test_hook_health_v2_all_expected_installed_is_ok(fleet_dir: Path) -> None:
     for name in ("pre-commit", "commit-msg"):
         (installed / name).write_text("#!/bin/sh\n", encoding="utf-8")
     assert hook_health(load_descriptor(project)) == "ok"
+
+
+def test_hook_health_sees_hooks_from_inside_a_worktree(fleet_dir: Path) -> None:
+    """A worktree's hooks live in the main clone, and they DO fire there.
+
+    Regression for the false negative measured 2026-09-05: every berth that was
+    a git worktree reported ``missing`` while `git hook run commit-msg` in that
+    same worktree rejected a bad message with exit 1. The cause was assuming
+    ``<project>/.git`` is a directory; in a worktree it is a FILE pointing at an
+    admin dir, and git resolves ``hooks`` to the shared common dir instead.
+
+    Built on a REAL worktree rather than a hand-made ``.git`` file, because the
+    thing under test is git's own layout — a fixture that invents the layout can
+    only prove the fixture agrees with the code.
+    """
+    main = make_project(fleet_dir, "alpha")
+    source = main / ".github" / "hooks"
+    source.mkdir(parents=True)
+    (source / "pre-commit").write_text("#!/bin/sh\n", encoding="utf-8")
+    git_init(main)
+    installed = main / ".git" / "hooks"
+    installed.mkdir(parents=True, exist_ok=True)
+    (installed / "pre-commit").write_text("#!/bin/sh\n", encoding="utf-8")
+
+    worktree = fleet_dir / "alpha-wt"
+    subprocess.run(
+        ["git", "-C", str(main), "worktree", "add", "-q", "-b", "wt", str(worktree)],
+        check=True,
+        capture_output=True,
+    )
+    assert (worktree / ".git").is_file(), "fixture is not a real worktree"
+
+    descriptor = load_descriptor(worktree)
+    assert descriptor is not None
+    assert hook_health(descriptor) == "ok"
