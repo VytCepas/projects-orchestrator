@@ -30,6 +30,11 @@
       "Read(**/id_ed25519)",
       "Read(**/*service-account*.json)",
       "Read(**/*credentials*.json)",
+      "Read(**/*service_account*.json)",
+      "Read(**/*client-secret*.json)",
+      "Read(**/*client_secret*.json)",
+      "Read(**/secret/**)",
+      "Read(**/.npmrc)",
       "Read(**/secrets/**)",
       "Read(**/.netrc)",
       "Read(**/.pgpass)"
