@@ -14,7 +14,11 @@ from pathlib import Path
 
 from projects_orchestrator.cache import load_results
 from projects_orchestrator.checks import CheckResult
-from projects_orchestrator.descriptor import ProjectDescriptor, parse_scaffold_version
+from projects_orchestrator.descriptor import (
+    ProjectDescriptor,
+    contract_label,
+    parse_scaffold_version,
+)
 from projects_orchestrator.drift import DriftReport, compute_drift, hook_health
 from projects_orchestrator.history import load_history, primary_trend
 from projects_orchestrator.memory import ProjectMemory, load_project_memory
@@ -214,9 +218,8 @@ def _latest_cell(snapshot: ProjectSnapshot, newest: tuple[int, ...] | None) -> s
 
 
 def _contract_cell(snapshot: ProjectSnapshot) -> str:
-    """Render the descriptor-contract version (``none`` when unversioned)."""
-    version = snapshot.descriptor.contract_version
-    return f"v{version}" if version > 0 else "none"
+    """Render the descriptor-contract version (see :func:`contract_label`)."""
+    return contract_label(snapshot.descriptor)
 
 
 def _ci_cell(snapshot: ProjectSnapshot) -> str:

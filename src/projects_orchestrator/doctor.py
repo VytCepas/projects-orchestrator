@@ -91,7 +91,26 @@ def _check_config(descriptor: ProjectDescriptor) -> Finding:
 def _check_contract(descriptor: ProjectDescriptor) -> Finding:
     """A contract version is declared and understood."""
     version = descriptor.contract_version
+    # A NEGATIVE version is present and readable — it is simply not a contract
+    # version. Saying "no project_init_contract_version" for it is false, not
+    # merely vague (#221).
+    if version < 0:
+        return Finding(
+            "contract",
+            FAIL,
+            f"project_init_contract_version is negative (v{version}) — not a contract version",
+        )
     if version < CONTRACT_VERSION:
+        # A malformed value coerces to 0 exactly like an absent one, so the int
+        # alone cannot tell them apart — `descriptor.malformed` can, and the
+        # difference is the whole point of #216: telling an operator to add a
+        # field that is already there sends them looking for the wrong thing.
+        if "project_init_contract_version" in descriptor.malformed:
+            return Finding(
+                "contract",
+                FAIL,
+                "project_init_contract_version is present but unreadable — fix the value, not the absence",
+            )
         return Finding("contract", FAIL, "no project_init_contract_version — predates the contract")
     if version > CONTRACT_VERSION_MAX:
         # A newer child may use surfaces this orchestrator misreads — flag it

@@ -192,3 +192,49 @@ def test_report_status_is_fail_when_any_finding_fails(fleet_dir: Path) -> None:
 def test_report_status_is_warn_when_only_warnings(fleet_dir: Path) -> None:
     make_project(fleet_dir, "alpha")
     assert _report(fleet_dir).status == "warn"
+
+
+# --- doctor distinguishes absent from present-but-unreadable (#216) ---
+
+_VERSION_CONFIG = """\
+project:
+  name: "alpha"
+  description: "test project"
+  project_init_version: 0.5.2
+{version_line}
+language: python
+delivery: library
+memory:
+  tier: 0
+tooling:
+  lint_command: "true"
+"""
+
+
+def _with_version(fleet_dir: Path, name: str, version_line: str):
+    make_project(fleet_dir, name, config_text=_VERSION_CONFIG.format(version_line=version_line))
+    return diagnose(load_descriptor(fleet_dir / name))
+
+
+def test_contract_finding_names_a_malformed_version_as_present(fleet_dir: Path) -> None:
+    # Was: "no project_init_contract_version — predates the contract", sending
+    # the operator to add a field that is already there (#216).
+    report = _with_version(fleet_dir, "a", '  project_init_contract_version: "two"')
+    assert "present but unreadable" in _finding(report, "contract").detail
+
+
+def test_contract_finding_still_reports_a_genuinely_absent_version(fleet_dir: Path) -> None:
+    # The control: absence must keep its own, correct message.
+    report = _with_version(fleet_dir, "b", "")
+    assert _finding(report, "contract").detail.startswith("no project_init_contract_version")
+
+
+def test_contract_finding_does_not_call_a_negative_version_absent(fleet_dir: Path) -> None:
+    report = _with_version(fleet_dir, "c", "  project_init_contract_version: -3")
+    assert "negative" in _finding(report, "contract").detail
+
+
+def test_config_finding_fails_on_a_malformed_version(fleet_dir: Path) -> None:
+    # The operator-visible path: the config check names the offending field.
+    report = _with_version(fleet_dir, "d", '  project_init_contract_version: "two"')
+    assert _finding(report, "config").status == "fail"
