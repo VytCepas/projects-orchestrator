@@ -24,7 +24,7 @@ from pathlib import Path
 import yaml
 
 from projects_orchestrator.adapters.generic import infer_descriptor
-from projects_orchestrator.descriptor import ProjectDescriptor, load_descriptor
+from projects_orchestrator.descriptor import ProjectDescriptor, load_descriptor, resolve_config
 
 FLEET_FILENAME = "fleet.yaml"
 
@@ -180,14 +180,110 @@ def _excluded(name: str, patterns: tuple[str, ...]) -> bool:
     return any(fnmatch.fnmatch(name, pattern) for pattern in patterns)
 
 
+#: How many levels BELOW a scanned root the skipped-project hint looks.
+#:
+#: DISCOVERY ITSELF STAYS ONE LEVEL DEEP. That is the documented contract
+#: (:attr:`FleetConfig.roots`), and widening it would silently change fleet
+#: membership on every box that has a root with repos underneath — an unreviewed
+#: change to *what the fleet is*. #215's own falsifier says so: "refuted if
+#: depth-1 is documented as a hard contract — in which case the skipped count is
+#: still the fix, because silence is indistinguishable from absence." So this
+#: adds the accounting, not the recursion.
+_HINT_DEPTH = 3
+
+#: Directories the hint visits before it stops looking. The accounting must never
+#: cost more than the scan it annotates, and one `node_modules` would see to that.
+#: On exhaustion the count is reported as a lower bound rather than a total — an
+#: undercount that says it is one is honest; one that does not is worse than none.
+_HINT_BUDGET = 2000
+
+#: Never descended into by the hint: build output and vendored trees, which hold
+#: no governed project and plenty of directories. Dotted names are skipped too
+#: (so `.git` and `.venv` need no entry here), which does mean a project hidden
+#: under a dotted directory goes uncounted — stated rather than papered over.
+_HINT_SKIP_DIRS = frozenset(
+    {"node_modules", "venv", "target", "dist", "build", "__pycache__", "site-packages"}
+)
+
+
+def _is_project_dir(path: Path, config: FleetConfig) -> bool:
+    """Whether :func:`discover` would admit ``path`` as a project (same test)."""
+    if resolve_config(path) is not None:
+        return True
+    return config.include_plain_repos and (path / ".git").is_dir()
+
+
+def _nested_projects(root: Path, config: FleetConfig) -> tuple[list[Path], bool]:
+    """Governed projects under ``root`` that the one-level scan cannot reach.
+
+    Returns the paths found (sorted) and whether the visit budget ran out, so a
+    caller can report a lower bound instead of claiming a total.
+    """
+    found: list[Path] = []
+    # (directory, depth-below-root). Depth 1 is what discovery already scans, so
+    # the hint starts by descending FROM depth 1 and reports depth >= 2.
+    frontier: list[tuple[Path, int]] = [(root, 0)]
+    visited = 0
+    while frontier:
+        current, depth = frontier.pop()
+        if depth >= _HINT_DEPTH:
+            continue
+        try:
+            children = sorted(c for c in current.iterdir() if c.is_dir())
+        except OSError:
+            continue  # unreadable subtree is not this function's problem to report
+        for child in children:
+            if visited >= _HINT_BUDGET:
+                return sorted(found), True
+            visited += 1
+            name = child.name
+            if name.startswith(".") or name in _HINT_SKIP_DIRS:
+                continue
+            if _excluded(name, config.exclude):
+                continue
+            if depth + 1 >= 2 and _is_project_dir(child, config):
+                found.append(child)
+            frontier.append((child, depth + 1))
+    return sorted(found), False
+
+
 def _scan_root(root: Path, config: FleetConfig, warnings: list[str]) -> list[Path]:
-    """List candidate project directories one level under ``root``."""
+    """List candidate project directories one level under ``root``.
+
+    Also ACCOUNTS for governed projects nested deeper than that. They stay
+    undiscovered — see :data:`_HINT_DEPTH` for why the depth is not widened — but
+    they are no longer invisible, which was the actual defect (#215): a
+    well-formed project reachable via ``projects:`` appeared in none of the
+    verbs and produced no warning, so an operator could not tell "not there"
+    from "not looked at".
+    """
     try:
         entries = sorted(p for p in root.iterdir() if p.is_dir())
     except OSError as exc:
         warnings.append(f"cannot scan root {root}: {exc}")
         return []
-    return [p for p in entries if not _excluded(p.name, config.exclude)]
+    candidates = [p for p in entries if not _excluded(p.name, config.exclude)]
+    nested, truncated = _nested_projects(root, config)
+    if nested:
+        shown = ", ".join(str(p) for p in nested[:5])
+        more = f" (+{len(nested) - 5} more)" if len(nested) > 5 else ""
+        count = f"at least {len(nested)}" if truncated else str(len(nested))
+        warnings.append(
+            f"{count} project(s) under {root} are nested deeper than the one level "
+            f"discovery scans and were NOT discovered — list them under `projects:` "
+            f"to govern them: {shown}{more}"
+        )
+    elif truncated:
+        # NOTHING FOUND *AND* THE SEARCH WAS INCOMPLETE. Reporting nothing here
+        # would put the operator back in exactly the state #215 describes:
+        # silence indistinguishable from absence. Having stopped looking is not
+        # the same fact as there being nothing to find, so it is said out loud.
+        warnings.append(
+            f"stopped looking for nested projects under {root} after "
+            f"{_HINT_BUDGET} directories — there may be projects nested deeper "
+            f"than the one level discovery scans; list any under `projects:`"
+        )
+    return candidates
 
 
 def discover(config: FleetConfig) -> Fleet:

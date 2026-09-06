@@ -7,6 +7,7 @@ from pathlib import Path
 from conftest import make_project
 
 from projects_orchestrator.registry import (
+    _HINT_BUDGET,
     FleetConfig,
     default_fleet_config,
     discover,
@@ -203,3 +204,115 @@ def test_register_project_preserves_include_plain_repos(tmp_path: Path) -> None:
     fleet_file.write_text("projects: []\ninclude_plain_repos: true\n", encoding="utf-8")
     register_project(fleet_file, make_project(tmp_path, "alpha"))
     assert load_fleet_config(fleet_file).include_plain_repos is True
+
+
+# --- Nested projects are accounted for, not discovered (#215) ---
+
+
+def _nested_warning(fleet) -> str:
+    """The one warning about deeper-than-one-level projects, or ``""``."""
+    return next((w for w in fleet.warnings if "nested deeper" in w), "")
+
+
+def test_a_project_nested_two_levels_is_reported_as_skipped(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "s-core")
+    make_project(fleet_dir / "s-core", "nested-child")
+    fleet = discover(FleetConfig(roots=(fleet_dir,)))
+    assert "nested-child" in _nested_warning(fleet)
+
+
+def test_a_project_nested_three_levels_is_reported_as_skipped(fleet_dir: Path) -> None:
+    # The depth the issue reports actually having been bitten by.
+    make_project(fleet_dir, "s-core")
+    make_project(fleet_dir / "s-core" / "deep", "deeper")
+    fleet = discover(FleetConfig(roots=(fleet_dir,)))
+    assert "deeper" in _nested_warning(fleet)
+
+
+def test_a_nested_project_is_still_not_discovered(fleet_dir: Path) -> None:
+    # THE CONTRACT IS UNCHANGED, deliberately. Widening discovery would alter
+    # what the fleet *is* on every box with repos under a root; the defect was
+    # the silence, not the depth. If this ever flips, _HINT_DEPTH's note is stale.
+    make_project(fleet_dir, "s-core")
+    make_project(fleet_dir / "s-core", "nested-child")
+    assert discover(FleetConfig(roots=(fleet_dir,))).names == ("s-core",)
+
+
+def test_a_nested_project_listed_explicitly_is_still_discovered(fleet_dir: Path) -> None:
+    # The control that proves the project is well-formed and merely unreachable,
+    # so the warning is pointing at real work rather than at a broken directory.
+    make_project(fleet_dir, "s-core")
+    nested = make_project(fleet_dir / "s-core", "nested-child")
+    assert discover(FleetConfig(projects=(nested,))).names == ("nested-child",)
+
+
+def test_no_nested_warning_when_nothing_is_nested(fleet_dir: Path) -> None:
+    # A warning that fires on a clean fleet is the one that gets ignored.
+    make_project(fleet_dir, "alpha")
+    make_project(fleet_dir, "beta")
+    assert _nested_warning(discover(FleetConfig(roots=(fleet_dir,)))) == ""
+
+
+def test_an_excluded_nested_directory_is_not_reported(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "s-core")
+    make_project(fleet_dir / "s-core", "vendored")
+    fleet = discover(FleetConfig(roots=(fleet_dir,), exclude=("vendored",)))
+    assert _nested_warning(fleet) == ""
+
+
+def test_a_vendored_tree_is_not_walked(fleet_dir: Path) -> None:
+    # node_modules holds no governed project and plenty of directories; walking
+    # it would make the accounting cost more than the scan it annotates.
+    make_project(fleet_dir, "s-core")
+    make_project(fleet_dir / "s-core" / "node_modules", "pkg")
+    assert _nested_warning(discover(FleetConfig(roots=(fleet_dir,)))) == ""
+
+
+def test_a_project_under_a_dotted_directory_is_not_reported(fleet_dir: Path) -> None:
+    # A stated limitation, pinned so it is a known gap and not a surprise:
+    # dotted names are skipped wholesale so `.git` and `.venv` need no entry.
+    make_project(fleet_dir, "s-core")
+    make_project(fleet_dir / "s-core" / ".hidden", "buried")
+    assert _nested_warning(discover(FleetConfig(roots=(fleet_dir,)))) == ""
+
+
+def test_a_deep_plain_repo_is_ignored_by_default(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "s-core")
+    (fleet_dir / "s-core" / "plain" / ".git").mkdir(parents=True)
+    assert _nested_warning(discover(FleetConfig(roots=(fleet_dir,)))) == ""
+
+
+def test_a_deep_plain_repo_is_reported_when_plain_repos_are_included(fleet_dir: Path) -> None:
+    # The hint uses discovery's own admission test, so it must track this flag.
+    make_project(fleet_dir, "s-core")
+    (fleet_dir / "s-core" / "plain" / ".git").mkdir(parents=True)
+    fleet = discover(FleetConfig(roots=(fleet_dir,), include_plain_repos=True))
+    assert "plain" in _nested_warning(fleet)
+
+
+def test_the_count_is_a_lower_bound_when_the_visit_budget_runs_out(fleet_dir: Path) -> None:
+    # An undercount that says it is one is honest; one that does not is worse
+    # than no count at all. Filler is named `zz*` so the nested project sorts
+    # BEFORE it and is therefore found before the budget is spent.
+    make_project(fleet_dir, "s-core")
+    make_project(fleet_dir / "s-core", "nested-child")
+    for i in range(_HINT_BUDGET + 10):
+        (fleet_dir / "s-core" / f"zz{i}").mkdir()
+    assert "at least" in _nested_warning(discover(FleetConfig(roots=(fleet_dir,))))
+
+
+def test_an_incomplete_search_is_reported_even_when_it_found_nothing(
+    fleet_dir: Path,
+) -> None:
+    """The hole the test above uncovered in the first version of this fix.
+
+    Filler named `d*` sorts before the nested project, so the budget is spent
+    before it is reached: nothing found, search incomplete. Reporting nothing
+    would put the operator back in #215's exact state — silence that cannot be
+    told apart from absence. Having stopped looking is its own fact.
+    """
+    make_project(fleet_dir, "s-core")
+    make_project(fleet_dir / "s-core", "nested-child")
+    for i in range(_HINT_BUDGET + 10):
+        (fleet_dir / "s-core" / f"d{i}").mkdir()
+    assert "stopped looking" in " ".join(discover(FleetConfig(roots=(fleet_dir,))).warnings)
