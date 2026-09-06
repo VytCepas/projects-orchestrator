@@ -178,3 +178,71 @@ def test_load_memory_tier0_is_grep_only(fleet_dir: Path) -> None:
     add_memory(project, "project_context.md")
     # A tier-0 read never gains a graph surface even if a stray graph exists.
     assert load_memory(_descriptor(project)).files[0].type != "graph"
+
+
+# --- Both frontmatter shapes carry the same fields (#217) ---
+
+
+def _raw_memory(project: Path, filename: str, text: str) -> Path:
+    """Write a memory file verbatim — add_memory only emits the flat shape."""
+    memory_dir = project / ".claude" / "memory"
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    path = memory_dir / filename
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+_NESTED = """\
+---
+name: nested-form
+description: a memory written to the documented format
+metadata:
+  type: reference
+  tags: [a, b]
+---
+ZORBLAX body text
+"""
+
+
+def test_a_type_nested_under_metadata_is_read(fleet_dir: Path) -> None:
+    # Was `unknown`: values were stringified one level deep, so the nested block
+    # arrived as the repr of a dict. The flat test above is the control.
+    project = make_project(fleet_dir, "alpha")
+    _raw_memory(project, "nested.md", _NESTED)
+    assert _memory(fleet_dir).files[0].type == "reference"
+
+
+def test_a_top_level_type_wins_over_a_nested_one(fleet_dir: Path) -> None:
+    project = make_project(fleet_dir, "alpha")
+    _raw_memory(
+        project,
+        "both.md",
+        "---\nname: n\ntype: outer\nmetadata:\n  type: inner\n---\nbody\n",
+    )
+    assert _memory(fleet_dir).files[0].type == "outer"
+
+
+def test_a_name_nested_under_metadata_is_read(fleet_dir: Path) -> None:
+    # Stronger than the type case: `name` feeds _score_metadata, so a nested
+    # name meant the file ranked on body text only.
+    project = make_project(fleet_dir, "alpha")
+    _raw_memory(project, "nn.md", "---\nmetadata:\n  name: Deploy target\n---\nbody\n")
+    assert _memory(fleet_dir).files[0].name == "Deploy target"
+
+
+def test_a_description_nested_under_metadata_ranks_above_a_body_hit(fleet_dir: Path) -> None:
+    project = make_project(fleet_dir, "alpha")
+    _raw_memory(
+        project,
+        "nd.md",
+        "---\nname: n\nmetadata:\n  description: zorblax matters here\n---\nplain body\n",
+    )
+    hits = search_memory([_memory(fleet_dir)], "zorblax")
+    assert hits[0].score == 2
+
+
+def test_a_nested_block_of_nothing_useful_is_still_unknown_type(fleet_dir: Path) -> None:
+    # The fold must not invent a type where the file declares none.
+    project = make_project(fleet_dir, "alpha")
+    _raw_memory(project, "empty.md", "---\nname: n\nmetadata:\n  tags: [a]\n---\nbody\n")
+    assert _memory(fleet_dir).files[0].type == "unknown"
