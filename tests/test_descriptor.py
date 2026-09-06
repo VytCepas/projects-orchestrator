@@ -8,6 +8,7 @@ from conftest import make_project, make_project_v2
 
 from projects_orchestrator.capabilities import load_capabilities
 from projects_orchestrator.descriptor import (
+    contract_label,
     load_descriptor,
     parse_config,
     parse_scaffold_version,
@@ -520,3 +521,90 @@ class TestSymlinkedMarkerIsRefused:
         project = make_project(fleet_dir, "ordinary", layout=".agents")
         resolved = resolve_config(project)
         assert resolved is not None and resolved[1] == ".agents"
+
+
+# --- Absent vs present-but-unreadable (#216) ---
+
+_INT_FIELDS_CONFIG = """\
+project:
+  name: "alpha"
+  description: "test project"
+  project_init_version: 0.5.2
+{version_line}
+language: python
+delivery: library
+memory:
+  tier: {tier}
+tooling:
+  lint_command: "true"
+"""
+
+
+def _int_fields(fleet_dir: Path, name: str, version_line: str = "", tier: str = "0"):
+    project = make_project(
+        fleet_dir,
+        name,
+        config_text=_INT_FIELDS_CONFIG.format(version_line=version_line, tier=tier),
+    )
+    descriptor = load_descriptor(project)
+    assert descriptor is not None
+    return descriptor
+
+
+def test_a_malformed_contract_version_is_recorded_as_malformed(fleet_dir: Path) -> None:
+    descriptor = _int_fields(fleet_dir, "a", '  project_init_contract_version: "two"')
+    assert "project_init_contract_version" in descriptor.malformed
+
+
+def test_a_malformed_contract_version_is_warned_about(fleet_dir: Path) -> None:
+    descriptor = _int_fields(fleet_dir, "b", '  project_init_contract_version: "two"')
+    assert descriptor.warnings == (
+        "project_init_contract_version is not an integer — ignored: 'two'",
+    )
+
+
+def test_an_absent_contract_version_is_not_called_malformed(fleet_dir: Path) -> None:
+    # The control that makes the test above mean anything: absent must stay
+    # silent, or "malformed" degenerates into "not v1+" and says nothing new.
+    assert _int_fields(fleet_dir, "c").malformed == ()
+
+
+def test_a_null_contract_version_counts_as_absent(fleet_dir: Path) -> None:
+    # `project_init_contract_version:` with no value parses as None. Nothing was
+    # declared, so there is nothing to call broken.
+    assert _int_fields(fleet_dir, "d", "  project_init_contract_version:").malformed == ()
+
+
+def test_a_malformed_memory_tier_is_recorded_as_malformed(fleet_dir: Path) -> None:
+    # Same coercion, one field over — and this one gates retrieval surfaces.
+    assert "memory.tier" in _int_fields(fleet_dir, "e", tier='"deep"').malformed
+
+
+def test_a_malformed_memory_tier_still_degrades_to_tier_zero(fleet_dir: Path) -> None:
+    # Never-raise is preserved: the value is still usable, just now visible.
+    assert _int_fields(fleet_dir, "f", tier='"deep"').memory_tier == 0
+
+
+# --- contract_label: one rendering, replacing three divergent ones ---
+
+
+def test_contract_label_says_bad_for_a_declared_unreadable_version(fleet_dir: Path) -> None:
+    descriptor = _int_fields(fleet_dir, "g", '  project_init_contract_version: "two"')
+    assert contract_label(descriptor) == "bad"
+
+
+def test_contract_label_says_none_for_an_absent_version(fleet_dir: Path) -> None:
+    assert contract_label(_int_fields(fleet_dir, "h")) == "none"
+
+
+def test_contract_label_renders_a_negative_version_rather_than_denying_it(
+    fleet_dir: Path,
+) -> None:
+    # `none` would claim the field is absent. It is present and readable — it is
+    # just not a version. fleet.py said `none` here while detail.py said `v-3`.
+    descriptor = _int_fields(fleet_dir, "i", "  project_init_contract_version: -3")
+    assert contract_label(descriptor) == "v-3"
+
+
+def test_contract_label_renders_a_good_version(fleet_dir: Path) -> None:
+    assert contract_label(_int_fields(fleet_dir, "j", "  project_init_contract_version: 2")) == "v2"

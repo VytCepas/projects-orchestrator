@@ -191,6 +191,12 @@ class ProjectDescriptor:
     heal_mode: str = ""
     context: str = ""
     warnings: tuple[str, ...] = ()
+    #: Names of fields that were DECLARED but could not be read, so a consumer
+    #: can tell "absent" from "present and broken" — which the coerced value
+    #: alone cannot (#216). Absent fields are NOT listed here; nothing was
+    #: declared, so nothing is malformed. Additive, per the `--json` seam's
+    #: additive-only rule (harbor CONTRACTS/orchestrator-json.md).
+    malformed: tuple[str, ...] = ()
 
     def has_task(self, task: str) -> bool:
         """Return whether the project declares a runnable command for ``task``."""
@@ -207,11 +213,65 @@ def _as_mapping(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _as_int(value: Any, default: int = 0) -> int:
-    """Coerce ``value`` to int, falling back to ``default``."""
+def contract_label(descriptor: ProjectDescriptor) -> str:
+    """Render a descriptor's contract version for a human column (pure).
+
+    ``bad`` when the field is DECLARED and unreadable, ``none`` when it is
+    absent, ``v<n>`` otherwise — a negative included, because it is present and
+    readable and ``none`` would deny that it exists.
+
+    One definition. There were three renderings of this before #216 —
+    ``fleet._contract_cell``, ``detail._summary_lines`` and ``doctor`` — and two
+    of them had already diverged: a ``-3`` read as ``none`` in the fleet table
+    and as ``v-3`` in the detail view, for the same project.
+    """
+    if "project_init_contract_version" in descriptor.malformed:
+        return "bad"
+    version = descriptor.contract_version
+    return f"v{version}" if version != 0 else "none"
+
+
+def _as_int(
+    value: Any,
+    default: int = 0,
+    *,
+    field: str = "",
+    warnings: list[str] | None = None,
+    malformed: list[str] | None = None,
+) -> int:
+    """Coerce ``value`` to int, falling back to ``default``.
+
+    ABSENT and PRESENT-BUT-UNREADABLE both yield ``default``, and from the
+    number alone no consumer can tell them apart. Measured before this warning
+    existed (#216): a config declaring ``project_init_contract_version: "two"``
+    read as ``0`` and ``doctor`` reported *"no project_init_contract_version —
+    predates the contract"*, telling the operator to add a field that was
+    already there. The ``status`` table's Contract column read ``none``,
+    identical to true absence.
+
+    Supplying ``field`` records the malformed case so a consumer can say which
+    it is: ``warnings`` gets the human sentence, ``malformed`` gets the bare
+    field name so a renderer can branch without matching on prose. A missing key
+    and an explicit null are both treated as absent — nothing was declared, so
+    there is nothing to complain about.
+
+    NOT warned about: a coercible string such as ``"2"``. It is schema-invalid
+    upstream and accepted here, one step less visible because the value happens
+    to be right — but how many live repos quote the field is unmeasured, and a
+    warning that fires across the fleet on a value that parses correctly is the
+    §2.11 false positive that gets a control switched off. Left as a known gap
+    rather than fixed blind.
+    """
+    if value is None:
+        return default
     try:
         return int(value)
     except (TypeError, ValueError):
+        if field:
+            if warnings is not None:
+                warnings.append(f"{field} is not an integer — ignored: {value!r}")
+            if malformed is not None:
+                malformed.append(field)
         return default
 
 
@@ -441,9 +501,20 @@ def parse_config(text: str, project_dir: Path, config_root: str = ".claude") -> 
             f"memory_path '{memory_rel}' escapes the project root — using {memory_default}"
         )
         memory_path = project_dir / memory_default
-    contract_version = _as_int(project.get("project_init_contract_version"))
+    malformed: list[str] = []
+    contract_version = _as_int(
+        project.get("project_init_contract_version"),
+        field="project_init_contract_version",
+        warnings=warnings,
+        malformed=malformed,
+    )
     is_v2 = contract_version >= CONTRACT_V2
-    memory_tier = _as_int(memory.get("tier"))
+    # memory.tier gates which retrieval surfaces are read at all, so a silent
+    # coercion to 0 downgrades a tier-3 project to flat files with no signal.
+    # Same defect as the contract version, one field over.
+    memory_tier = _as_int(
+        memory.get("tier"), field="memory.tier", warnings=warnings, malformed=malformed
+    )
     surface = _MemorySurface(block=memory, tier=memory_tier, project_dir=project_dir)
 
     return ProjectDescriptor(
@@ -476,6 +547,7 @@ def parse_config(text: str, project_dir: Path, config_root: str = ".claude") -> 
         heal_mode=_extract_heal_mode(raw, warnings),
         context=_extract_context(raw, warnings),
         warnings=tuple(warnings),
+        malformed=tuple(malformed),
     )
 
 

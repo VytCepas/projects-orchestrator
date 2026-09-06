@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from projects_orchestrator.checks import CheckResult
-from projects_orchestrator.descriptor import ProjectDescriptor
+from projects_orchestrator.descriptor import ProjectDescriptor, contract_label
 from projects_orchestrator.memory import load_project_memory
 from projects_orchestrator.runner import run_command
 
@@ -62,7 +62,7 @@ def recent_commits(path: Path, limit: int = DEFAULT_COMMIT_LIMIT) -> tuple[str, 
 
 def _summary_lines(descriptor: ProjectDescriptor) -> tuple[str, ...]:
     """Render the descriptor's static facts as ``label: value`` lines."""
-    contract = f"v{descriptor.contract_version}" if descriptor.contract_version else "none"
+    contract = contract_label(descriptor)
     lines = [
         f"path: {descriptor.path}",
         f"language: {descriptor.language}",
