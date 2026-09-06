@@ -35,6 +35,7 @@ from projects_orchestrator.checks import CheckResult
 from projects_orchestrator.descriptor import DEPLOY_NONE, ProjectDescriptor
 from projects_orchestrator.gcloud_identity import gcloud_env
 from projects_orchestrator.runner import RunResult, run_command
+from projects_orchestrator.urlguard import guarded_opener, is_probe_safe
 
 STATE_NONE = "none"
 STATE_DEPLOYED = "deployed"
@@ -189,14 +190,27 @@ def probe_health(url: str, timeout: float = _HEALTH_TIMEOUT) -> str:
 
     Returns:
         ``healthy`` (2xx/3xx), ``unhealthy`` (HTTP error status), or
-        ``unknown`` (unreachable, timeout, or a non-HTTP scheme).
+        ``unknown`` (unreachable, timeout, a non-HTTP scheme, or a host the
+        guard refuses).
     """
-    if not url.startswith(("http://", "https://")):
+    # Was an inline `startswith` here — the same predicate status_url.py and
+    # notify.py needed. Routed through the one definition so a future
+    # tightening reaches all three rather than one (#181's lesson).
+    if not is_probe_safe(url):
         return STATE_UNKNOWN
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310 — scheme checked above; descriptor-declared health URL
+        # guarded_opener, NOT urlopen: the default opener follows a 30x itself,
+        # so checking only this URL let a redirect carry the probe to a host the
+        # guard refuses (PR #225 review, reproduced).
+        with guarded_opener().open(url, timeout=timeout) as response:
             return HEALTHY if response.status < 400 else UNHEALTHY
-    except urllib.error.HTTPError:
+    except urllib.error.HTTPError as exc:
+        # A REFUSED REDIRECT IS NOT ILL HEALTH. The handler declines the hop by
+        # returning None, which surfaces as the original 3xx — and reporting
+        # `unhealthy` for it would be a governance lie about a service we simply
+        # declined to follow. Everything 4xx/5xx is still unhealthy.
+        if 300 <= exc.code < 400:
+            return STATE_UNKNOWN
         return UNHEALTHY
     except (urllib.error.URLError, OSError, ValueError):
         return STATE_UNKNOWN

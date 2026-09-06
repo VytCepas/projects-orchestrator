@@ -24,6 +24,7 @@ from typing import Any
 from projects_orchestrator.adapters.github import CI_FAIL, CI_RUNNING, CI_SUCCESS, CI_UNKNOWN
 from projects_orchestrator.checks import CheckResult
 from projects_orchestrator.descriptor import ProjectDescriptor
+from projects_orchestrator.urlguard import guarded_opener, is_probe_safe
 
 _TIMEOUT = 15.0
 
@@ -54,10 +55,13 @@ Fetcher = Callable[[str], str]
 
 def _urllib_fetch(url: str) -> str:
     """Default fetcher: GET ``url`` and return the body as text."""
-    request = urllib.request.Request(  # noqa: S310 — operator-declared status URL
+    request = urllib.request.Request(  # noqa: S310 — scheme/host checked by probe_status_url
         url, headers={"accept": "application/json"}, method="GET"
     )
-    with urllib.request.urlopen(request, timeout=_TIMEOUT) as response:  # noqa: S310
+    # guarded_opener, NOT urlopen: the default opener follows a 30x on its own,
+    # so validating only the declared URL let a child-controlled endpoint
+    # redirect the probe at the metadata service (PR #225 review, reproduced).
+    with guarded_opener().open(request, timeout=_TIMEOUT) as response:
         return str(response.read().decode("utf-8", errors="replace"))
 
 
@@ -132,10 +136,15 @@ def probe_status_url(descriptor: ProjectDescriptor, fetch: Fetcher | None = None
 
     Returns:
         ``pass`` | ``fail`` | ``running`` | ``unknown``; every failure mode —
-        unreachable, non-2xx, non-JSON, field absent, value unrecognised — is
-        ``unknown``.
+        unreachable, non-2xx, non-JSON, field absent, value unrecognised, and a
+        URL the guard refuses — is ``unknown``.
     """
     if descriptor.ci is None:
+        return CI_UNKNOWN
+    # BEFORE the fetcher, not inside it: the URL is a child repo's untrusted
+    # descriptor field, and an injected test fetcher must not be reachable with
+    # a `file://` either. See urlguard for what is refused and what is not.
+    if not is_probe_safe(descriptor.ci.status_url):
         return CI_UNKNOWN
     fetcher = fetch or _urllib_fetch
     try:

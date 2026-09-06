@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import http.server
 import json
+import threading
 import urllib.error
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 
@@ -171,3 +174,102 @@ def test_check_results_report_prs_unknown_not_a_stale_count() -> None:
     # lingering in the table as if it were current.
     results = {r.task: r for r in status_check_results("alpha", "pass", "2026-07-13T10:00:00")}
     assert results["prs"].status == "unknown"
+
+
+# --- A descriptor URL is untrusted input (#184) ---
+
+
+def test_a_file_url_never_reaches_the_fetcher(fleet_dir: Path) -> None:
+    # The guard is deliberately BEFORE the fetcher, not inside the stdlib one:
+    # a descriptor must not be able to steer an injected fetcher either.
+    def spy(_url: str) -> str:
+        raise AssertionError("the fetcher was reached with a refused URL")
+
+    assert probe_status_url(_descriptor(fleet_dir, "file:///etc/passwd"), fetch=spy) == "unknown"
+
+
+def test_a_file_url_degrades_to_unknown_rather_than_raising(fleet_dir: Path) -> None:
+    # Before #184 this returned the fetched verdict, having read a local file.
+    assert probe_status_url(_descriptor(fleet_dir, "file:///etc/passwd")) == "unknown"
+
+
+def test_the_metadata_address_degrades_to_unknown(fleet_dir: Path) -> None:
+    descriptor = _descriptor(fleet_dir, "http://169.254.169.254/latest/meta-data/")
+    assert probe_status_url(descriptor, fetch=_fetching({"result": "SUCCESS"})) == "unknown"
+
+
+def test_a_declared_localhost_endpoint_still_probes(fleet_dir: Path) -> None:
+    # The guard must not delete the feature: a self-hosted runner on loopback
+    # is exactly what ci.status_url exists for.
+    descriptor = _descriptor(fleet_dir, "http://127.0.0.1:8080/api")
+    assert probe_status_url(descriptor, fetch=_fetching({"result": "SUCCESS"})) == "pass"
+
+
+# --- Redirects are a second entry point (PR #225 review) ---
+
+
+class _RedirectHandler(http.server.BaseHTTPRequestHandler):
+    """Answers every GET with a 302 to whatever `target` is set to."""
+
+    target = ""
+
+    def do_GET(self) -> None:
+        self.send_response(302)
+        self.send_header("Location", type(self).target)
+        self.end_headers()
+
+    def log_message(self, *_args: object) -> None:
+        return
+
+
+class _OkHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"result": "SUCCESS"}')
+
+    def log_message(self, *_args: object) -> None:
+        return
+
+
+@contextmanager
+def _serving(handler: type[http.server.BaseHTTPRequestHandler]):
+    server = http.server.HTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+
+
+def test_a_redirect_to_a_refused_host_is_not_followed(fleet_dir: Path) -> None:
+    """The declared URL passes the guard; the hop must be checked too.
+
+    Measured before the fix: the default opener followed the 30x and
+    `is_probe_safe` was never consulted on the target, so a child-controlled
+    endpoint could carry the probe to the instance-metadata address.
+
+    THE TARGET IS REFUSED *AND REACHABLE*, and that is the whole design of this
+    test. The obvious version pointed the redirect at 169.254.169.254 and
+    asserted `unknown` — which is also what you get when the hop IS followed and
+    that address is simply unreachable, as it is in CI. A mutation proved it
+    vacuous: neutering the guard changed no outcome. `2130706433` is 127.0.0.1
+    in decimal-integer form, so the numeric-host rule refuses it while the
+    resolver would happily reach the server below — following the hop returns
+    `pass`, refusing it returns `unknown`, and the two are now distinguishable.
+    """
+    with _serving(_OkHandler) as ok, _serving(_RedirectHandler) as base:
+        port = ok.rsplit(":", 1)[1]
+        _RedirectHandler.target = f"http://2130706433:{port}/moved"
+        descriptor = _descriptor(fleet_dir, f"{base}/status")
+        assert probe_status_url(descriptor) == "unknown"
+
+
+def test_a_redirect_to_an_allowed_host_is_still_followed(fleet_dir: Path) -> None:
+    # The control: refusing every redirect would be a cheaper fix and a worse
+    # one, because a legitimate endpoint behind a 302 would go dark.
+    with _serving(_OkHandler) as ok, _serving(_RedirectHandler) as base:
+        _RedirectHandler.target = f"{ok}/moved"
+        descriptor = _descriptor(fleet_dir, f"{base}/status")
+        assert probe_status_url(descriptor) == "pass"

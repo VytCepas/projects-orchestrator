@@ -18,6 +18,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 
 from projects_orchestrator.fleet import ProjectSnapshot
+from projects_orchestrator.urlguard import is_probe_safe
 
 CRITICAL = "critical"
 WARNING = "warning"
@@ -123,8 +124,11 @@ def post_payload(url: str, payload: dict[str, object], send: Sender | None = Non
             a fake so no network call is made.
 
     Returns:
-        ``True`` on a 2xx response; ``False`` on any failure.
+        ``True`` on a 2xx response; ``False`` on any failure — a refused URL
+        included. A webhook that was never a webhook is not a delivery.
     """
+    if not is_probe_safe(url):
+        return False
     sender = send or _urllib_send
     body = json.dumps(payload).encode("utf-8")
     try:

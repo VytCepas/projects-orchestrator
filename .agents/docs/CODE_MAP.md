@@ -503,6 +503,13 @@ Fleet upgrade planning — who is behind upstream project-init, and act on it.
 - `def build_row` — Build one upgrade-plan row for a project (never raises).
 - `def upgrade_plan` — Build the whole fleet's upgrade plan (pure over its inputs).
 
+### `projects_orchestrator/urlguard.py`
+
+Scheme and host allowlist for descriptor- and operator-declared URLs.
+
+- `def is_probe_safe` — Whether ``url`` may be fetched by a fleet probe (pure; never raises).
+- `def guarded_opener` — An opener that validates every redirect hop, not just the first URL.
+
 ### `projects_orchestrator/work.py`
 
 ``work`` — put an agent to work on a project, as a tracked, detached run.
