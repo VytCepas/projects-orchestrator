@@ -231,6 +231,28 @@ def contract_label(descriptor: ProjectDescriptor) -> str:
     return f"v{version}" if version != 0 else "none"
 
 
+def _is_integral(value: Any) -> bool:
+    """False for the values ``int()`` would reshape rather than read.
+
+    ``int()`` raising is what makes a bad value visible, and two YAML scalars
+    never raise. ``bool`` is a subclass of ``int``, so ``True`` returns ``1``;
+    ``int()`` on a float truncates, so ``2.9`` returns ``2``. Both arrive back
+    as a plausible number from a value the schema calls invalid
+    (``descriptor.schema.json`` types both fields ``integer``), which is
+    exactly the absent-vs-unreadable confusion #216 exists to end — worse here,
+    because the number is not merely a default but a *wrong* answer that reads
+    as declared. Raised as P2 on #228.
+
+    An integral float stays admissible: JSON Schema counts ``2.0`` as an
+    integer, so refusing it would invent a rule the contract does not have.
+    """
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, float):
+        return value.is_integer()
+    return True
+
+
 def _as_int(
     value: Any,
     default: int = 0,
@@ -255,6 +277,9 @@ def _as_int(
     and an explicit null are both treated as absent — nothing was declared, so
     there is nothing to complain about.
 
+    A YAML bool or a fractional float is malformed, not coerced — see
+    ``_is_integral``.
+
     NOT warned about: a coercible string such as ``"2"``. It is schema-invalid
     upstream and accepted here, one step less visible because the value happens
     to be right — but how many live repos quote the field is unmeasured, and a
@@ -264,15 +289,17 @@ def _as_int(
     """
     if value is None:
         return default
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        if field:
-            if warnings is not None:
-                warnings.append(f"{field} is not an integer — ignored: {value!r}")
-            if malformed is not None:
-                malformed.append(field)
-        return default
+    if _is_integral(value):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            pass
+    if field:
+        if warnings is not None:
+            warnings.append(f"{field} is not an integer — ignored: {value!r}")
+        if malformed is not None:
+            malformed.append(field)
+    return default
 
 
 def _extract_tooling(raw: dict[str, Any]) -> dict[str, str]:

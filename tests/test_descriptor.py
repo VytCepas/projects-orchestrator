@@ -585,6 +585,68 @@ def test_a_malformed_memory_tier_still_degrades_to_tier_zero(fleet_dir: Path) ->
     assert _int_fields(fleet_dir, "f", tier='"deep"').memory_tier == 0
 
 
+# --- Values int() reshapes instead of refusing (#228 review) ---
+#
+# The malformed path above is reached by int() RAISING. A YAML bool and a
+# fractional float never raise: `int(True)` is 1 and `int(2.9)` is 2, so a
+# schema-invalid value came back as a plausible declared version. That is worse
+# than the bug #216 fixed — not a default standing in for an unreadable field,
+# but a wrong answer indistinguishable from a right one.
+
+
+def test_a_boolean_contract_version_is_malformed_not_version_one(
+    fleet_dir: Path,
+) -> None:
+    descriptor = _int_fields(fleet_dir, "bool_v", "  project_init_contract_version: true")
+    assert "project_init_contract_version" in descriptor.malformed
+    assert descriptor.contract_version == 0
+
+
+def test_a_fractional_contract_version_is_malformed_not_truncated(
+    fleet_dir: Path,
+) -> None:
+    # 2.9 became v2 and switched on v2 parsing off a value nobody wrote.
+    descriptor = _int_fields(fleet_dir, "frac_v", "  project_init_contract_version: 2.9")
+    assert "project_init_contract_version" in descriptor.malformed
+    assert descriptor.contract_version == 0
+
+
+def test_a_boolean_memory_tier_is_malformed(fleet_dir: Path) -> None:
+    assert "memory.tier" in _int_fields(fleet_dir, "bool_t", tier="true").malformed
+
+
+def test_a_fractional_memory_tier_is_malformed(fleet_dir: Path) -> None:
+    descriptor = _int_fields(fleet_dir, "frac_t", tier="2.9")
+    assert "memory.tier" in descriptor.malformed
+    assert descriptor.memory_tier == 0
+
+
+def test_a_reshaped_contract_version_reaches_the_renderer_as_bad(
+    fleet_dir: Path,
+) -> None:
+    # Recording it is only half: contract_label branches on `malformed`, so this
+    # is what the operator actually sees instead of a confident `v1`.
+    descriptor = _int_fields(fleet_dir, "bool_lbl", "  project_init_contract_version: true")
+    assert contract_label(descriptor) == "bad"
+
+
+def test_an_integral_float_version_stays_valid(fleet_dir: Path) -> None:
+    # The control that keeps the four above from meaning "reject anything
+    # unusual". JSON Schema counts 2.0 as an integer, and YAML types an
+    # unquoted 2.0 as a float, so a refusal here would invent a rule the
+    # contract does not have and fire on a correct config.
+    descriptor = _int_fields(fleet_dir, "float_ok", "  project_init_contract_version: 2.0")
+    assert descriptor.malformed == ()
+    assert descriptor.contract_version == 2
+    assert contract_label(descriptor) == "v2"
+
+
+def test_an_integral_float_memory_tier_stays_valid(fleet_dir: Path) -> None:
+    descriptor = _int_fields(fleet_dir, "float_ok_t", tier="1.0")
+    assert descriptor.malformed == ()
+    assert descriptor.memory_tier == 1
+
+
 # --- contract_label: one rendering, replacing three divergent ones ---
 
 
