@@ -24,7 +24,7 @@ from typing import Any
 from projects_orchestrator.adapters.github import CI_FAIL, CI_RUNNING, CI_SUCCESS, CI_UNKNOWN
 from projects_orchestrator.checks import CheckResult
 from projects_orchestrator.descriptor import ProjectDescriptor
-from projects_orchestrator.urlguard import is_probe_safe
+from projects_orchestrator.urlguard import guarded_opener, is_probe_safe
 
 _TIMEOUT = 15.0
 
@@ -58,7 +58,10 @@ def _urllib_fetch(url: str) -> str:
     request = urllib.request.Request(  # noqa: S310 — scheme/host checked by probe_status_url
         url, headers={"accept": "application/json"}, method="GET"
     )
-    with urllib.request.urlopen(request, timeout=_TIMEOUT) as response:  # noqa: S310
+    # guarded_opener, NOT urlopen: the default opener follows a 30x on its own,
+    # so validating only the declared URL let a child-controlled endpoint
+    # redirect the probe at the metadata service (PR #225 review, reproduced).
+    with guarded_opener().open(request, timeout=_TIMEOUT) as response:
         return str(response.read().decode("utf-8", errors="replace"))
 
 
