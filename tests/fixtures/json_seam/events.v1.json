@@ -1,0 +1,39 @@
+[
+  {
+    "project": "alpha",
+    "events": [
+      {
+        "project": "alpha",
+        "timestamp": "2026-01-01T00:00:00+00:00",
+        "hook": "prod_guard",
+        "action": "ask",
+        "command": "cat .env",
+        "session": "sess-1"
+      },
+      {
+        "project": "alpha",
+        "timestamp": "2026-01-01T00:00:00+00:00",
+        "hook": "package_guard",
+        "action": "block",
+        "command": "pip install --break-system-packages x",
+        "session": "sess-1"
+      },
+      {
+        "project": "alpha",
+        "timestamp": "",
+        "hook": "unknown",
+        "action": "unknown",
+        "command": "",
+        "session": ""
+      }
+    ],
+    "warnings": []
+  },
+  {
+    "project": "beta",
+    "events": [],
+    "warnings": [
+      "no observability log"
+    ]
+  }
+]

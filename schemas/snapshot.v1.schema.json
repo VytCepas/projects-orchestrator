@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/VytCepas/projects-orchestrator/schemas/snapshot.v1.schema.json",
+  "title": "projects-orchestrator snapshot --json (v1)",
+  "description": "The fleet board. Consumed by harbor L0-5 (statusline), L0-6 (observability section) and E2 (Pulse tile) via an interval-written cache file. DERIVED FROM REAL EMITTED OUTPUT, not from the producing dataclasses -- see schemas/README.md for per-field provenance and for why `additionalProperties` is open.",
+  "x-schema-version": 1,
+  "type": "array",
+  "items": { "$ref": "#/$defs/snapshot" },
+  "$defs": {
+    "stringArray": { "type": "array", "items": { "type": "string" } },
+    "snapshot": {
+      "type": "object",
+      "required": [
+        "descriptor",
+        "status",
+        "checks",
+        "memory",
+        "drift",
+        "hooks",
+        "run_state",
+        "trend",
+        "agent_run"
+      ],
+      "properties": {
+        "descriptor": { "$ref": "#/$defs/descriptor" },
+        "status": { "$ref": "#/$defs/gitStatus" },
+        "checks": {
+          "description": "Task name -> last-known result. An empty object means never probed, which is distinct from a probe that failed.",
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/checkResult" }
+        },
+        "memory": { "$ref": "#/$defs/memory" },
+        "drift": { "$ref": "#/$defs/drift" },
+        "hooks": {
+          "description": "Git-hook installation health. `-` means not a git repo / not applicable.",
+          "type": "string",
+          "enum": ["ok", "partial", "missing", "-"]
+        },
+        "run_state": {
+          "description": "Live supervised-process state, or null when not running. The non-null shape is UNOBSERVED in the golden fixture (no process was running); typed loosely on purpose rather than invented. See schemas/README.md.",
+          "type": ["object", "null"]
+        },
+        "trend": {
+          "description": "Primary-gate history sparkline (e.g. `++x+`); empty when there is no history.",
+          "type": "string"
+        },
+        "agent_run": {
+          "description": "Latest open-work agent run, or null when none is outstanding. Non-null shape UNOBSERVED -- see run_state.",
+          "type": ["object", "null"]
+        }
+      }
+    },
+    "descriptor": {
+      "type": "object",
+      "required": [
+        "name",
+        "path",
+        "config_root",
+        "language",
+        "delivery",
+        "contract_version",
+        "project_init_version",
+        "memory_tier",
+        "memory_stack",
+        "memory_path",
+        "vault_path",
+        "graph_path",
+        "rag_endpoint",
+        "tooling",
+        "deploy",
+        "observability_path",
+        "hooks_expected",
+        "host",
+        "ci",
+        "heal_mode",
+        "context",
+        "warnings",
+        "malformed"
+      ],
+      "properties": {
+        "name": { "type": "string" },
+        "path": { "type": "string" },
+        "config_root": { "type": "string", "enum": [".agents", ".claude"] },
+        "language": { "type": "string" },
+        "delivery": { "type": "string" },
+        "contract_version": {
+          "description": "0 when absent OR when declared and unreadable -- `malformed` is what separates those two (#216).",
+          "type": "integer"
+        },
+        "project_init_version": { "type": "string" },
+        "memory_tier": { "type": "integer" },
+        "memory_stack": { "type": "string" },
+        "memory_path": { "type": ["string", "null"] },
+        "vault_path": { "type": ["string", "null"] },
+        "graph_path": { "type": ["string", "null"] },
+        "rag_endpoint": { "type": "string" },
+        "tooling": {
+          "description": "Task name -> shell command.",
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "deploy": {
+          "type": ["object", "null"],
+          "required": ["target", "app", "region", "health_url", "workflow"],
+          "properties": {
+            "target": { "type": "string" },
+            "app": { "type": "string" },
+            "region": { "type": "string" },
+            "health_url": { "type": "string" },
+            "workflow": { "type": "string" }
+          }
+        },
+        "observability_path": { "type": ["string", "null"] },
+        "hooks_expected": { "$ref": "#/$defs/stringArray" },
+        "host": { "type": "string" },
+        "ci": {
+          "type": ["object", "null"],
+          "required": ["status_url", "status_field"],
+          "properties": {
+            "status_url": { "type": "string" },
+            "status_field": { "type": "string" }
+          }
+        },
+        "heal_mode": { "type": "string" },
+        "context": { "type": "string" },
+        "warnings": { "$ref": "#/$defs/stringArray" },
+        "malformed": {
+          "description": "Field names DECLARED but unreadable, so a consumer can tell absent from broken (#216). Added in v1 as an additive change.",
+          "$ref": "#/$defs/stringArray"
+        }
+      }
+    },
+    "gitStatus": {
+      "type": "object",
+      "required": ["project", "branch", "dirty", "ahead", "behind", "last_commit", "detail"],
+      "properties": {
+        "project": { "type": "string" },
+        "branch": { "type": "string" },
+        "dirty": { "type": "boolean" },
+        "ahead": {
+          "description": "null means unknown / no upstream -- NOT zero.",
+          "type": ["integer", "null"]
+        },
+        "behind": { "type": ["integer", "null"] },
+        "last_commit": { "type": "string" },
+        "detail": { "type": "string" }
+      }
+    },
+    "checkResult": {
+      "type": "object",
+      "required": ["project", "task", "status", "detail", "duration", "checked_at", "head"],
+      "properties": {
+        "project": { "type": "string" },
+        "task": { "type": "string" },
+        "status": { "type": "string" },
+        "detail": { "type": "string" },
+        "duration": { "type": "number" },
+        "checked_at": { "type": "string" },
+        "head": { "type": "string" }
+      }
+    },
+    "memory": {
+      "type": "object",
+      "required": ["project", "memory_path", "files", "index_present", "warnings"],
+      "properties": {
+        "project": { "type": "string" },
+        "memory_path": { "type": ["string", "null"] },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["project", "path", "name", "description", "type", "body"],
+            "properties": {
+              "project": { "type": "string" },
+              "path": { "type": "string" },
+              "name": { "type": "string" },
+              "description": { "type": "string" },
+              "type": { "type": "string" },
+              "body": { "type": "string" }
+            }
+          }
+        },
+        "index_present": { "type": "boolean" },
+        "warnings": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "drift": {
+      "type": "object",
+      "required": ["project", "status", "modified", "missing", "total"],
+      "properties": {
+        "project": { "type": "string" },
+        "status": { "type": "string", "enum": ["clean", "drift", "no-manifest"] },
+        "modified": { "$ref": "#/$defs/stringArray" },
+        "missing": { "$ref": "#/$defs/stringArray" },
+        "total": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

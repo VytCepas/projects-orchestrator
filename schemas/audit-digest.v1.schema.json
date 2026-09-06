@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/VytCepas/projects-orchestrator/schemas/audit-digest.v1.schema.json",
+  "title": "projects-orchestrator audit --json --digest (v1)",
+  "description": "Governance deltas against the previous run. Consumed by harbor L0-6. This is the ONE consumed verb whose payload is a JSON OBJECT rather than a bare array, so it is the only one that can carry an in-band `schema_version` additively -- see schemas/README.md.",
+  "x-schema-version": 1,
+  "type": "object",
+  "required": ["schema_version", "changed", "new", "resolved", "text"],
+  "properties": {
+    "schema_version": {
+      "description": "In-band contract version. Additive within a major; a breaking change bumps this and lands lock-step with its consumers.",
+      "type": "integer",
+      "const": 1
+    },
+    "changed": {
+      "description": "Whether anything moved since the last digest. False with empty new/resolved is the steady state.",
+      "type": "boolean"
+    },
+    "new": {
+      "description": "Findings present now and absent last run.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/finding" }
+    },
+    "resolved": {
+      "description": "Findings present last run and absent now. Same item shape as `new`.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/finding" }
+    },
+    "text": {
+      "description": "Pre-rendered human summary. Present even when nothing changed.",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "required": ["project", "category", "severity", "message"],
+      "properties": {
+        "project": { "type": "string" },
+        "category": { "type": "string" },
+        "severity": { "type": "string" },
+        "message": { "type": "string" }
+      }
+    }
+  }
+}

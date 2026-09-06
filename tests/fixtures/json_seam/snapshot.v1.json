@@ -1,0 +1,194 @@
+[
+  {
+    "descriptor": {
+      "name": "alpha",
+      "path": "/fleet/alpha",
+      "config_root": ".agents",
+      "language": "python",
+      "delivery": "library",
+      "contract_version": 2,
+      "project_init_version": "1.2.2",
+      "memory_tier": 0,
+      "memory_stack": "unknown",
+      "memory_path": "/fleet/alpha/.agents/memory",
+      "vault_path": null,
+      "graph_path": null,
+      "rag_endpoint": "",
+      "tooling": {
+        "lint": "true",
+        "test": "true"
+      },
+      "deploy": {
+        "target": "cloud-run",
+        "app": "alpha",
+        "region": "us-central1",
+        "health_url": "https://alpha.example/healthz",
+        "workflow": "deploy.yml"
+      },
+      "observability_path": "/fleet/alpha/.agents/observability",
+      "hooks_expected": [
+        "commit-msg",
+        "pre-push"
+      ],
+      "host": "",
+      "ci": {
+        "status_url": "https://ci.example/api/alpha",
+        "status_field": "conclusion"
+      },
+      "heal_mode": "",
+      "context": "",
+      "warnings": [],
+      "malformed": []
+    },
+    "status": {
+      "project": "alpha",
+      "branch": "master",
+      "dirty": true,
+      "ahead": null,
+      "behind": null,
+      "last_commit": "2026-01-01T00:00:00+00:00",
+      "detail": ""
+    },
+    "checks": {
+      "lint": {
+        "project": "alpha",
+        "task": "lint",
+        "status": "pass",
+        "detail": "",
+        "duration": 0.001,
+        "checked_at": "2026-01-01T00:00:00+00:00",
+        "head": ""
+      },
+      "test": {
+        "project": "alpha",
+        "task": "test",
+        "status": "pass",
+        "detail": "",
+        "duration": 0.001,
+        "checked_at": "2026-01-01T00:00:00+00:00",
+        "head": ""
+      }
+    },
+    "memory": {
+      "project": "alpha",
+      "memory_path": "/fleet/alpha/.agents/memory",
+      "files": [
+        {
+          "project": "alpha",
+          "path": "/fleet/alpha/.agents/memory/fact.md",
+          "name": "Deploy target",
+          "description": "a fact",
+          "type": "reference",
+          "body": "**Why:** because."
+        }
+      ],
+      "index_present": false,
+      "warnings": []
+    },
+    "drift": {
+      "project": "alpha",
+      "status": "no-manifest",
+      "modified": [],
+      "missing": [],
+      "total": 0
+    },
+    "hooks": "missing",
+    "run_state": null,
+    "trend": "+++",
+    "agent_run": null
+  },
+  {
+    "descriptor": {
+      "name": "beta",
+      "path": "/fleet/beta",
+      "config_root": ".agents",
+      "language": "python",
+      "delivery": "library",
+      "contract_version": 0,
+      "project_init_version": "1.2.2",
+      "memory_tier": 0,
+      "memory_stack": "unknown",
+      "memory_path": "/fleet/beta/.agents/memory",
+      "vault_path": null,
+      "graph_path": null,
+      "rag_endpoint": "",
+      "tooling": {
+        "lint": "true",
+        "test": "true"
+      },
+      "deploy": null,
+      "observability_path": null,
+      "hooks_expected": [],
+      "host": "",
+      "ci": null,
+      "heal_mode": "",
+      "context": "",
+      "warnings": [
+        "project_init_contract_version is not an integer \u2014 ignored: 'two'"
+      ],
+      "malformed": [
+        "project_init_contract_version"
+      ]
+    },
+    "status": {
+      "project": "beta",
+      "branch": "master",
+      "dirty": true,
+      "ahead": null,
+      "behind": null,
+      "last_commit": "2026-01-01T00:00:00+00:00",
+      "detail": ""
+    },
+    "checks": {
+      "lint": {
+        "project": "beta",
+        "task": "lint",
+        "status": "pass",
+        "detail": "",
+        "duration": 0.001,
+        "checked_at": "2026-01-01T00:00:00+00:00",
+        "head": ""
+      },
+      "test": {
+        "project": "beta",
+        "task": "test",
+        "status": "pass",
+        "detail": "",
+        "duration": 0.001,
+        "checked_at": "2026-01-01T00:00:00+00:00",
+        "head": ""
+      }
+    },
+    "memory": {
+      "project": "beta",
+      "memory_path": "/fleet/beta/.agents/memory",
+      "files": [
+        {
+          "project": "beta",
+          "path": "/fleet/beta/.agents/memory/fact.md",
+          "name": "Deploy target",
+          "description": "a fact",
+          "type": "reference",
+          "body": "**Why:** because."
+        }
+      ],
+      "index_present": false,
+      "warnings": []
+    },
+    "drift": {
+      "project": "beta",
+      "status": "drift",
+      "modified": [
+        "AGENTS.md"
+      ],
+      "missing": [
+        "gone.md"
+      ],
+      "total": 2
+    },
+    "hooks": "-",
+    "run_state": null,
+    "trend": "+++",
+    "agent_run": null
+  }
+]

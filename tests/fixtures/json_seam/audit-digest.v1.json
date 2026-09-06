@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "text": "audit digest: 1 new, 1 resolved\n  + [warn] beta: 2 file(s) diverged from scaffold (drift)\n  - resolved beta: no scaffold.manifest \u2014 drift detection unavailable (manifest)",
+  "changed": true,
+  "new": [
+    {
+      "project": "beta",
+      "category": "drift",
+      "severity": "warn",
+      "message": "2 file(s) diverged from scaffold"
+    }
+  ],
+  "resolved": [
+    {
+      "project": "beta",
+      "category": "manifest",
+      "severity": "warn",
+      "message": "no scaffold.manifest \u2014 drift detection unavailable"
+    }
+  ]
+}

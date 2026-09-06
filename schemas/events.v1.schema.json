@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/VytCepas/projects-orchestrator/schemas/events.v1.schema.json",
+  "title": "projects-orchestrator events --json (v1)",
+  "description": "Guard/usage events per project, read from each child's observability log. Consumed by harbor L0-6. NOTE: the emitted item is built by hand in `_cmd_events`, NOT via asdict(ProjectEvents) -- `ProjectEvents.path` is deliberately absent from the payload. A schema generated from the dataclass would therefore be wrong; this one is derived from real emitted output.",
+  "x-schema-version": 1,
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["project", "events", "warnings"],
+    "properties": {
+      "project": { "type": "string" },
+      "events": {
+        "type": "array",
+        "items": { "$ref": "#/$defs/guardEvent" }
+      },
+      "warnings": {
+        "description": "Non-fatal read problems -- a missing log, malformed lines. `no observability log` is the common case and is not an error.",
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    }
+  },
+  "$defs": {
+    "guardEvent": {
+      "type": "object",
+      "required": ["project", "timestamp", "hook", "action", "command", "session"],
+      "properties": {
+        "project": { "type": "string" },
+        "timestamp": {
+          "description": "ISO-8601, or empty when the log line omitted it. Reader tolerates `ts` and `timestamp` on input.",
+          "type": "string"
+        },
+        "hook": {
+          "description": "`unknown` when the line omitted it -- never absent.",
+          "type": "string",
+          "minLength": 1
+        },
+        "action": {
+          "description": "`unknown` when the line omitted it. Reader tolerates `action`, `decision` and `event` on input, because project-init's guards log the outcome under `event`.",
+          "type": "string",
+          "minLength": 1
+        },
+        "command": { "type": "string" },
+        "session": {
+          "description": "Agent session id, empty when the line omitted it. Lets a run's events be grouped across projects.",
+          "type": "string"
+        }
+      }
+    }
+  }
+}
