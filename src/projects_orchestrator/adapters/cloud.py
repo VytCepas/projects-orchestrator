@@ -35,6 +35,7 @@ from projects_orchestrator.checks import CheckResult
 from projects_orchestrator.descriptor import DEPLOY_NONE, ProjectDescriptor
 from projects_orchestrator.gcloud_identity import gcloud_env
 from projects_orchestrator.runner import RunResult, run_command
+from projects_orchestrator.urlguard import is_probe_safe
 
 STATE_NONE = "none"
 STATE_DEPLOYED = "deployed"
@@ -189,9 +190,13 @@ def probe_health(url: str, timeout: float = _HEALTH_TIMEOUT) -> str:
 
     Returns:
         ``healthy`` (2xx/3xx), ``unhealthy`` (HTTP error status), or
-        ``unknown`` (unreachable, timeout, or a non-HTTP scheme).
+        ``unknown`` (unreachable, timeout, a non-HTTP scheme, or a host the
+        guard refuses).
     """
-    if not url.startswith(("http://", "https://")):
+    # Was an inline `startswith` here — the same predicate status_url.py and
+    # notify.py needed. Routed through the one definition so a future
+    # tightening reaches all three rather than one (#181's lesson).
+    if not is_probe_safe(url):
         return STATE_UNKNOWN
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310 — scheme checked above; descriptor-declared health URL

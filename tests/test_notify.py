@@ -142,3 +142,14 @@ def test_snapshot_alerts_flags_a_dead_process_as_critical(fleet_dir: Path) -> No
     make_project(fleet_dir, "alpha")
     alerts = snapshot_alerts(_snapshot(fleet_dir, _cached("process", "fail")))
     assert Alert("alpha", CRITICAL, "process", "process is down") in alerts
+
+
+def test_post_payload_refuses_a_non_http_webhook() -> None:
+    assert post_payload("file:///tmp/exfil", {"text": "x"}, send=lambda _u, _b: 200) is False
+
+
+def test_post_payload_does_not_reach_the_sender_for_a_refused_url() -> None:
+    def spy(_url: str, _body: bytes) -> int:
+        raise AssertionError("the sender was reached with a refused URL")
+
+    assert post_payload("file:///tmp/exfil", {"text": "x"}, send=spy) is False

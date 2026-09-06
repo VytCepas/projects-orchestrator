@@ -171,3 +171,32 @@ def test_check_results_report_prs_unknown_not_a_stale_count() -> None:
     # lingering in the table as if it were current.
     results = {r.task: r for r in status_check_results("alpha", "pass", "2026-07-13T10:00:00")}
     assert results["prs"].status == "unknown"
+
+
+# --- A descriptor URL is untrusted input (#184) ---
+
+
+def test_a_file_url_never_reaches_the_fetcher(fleet_dir: Path) -> None:
+    # The guard is deliberately BEFORE the fetcher, not inside the stdlib one:
+    # a descriptor must not be able to steer an injected fetcher either.
+    def spy(_url: str) -> str:
+        raise AssertionError("the fetcher was reached with a refused URL")
+
+    assert probe_status_url(_descriptor(fleet_dir, "file:///etc/passwd"), fetch=spy) == "unknown"
+
+
+def test_a_file_url_degrades_to_unknown_rather_than_raising(fleet_dir: Path) -> None:
+    # Before #184 this returned the fetched verdict, having read a local file.
+    assert probe_status_url(_descriptor(fleet_dir, "file:///etc/passwd")) == "unknown"
+
+
+def test_the_metadata_address_degrades_to_unknown(fleet_dir: Path) -> None:
+    descriptor = _descriptor(fleet_dir, "http://169.254.169.254/latest/meta-data/")
+    assert probe_status_url(descriptor, fetch=_fetching({"result": "SUCCESS"})) == "unknown"
+
+
+def test_a_declared_localhost_endpoint_still_probes(fleet_dir: Path) -> None:
+    # The guard must not delete the feature: a self-hosted runner on loopback
+    # is exactly what ci.status_url exists for.
+    descriptor = _descriptor(fleet_dir, "http://127.0.0.1:8080/api")
+    assert probe_status_url(descriptor, fetch=_fetching({"result": "SUCCESS"})) == "pass"
