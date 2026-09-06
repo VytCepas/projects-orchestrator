@@ -60,6 +60,7 @@ Read-only GCP inventory — list what is live, and never touch it.
 
 Infer a minimal descriptor for plain git repos — no contract required.
 
+- `def is_git_repo` — Whether ``project_dir`` is a git repository — worktree or not.
 - `def infer_descriptor` — Infer a minimal descriptor for a plain git repo; never raises.
 
 ### `projects_orchestrator/adapters/github.py`

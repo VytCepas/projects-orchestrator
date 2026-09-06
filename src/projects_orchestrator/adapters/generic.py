@@ -99,6 +99,24 @@ def _infer_language(project_dir: Path) -> str:
     return "unknown"
 
 
+def is_git_repo(project_dir: Path) -> bool:
+    """Whether ``project_dir`` is a git repository — worktree or not.
+
+    THE CHECK IS ``exists()``, NOT ``is_dir()``. A linked worktree stores
+    ``.git`` as a regular FILE holding a ``gitdir:`` pointer, so ``is_dir()``
+    silently refuses every worktree while admitting every ordinary clone —
+    a split that reads as correct until someone runs the fleet over a
+    worktree-based checkout.
+
+    Shared rather than inlined because it was inlined twice and the copies
+    disagreed: discovery admitted worktrees and #215's nested hint did not,
+    so a nested worktree stayed exactly as invisible as before the hint
+    existed (Codex P2 on #227). Anything that decides "is this a project"
+    calls this.
+    """
+    return (project_dir / ".git").exists()
+
+
 def infer_descriptor(project_dir: Path) -> ProjectDescriptor | None:
     """Infer a minimal descriptor for a plain git repo; never raises.
 
@@ -111,7 +129,7 @@ def infer_descriptor(project_dir: Path) -> ProjectDescriptor | None:
         is not a git repository — a bare folder is not a project.
     """
     project_dir = project_dir.resolve()
-    if not (project_dir / ".git").exists():
+    if not is_git_repo(project_dir):
         return None
     return ProjectDescriptor(
         name=project_dir.name,
