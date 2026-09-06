@@ -1,7 +1,9 @@
 """Read and search the fleet's memory — the "all-knowing" layer.
 
 Every project-init project keeps small structured facts under its memory
-directory (``.claude/memory/*.md`` with ``name``/``description``/``type``
+directory (``.agents/memory/*.md``, or ``.claude/memory/*.md`` on a legacy
+scaffold — :func:`resolve_config` prefers ``.agents``; this docstring named only
+the legacy spelling until #217 — with ``name``/``description``/``type``
 frontmatter, indexed by ``MEMORY.md``). The orchestrator reads that contract
 across the whole fleet, so one query answers "what do my projects know
 about X?" without opening any of them. Reading never raises; malformed
@@ -97,7 +99,23 @@ class MemoryHit:
 
 
 def _split_frontmatter(text: str) -> tuple[dict[str, str], str]:
-    """Split ``---`` YAML frontmatter from the markdown body."""
+    """Split ``---`` YAML frontmatter from the markdown body.
+
+    TWO SHAPES ARE LIVE for the same fields (#217): flat (``type: reference``)
+    and nested under ``metadata:`` — and the nested one is what the harness's
+    own memory-writing instructions prescribe. Every value was stringified one
+    level deep, so a nested block arrived as the *repr* of a dict
+    (``"{'type': 'reference'}"``) and ``type`` read as ``unknown`` for a memory
+    written to spec. A memory written to the documented format was second-class
+    to the tool built to find it.
+
+    A nested ``metadata:`` mapping's scalar entries are therefore folded into
+    the top level as a FALLBACK. An explicit top-level key always wins: the flat
+    form is the one that already worked, and a file carrying both most likely
+    means the outer one. ``CONTRACTS/memory-format.md`` does not specify the
+    field's location at all, so both spellings are honoured rather than one
+    being declared wrong.
+    """
     if not text.startswith("---"):
         return {}, text
     parts = text.split("---", 2)
@@ -109,7 +127,14 @@ def _split_frontmatter(text: str) -> tuple[dict[str, str], str]:
         return {}, parts[2]
     if not isinstance(meta, dict):
         return {}, parts[2]
-    return {str(k): str(v) for k, v in meta.items()}, parts[2]
+    flat = {str(k): str(v) for k, v in meta.items()}
+    nested = meta.get("metadata")
+    if isinstance(nested, dict):
+        # setdefault, not assignment: the outer key wins where both exist.
+        for key, value in nested.items():
+            if not isinstance(value, dict):
+                flat.setdefault(str(key), str(value))
+    return flat, parts[2]
 
 
 def _read_memory_file(path: Path, project: str) -> MemoryFile | None:
