@@ -23,7 +23,7 @@ from pathlib import Path
 
 import yaml
 
-from projects_orchestrator.adapters.generic import infer_descriptor
+from projects_orchestrator.adapters.generic import infer_descriptor, is_git_repo
 from projects_orchestrator.descriptor import ProjectDescriptor, load_descriptor, resolve_config
 
 FLEET_FILENAME = "fleet.yaml"
@@ -207,10 +207,17 @@ _HINT_SKIP_DIRS = frozenset(
 
 
 def _is_project_dir(path: Path, config: FleetConfig) -> bool:
-    """Whether :func:`discover` would admit ``path`` as a project (same test)."""
+    """Whether :func:`discover` would admit ``path`` as a project (same test).
+
+    "Same test" is load-bearing and was once only a comment: this read
+    ``.git.is_dir()`` while discovery read ``.git.exists()``, so a nested
+    LINKED WORKTREE — ``.git`` is a file there — was admitted by discovery and
+    skipped by the hint, leaving it silent, which is the defect #215 exists to
+    remove. Both now call :func:`is_git_repo`.
+    """
     if resolve_config(path) is not None:
         return True
-    return config.include_plain_repos and (path / ".git").is_dir()
+    return config.include_plain_repos and is_git_repo(path)
 
 
 def _nested_projects(root: Path, config: FleetConfig) -> tuple[list[Path], bool]:
@@ -250,40 +257,60 @@ def _nested_projects(root: Path, config: FleetConfig) -> tuple[list[Path], bool]
 def _scan_root(root: Path, config: FleetConfig, warnings: list[str]) -> list[Path]:
     """List candidate project directories one level under ``root``.
 
-    Also ACCOUNTS for governed projects nested deeper than that. They stay
-    undiscovered — see :data:`_HINT_DEPTH` for why the depth is not widened — but
-    they are no longer invisible, which was the actual defect (#215): a
-    well-formed project reachable via ``projects:`` appeared in none of the
-    verbs and produced no warning, so an operator could not tell "not there"
-    from "not looked at".
+    Accounting for projects nested deeper than that lives in :func:`discover`,
+    not here — see :func:`_nested_warnings`.
     """
     try:
         entries = sorted(p for p in root.iterdir() if p.is_dir())
     except OSError as exc:
         warnings.append(f"cannot scan root {root}: {exc}")
         return []
-    candidates = [p for p in entries if not _excluded(p.name, config.exclude)]
-    nested, truncated = _nested_projects(root, config)
-    if nested:
-        shown = ", ".join(str(p) for p in nested[:5])
-        more = f" (+{len(nested) - 5} more)" if len(nested) > 5 else ""
-        count = f"at least {len(nested)}" if truncated else str(len(nested))
-        warnings.append(
-            f"{count} project(s) under {root} are nested deeper than the one level "
-            f"discovery scans and were NOT discovered — list them under `projects:` "
-            f"to govern them: {shown}{more}"
-        )
-    elif truncated:
-        # NOTHING FOUND *AND* THE SEARCH WAS INCOMPLETE. Reporting nothing here
-        # would put the operator back in exactly the state #215 describes:
-        # silence indistinguishable from absence. Having stopped looking is not
-        # the same fact as there being nothing to find, so it is said out loud.
-        warnings.append(
-            f"stopped looking for nested projects under {root} after "
-            f"{_HINT_BUDGET} directories — there may be projects nested deeper "
-            f"than the one level discovery scans; list any under `projects:`"
-        )
-    return candidates
+    return [p for p in entries if not _excluded(p.name, config.exclude)]
+
+
+def _nested_warnings(config: FleetConfig, governed: set[Path]) -> list[str]:
+    """Account for governed projects the one-level scan could not reach.
+
+    They stay undiscovered — see :data:`_HINT_DEPTH` for why the depth is not
+    widened — but they are no longer invisible, which was the actual defect
+    (#215): a well-formed project appeared in none of the verbs and produced no
+    warning, so an operator could not tell "not there" from "not looked at".
+
+    ``governed`` IS WHY THIS RUNS AFTER DISCOVERY AND NOT DURING THE SCAN. A
+    nested path is very often already in the fleet by another route — listed
+    explicitly under ``projects:``, or sitting one level under some other root
+    that overlaps this one. Warned about from inside the scan, before anything
+    is reconciled, the sentence told the operator a project "was NOT
+    discovered" and to go and list it while it was already in the returned
+    fleet (Codex P2 on #227). A warning that fires on a correctly configured
+    fleet is the §2.11 false positive that gets the whole hint switched off, so
+    what is reported is the set difference, not the raw find.
+    """
+    warnings: list[str] = []
+    for root in config.roots:
+        nested, truncated = _nested_projects(root, config)
+        unreached = [p for p in nested if p.resolve() not in governed]
+        if unreached:
+            shown = ", ".join(str(p) for p in unreached[:5])
+            more = f" (+{len(unreached) - 5} more)" if len(unreached) > 5 else ""
+            count = f"at least {len(unreached)}" if truncated else str(len(unreached))
+            warnings.append(
+                f"{count} project(s) under {root} are nested deeper than the one level "
+                f"discovery scans and were NOT discovered — list them under `projects:` "
+                f"to govern them: {shown}{more}"
+            )
+        elif truncated:
+            # NOTHING UNREACHED *AND* THE SEARCH WAS INCOMPLETE. Reporting
+            # nothing here would put the operator back in exactly the state
+            # #215 describes: silence indistinguishable from absence. Having
+            # stopped looking is not the same fact as there being nothing to
+            # find, so it is said out loud.
+            warnings.append(
+                f"stopped looking for nested projects under {root} after "
+                f"{_HINT_BUDGET} directories — there may be projects nested deeper "
+                f"than the one level discovery scans; list any under `projects:`"
+            )
+    return warnings
 
 
 def discover(config: FleetConfig) -> Fleet:
@@ -318,6 +345,7 @@ def discover(config: FleetConfig) -> Fleet:
         found.append(descriptor)
 
     found.sort(key=lambda d: d.name.lower())
+    warnings.extend(_nested_warnings(config, {d.path.resolve() for d in found}))
     warnings.extend(_duplicate_name_warnings(found))
     return Fleet(descriptors=tuple(found), config=config, warnings=tuple(warnings))
 

@@ -290,6 +290,65 @@ def test_a_deep_plain_repo_is_reported_when_plain_repos_are_included(fleet_dir: 
     assert "plain" in _nested_warning(fleet)
 
 
+def test_a_deep_linked_worktree_is_reported(fleet_dir: Path) -> None:
+    # A LINKED WORKTREE STORES `.git` AS A FILE, not a directory. The hint read
+    # `.is_dir()` while discovery read `.exists()`, so this one repo was
+    # admitted by discovery and skipped by the accounting — left exactly as
+    # silent as before #215, which is the defect, not an edge of it.
+    make_project(fleet_dir, "s-core")
+    worktree = fleet_dir / "s-core" / "wt"
+    worktree.mkdir(parents=True)
+    (worktree / ".git").write_text("gitdir: /elsewhere/.git/worktrees/wt\n", encoding="utf-8")
+    fleet = discover(FleetConfig(roots=(fleet_dir,), include_plain_repos=True))
+    assert "wt" in _nested_warning(fleet)
+
+
+def test_a_nested_project_already_listed_is_not_called_undiscovered(
+    fleet_dir: Path,
+) -> None:
+    # The warning fired from inside the scan, before anything was reconciled,
+    # so a correctly configured fleet was told to go and list a project that
+    # was already in it. A warning that fires on a correct config is the one
+    # that gets the whole hint switched off.
+    make_project(fleet_dir, "s-core")
+    nested = make_project(fleet_dir / "s-core", "nested-child")
+    fleet = discover(FleetConfig(roots=(fleet_dir,), projects=(nested,)))
+    assert "nested-child" in fleet.names
+    assert _nested_warning(fleet) == ""
+
+
+def test_a_nested_project_reached_by_another_root_is_not_called_undiscovered(
+    fleet_dir: Path,
+) -> None:
+    # Same false positive by the other route: overlapping roots, where the
+    # second root finds at depth one what the first can only see at depth two.
+    make_project(fleet_dir, "s-core")
+    make_project(fleet_dir / "s-core", "nested-child")
+    fleet = discover(FleetConfig(roots=(fleet_dir, fleet_dir / "s-core")))
+    assert "nested-child" in fleet.names
+    assert _nested_warning(fleet) == ""
+
+
+def test_only_the_unreachable_half_is_reported(fleet_dir: Path) -> None:
+    # The control that keeps the two above from degenerating into "never warn":
+    # the subtraction has to be a set difference, not an off switch.
+    make_project(fleet_dir, "s-core")
+    listed = make_project(fleet_dir / "s-core", "governed")
+    make_project(fleet_dir / "s-core", "orphan")
+    warning = _nested_warning(discover(FleetConfig(roots=(fleet_dir,), projects=(listed,))))
+    assert "orphan" in warning
+    assert "governed" not in warning
+
+
+def test_an_ordinary_nested_clone_is_still_reported(fleet_dir: Path) -> None:
+    # The control for the worktree fix: `exists()` must still admit the
+    # directory form, or the fix trades one blind spot for the other.
+    make_project(fleet_dir, "s-core")
+    (fleet_dir / "s-core" / "clone" / ".git").mkdir(parents=True)
+    fleet = discover(FleetConfig(roots=(fleet_dir,), include_plain_repos=True))
+    assert "clone" in _nested_warning(fleet)
+
+
 def test_the_count_is_a_lower_bound_when_the_visit_budget_runs_out(fleet_dir: Path) -> None:
     # An undercount that says it is one is honest; one that does not is worse
     # than no count at all. Filler is named `zz*` so the nested project sorts
