@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from conftest import make_project, make_project_v2
 
 from projects_orchestrator.capabilities import load_capabilities
@@ -521,6 +522,65 @@ class TestSymlinkedMarkerIsRefused:
         project = make_project(fleet_dir, "ordinary", layout=".agents")
         resolved = resolve_config(project)
         assert resolved is not None and resolved[1] == ".agents"
+
+
+# --- An unreadable layout degrades, it does not raise (#210) ---
+#
+# These inject PermissionError instead of using chmod on purpose. CPython 3.14
+# swallows EACCES in pathlib and returns False, so a chmod-based test passes on
+# this repo's own venv whether or not the bug is present — it would be a test
+# that cannot fail, which is worse than no test. Injection reproduces what the
+# 3.13 interpreter a `uv tool install` pins actually does, on every version.
+
+
+def _raise_eacces(*_args: object, **_kwargs: object) -> bool:
+    raise PermissionError(13, "Permission denied")
+
+
+class TestUnreadableLayoutDegrades:
+    def test_an_unreadable_layout_returns_none_rather_than_raising(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        project = tmp_path / "victim"
+        (project / ".agents").mkdir(parents=True)
+        (project / ".agents" / "config.yaml").write_text(
+            'project:\n  name: "real"\n', encoding="utf-8"
+        )
+        monkeypatch.setattr(Path, "is_symlink", _raise_eacces)
+        assert resolve_config(project) is None
+
+    def test_an_unreadable_layout_does_not_break_load_descriptor(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        project = tmp_path / "victim"
+        (project / ".agents").mkdir(parents=True)
+        (project / ".agents" / "config.yaml").write_text(
+            'project:\n  name: "real"\n', encoding="utf-8"
+        )
+        monkeypatch.setattr(Path, "is_file", _raise_eacces)
+        assert load_descriptor(project) is None
+
+    def test_an_unreadable_agents_falls_through_to_the_legacy_layout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``continue``, not ``return``: an unreadable ``.agents`` must not
+        shadow a readable legacy ``.claude``, exactly as a refused symlink
+        does not."""
+        project = tmp_path / "victim"
+        (project / ".claude").mkdir(parents=True)
+        (project / ".claude" / "config.yaml").write_text(
+            'project:\n  name: "real"\n', encoding="utf-8"
+        )
+        real_is_file = Path.is_file
+
+        def only_agents_is_unreadable(self: Path) -> bool:
+            if ".agents" in self.parts:
+                raise PermissionError(13, "Permission denied")
+            return real_is_file(self)
+
+        monkeypatch.setattr(Path, "is_file", only_agents_is_unreadable)
+        resolved = resolve_config(project)
+        assert resolved is not None and resolved[1] == ".claude"
 
 
 # --- Absent vs present-but-unreadable (#216) ---
