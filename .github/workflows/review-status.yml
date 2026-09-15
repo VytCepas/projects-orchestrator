@@ -104,7 +104,6 @@ jobs:
                   pullRequest(number:$number) {
                     reviews(first:1) { totalCount }
                     reviewThreads(first:100) { nodes { isResolved } }
-                    comments(last:100) { nodes { author { login } body } }
                   }
                 }
               }')
@@ -131,20 +130,42 @@ jobs:
           # be the bot's own "Codex Review:" preamble, which only the connector
           # writes.
           #
-          # `last:100` is GitHub's maximum page size, not a guess: the review
-          # comment is on the LAST page only while the thread is short, and a
-          # busy PR pushes it off a smaller window — which would put the check
-          # straight back to "Awaiting review" for exactly the PRs most likely
-          # to need it. The leading-whitespace strip is the same argument: the
-          # connector's preamble is first in the body today, and a match anchored
-          # to byte zero turns a stray newline into a lost review. Neither
-          # loosens anything — the author check is what carries the security.
-          CODEX_REVIEWS=$(printf '%s' "$REVIEW_DATA" \
-            | jq '[.data.repository.pullRequest.comments.nodes[]
-                   | select(.author.login == "chatgpt-codex-connector")
-                   | select(.body | sub("^[[:space:]]+"; "")
-                            | ascii_downcase | startswith("codex review:"))]
-                  | length')
+          # THE MARKER IS SEARCHED OVER THE WHOLE COMMENT HISTORY, NOT A WINDOW.
+          # A single page — `last:100`, GitHub's maximum — was the first shape of
+          # this and it is wrong in the one case that matters: when a requested
+          # review IS the only review and more than 100 comments follow its
+          # summary, the summary falls off the window, CODEX_REVIEWS drops to 0,
+          # and the next comment-triggered run resets the check to "Awaiting
+          # review" on a PR that was reviewed. That is the original bug wearing a
+          # different hat — a review that happened, invisible to the count — and a
+          # bigger page size cannot fix it because there is no size that is always
+          # enough. Raised in review on #233.
+          #
+          # `--paginate` walks every page; it needs an `$endCursor` variable and
+          # `pageInfo { hasNextPage endCursor }` in the query, and it emits one
+          # JSON document per page, which is why the jq below slurps with `-s`.
+          #
+          # The leading-whitespace strip: the connector's preamble is first in the
+          # body today, and a match anchored to byte zero turns a stray newline
+          # into a lost review. It loosens nothing — the author check is what
+          # carries the security, and only the connector can write that login.
+          CODEX_REVIEWS=$(gh api graphql --paginate \
+            -F owner="$OWNER" -F repo="$REPO_NAME" -F number="$PR_NUMBER" -f query='
+              query($owner:String!, $repo:String!, $number:Int!, $endCursor:String) {
+                repository(owner:$owner, name:$repo) {
+                  pullRequest(number:$number) {
+                    comments(first:100, after:$endCursor) {
+                      pageInfo { hasNextPage endCursor }
+                      nodes { author { login } body }
+                    }
+                  }
+                }
+              }' \
+            | jq -s '[.[].data.repository.pullRequest.comments.nodes[]
+                      | select(.author.login == "chatgpt-codex-connector")
+                      | select(.body | sub("^[[:space:]]+"; "")
+                               | ascii_downcase | startswith("codex review:"))]
+                     | length')
           REVIEWS=$(printf '%s' "$REVIEW_DATA" \
             | jq '.data.repository.pullRequest.reviews.totalCount')
           REVIEWS=$((REVIEWS + CODEX_REVIEWS))
