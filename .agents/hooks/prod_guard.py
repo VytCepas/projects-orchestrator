@@ -476,6 +476,32 @@ _BREAK_TOKENS = frozenset({"&&", "||", ";", "&", "\n"})
 _BREAK_CHARS = frozenset(";&|\n")
 
 
+def _is_pipe(token: str) -> bool:
+    """True when *token* is a pipe, INCLUDING a run that swallowed the newline.
+
+    `_is_break` already knew that `|<newline>` continues a pipeline and returns
+    False for it. Nothing downstream agreed: `_statement_exposes` asked
+    `token in _PIPE_TOKENS`, which a coalesced `"|\n"` fails, so the token was
+    appended to the leaf as an ordinary WORD. The pipeline then had one leaf,
+    `heads` held only the producer, no reader verb was visible, the producer was
+    exempted and the read went through. Reproduced against this file before
+    fixing (Codex P1 on studio#12, the same shape #972 fixed for the break side):
+
+        ls <dotenv> |<newline>xargs cat   -> allow
+
+    Break wins over pipe in a mixed run: `|<newline>;` ends the pipeline, and
+    saying otherwise would merge two statements — the hole `_BREAK_TOKENS` closes.
+    """
+    if token in _PIPE_TOKENS:
+        return True
+    if not token or not all(ch in _BREAK_CHARS for ch in token):
+        return False
+    rest = token.replace("&&", "\x00").replace("||", "\x00").replace("|&", "\x01")
+    if ";" in rest or "\x00" in rest or "&" in rest:
+        return False
+    return "|" in rest or "\x01" in rest
+
+
 def _is_break(token: str) -> bool:
     """True when *token* is a run of punctuation that separates STATEMENTS.
 
@@ -524,6 +550,74 @@ _MESSAGE_FLAGS = frozenset({"-m", "-am", "--message"})
 # do-not-cat-<dotenv>` stays quiet) and returns every other command to the
 # ordinary path. An exemption is only ever as safe as the set it applies to.
 _MESSAGE_VERBS = frozenset({"git", "hg", "svn", "bzr", "jj"})
+# AND ONLY UNDER A SUBCOMMAND THAT ACTUALLY TAKES A MESSAGE. Scoping the
+# carve-out to the VCS verb fixed `less -m` and left the same shape one level
+# down: `git diff -m` selects how merge commits are shown and takes NO argument,
+# so the elision ate the path after it. Reproduced against this file before
+# fixing (Codex P1 on estate#38), with a modified tracked dotenv in the tree:
+#     git diff -m <dotenv>   -> allow   (the diff prints the secret)
+# The previous round wrote "an exemption is only ever as safe as the set it
+# applies to" and then applied it to every subcommand there is. An UNKNOWN
+# subcommand does not elide: the guard stays strict, which is the direction that
+# costs a false positive rather than a bypass.
+_MESSAGE_SUBCOMMANDS = frozenset(
+    {
+        # git
+        "commit",
+        "tag",
+        "merge",
+        "revert",
+        "cherry-pick",
+        "stash",
+        "notes",
+        # hg / bzr
+        "ci",
+        "backout",
+        "graft",
+        # svn — every subcommand that takes a log message
+        "copy",
+        "cp",
+        "delete",
+        "del",
+        "remove",
+        "rm",
+        "import",
+        "mkdir",
+        "move",
+        "mv",
+        "rename",
+        "ren",
+        "lock",
+        # jj
+        "describe",
+        "desc",
+        "new",
+        "split",
+        "squash",
+    }
+)
+# Global flags that consume the NEXT token, so the subcommand is not simply the
+# first non-flag word: `git -C /path commit -m ...` must still find `commit`.
+_VCS_GLOBAL_ARG_FLAGS = frozenset(
+    {"-C", "-c", "-R", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--cwd"}
+)
+
+
+def _subcommand(leaf: list[str], verb_at: int) -> str:
+    """The first word after the verb that is not a flag or a flag's argument."""
+    skip = False
+    for token in leaf[verb_at + 1 :]:
+        if skip:
+            skip = False
+            continue
+        if token in _VCS_GLOBAL_ARG_FLAGS:
+            skip = True
+            continue
+        if token.startswith("-"):
+            continue
+        return token
+    return ""
+
 
 # A SHELL ASSIGNMENT PREFIX IS NOT THE COMMAND.
 # `FOO=bar git commit -m "docs: describe .env handling"` puts `FOO=bar` in
@@ -674,6 +768,20 @@ _READER_VERBS = frozenset(
 )
 
 
+# WHAT REPLACES A SUBSTITUTION IS LOAD-BEARING, AND A SPACE WAS THE WRONG
+# CHOICE. `_tokenize` strips comments, and `#` opens one at the START OF A WORD;
+# blanking with whitespace is exactly what moves a mid-word `#` to a word start.
+# Reproduced against this file before fixing (Codex P1 on studio#12):
+#     cat $(echo README)#suffix <dotenv>   -> allow
+# bash reads `README#suffix` and the dotenv as two arguments; the blank turned
+# the outer text into `cat  #suffix <dotenv>`, the comment stripper ate the rest
+# of the line, and the secret argument stopped existing. `_` keeps the word
+# joined the way the shell joins it. It stays a word character on purpose: the
+# stem is not decoration in _SECRET_PATH either, so `cat $(f).env` still reads as
+# `_.env` and still matches.
+_SUBSTITUTION_BLANK = "_"
+
+
 def _leaf_commands(command: str) -> list[str]:
     """Every simple command in *command*, including ones inside substitutions.
 
@@ -687,7 +795,7 @@ def _leaf_commands(command: str) -> list[str]:
         inner = [g for match in _SUBSTITUTION.finditer(chunk) for g in match.groups() if g]
         if inner:
             pending.extend(inner)
-            chunk = _SUBSTITUTION.sub(" ", chunk)
+            chunk = _SUBSTITUTION.sub(_SUBSTITUTION_BLANK, chunk)
         out.extend(re.split(r"[;&|\n]+", chunk))
     return out
 
@@ -715,7 +823,7 @@ def _statements(command: str) -> list[list[str]]:
         inner = [g for match in _SUBSTITUTION.finditer(chunk) for g in match.groups() if g]
         if inner:
             pending.extend(inner)
-            chunk = _SUBSTITUTION.sub(" ", chunk)
+            chunk = _SUBSTITUTION.sub(_SUBSTITUTION_BLANK, chunk)
         tokens = _tokenize(chunk)
         if tokens is None:
             # Unparsable (unbalanced quotes). Fall back to the character split
@@ -782,7 +890,7 @@ def _statement_exposes(statement: list[str]) -> str | None:
     leaves: list[list[str]] = []
     current: list[str] = []
     for token in statement:
-        if token in _PIPE_TOKENS:
+        if _is_pipe(token):
             if current:
                 leaves.append(current)
             current = []
@@ -812,8 +920,11 @@ def _statement_exposes(statement: list[str]) -> str | None:
         # The verb decides whether `-m` is a message flag at all — read it from
         # the RAW leaf, before any elision, or the check would depend on the
         # elision it is meant to gate.
-        _raw_head = leaf[_verb_index(leaf)].rsplit("/", 1)[-1] if leaf else ""
-        _elide_message = _raw_head in _MESSAGE_VERBS
+        _raw_at = _verb_index(leaf) if leaf else 0
+        _raw_head = leaf[_raw_at].rsplit("/", 1)[-1] if leaf else ""
+        _elide_message = (
+            _raw_head in _MESSAGE_VERBS and _subcommand(leaf, _raw_at) in _MESSAGE_SUBCOMMANDS
+        )
         tokens: list[str] = []
         skip = False
         for token in leaf:
