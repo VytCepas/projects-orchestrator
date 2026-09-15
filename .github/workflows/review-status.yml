@@ -104,11 +104,50 @@ jobs:
                   pullRequest(number:$number) {
                     reviews(first:1) { totalCount }
                     reviewThreads(first:100) { nodes { isResolved } }
+                    comments(last:100) { nodes { author { login } body } }
                   }
                 }
               }')
+          # A CODEX REVIEW ARRIVES BY TWO DIFFERENT DOORS AND ONLY ONE OF THEM
+          # IS A REVIEW. Codex posts a formal pull request review when it picks
+          # the PR up automatically on `opened`, but a review asked for with an
+          # `@codex review` comment comes back as a PLAIN ISSUE COMMENT — same
+          # analysis, same verdict, no review object. `reviews.totalCount` sees
+          # only the first, so a PR the bot skipped on open and reviewed on
+          # request sat at "Awaiting review" for ever.
+          #
+          # That is PI-715 reopened through a different door: the check goes
+          # permanently pending, and the only way out is the `--admin` override
+          # this gate was written to eliminate. Measured on projects-orchestrator
+          # 2026-09-06: five PRs picked up automatically all carried a review
+          # object; the two the bot skipped were reviewed on request, came back
+          # clean, and both read `reviews.totalCount == 0`.
+          #
+          # This does NOT loosen the gate. Findings from a requested review
+          # arrive as review threads exactly as they do from an automatic one,
+          # so UNRESOLVED below still fails the check on an open comment — what
+          # changes is only whether a review that DID happen is visible to the
+          # count. The author's own comments cannot satisfy it: the body must
+          # be the bot's own "Codex Review:" preamble, which only the connector
+          # writes.
+          #
+          # `last:100` is GitHub's maximum page size, not a guess: the review
+          # comment is on the LAST page only while the thread is short, and a
+          # busy PR pushes it off a smaller window — which would put the check
+          # straight back to "Awaiting review" for exactly the PRs most likely
+          # to need it. The leading-whitespace strip is the same argument: the
+          # connector's preamble is first in the body today, and a match anchored
+          # to byte zero turns a stray newline into a lost review. Neither
+          # loosens anything — the author check is what carries the security.
+          CODEX_REVIEWS=$(printf '%s' "$REVIEW_DATA" \
+            | jq '[.data.repository.pullRequest.comments.nodes[]
+                   | select(.author.login == "chatgpt-codex-connector")
+                   | select(.body | sub("^[[:space:]]+"; "")
+                            | ascii_downcase | startswith("codex review:"))]
+                  | length')
           REVIEWS=$(printf '%s' "$REVIEW_DATA" \
             | jq '.data.repository.pullRequest.reviews.totalCount')
+          REVIEWS=$((REVIEWS + CODEX_REVIEWS))
           UNRESOLVED=$(printf '%s' "$REVIEW_DATA" \
             | jq '[.data.repository.pullRequest.reviewThreads.nodes[]
                    | select(.isResolved == false)] | length')
