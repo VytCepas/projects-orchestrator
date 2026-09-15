@@ -1,0 +1,16 @@
+project:
+  name: "alpha"
+  description: "test project"
+  project_init_version: 0.5.2
+  project_init_contract_version: 1
+
+language: python
+delivery: library
+
+memory:
+  tier: 0
+  memory_path: .claude/memory
+
+tooling:
+  lint_command: "true"
+
