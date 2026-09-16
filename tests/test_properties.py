@@ -30,7 +30,7 @@ import pytest
 # ImportError. The nightly fuzz job is where these are meant to run.
 hypothesis = pytest.importorskip("hypothesis", reason="property tests run under `just fuzz`")
 
-from hypothesis import given
+from hypothesis import example, given
 from hypothesis import strategies as st
 
 from projects_orchestrator import persist, watchdog
@@ -103,7 +103,12 @@ def test_an_atomic_write_round_trips_any_text(text: str) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "payload"
         persist.atomic_write(path, text)
-        assert path.read_text(encoding="utf-8", newline="") == text
+        # `Path.read_text(newline=...)` only exists from 3.13, and this project
+        # declares `requires-python = ">=3.11"` — CI runs 3.11, so the advertised
+        # `just fuzz` would have raised TypeError there while passing on a 3.14
+        # dev box. The same "passes on my interpreter" trap as #210, inverted.
+        with path.open(encoding="utf-8", newline="") as handle:
+            assert handle.read() == text
 
 
 @given(st.integers(min_value=0, max_value=10_000_000))
@@ -133,18 +138,45 @@ def test_watch_freshness_agrees_with_the_grace_window(interval: int, age: int) -
     assert state.status == expected
 
 
-@given(st.dictionaries(st.text(min_size=1, max_size=12), st.integers(), max_size=8))
-def test_a_cache_document_never_reads_as_a_newer_build(document: dict) -> None:
-    """Arbitrary junk must read as `unreadable` or `legacy` — never `future`.
+@given(
+    st.dictionaries(st.text(min_size=1, max_size=12), st.integers(), max_size=8),
+    st.one_of(st.none(), st.integers(min_value=-5, max_value=9), st.text(max_size=6)),
+)
+# THE BOUNDARY IS PINNED EXPLICITLY, not left to the draw. Hypothesis reaches
+# these eventually, but "eventually" is not a guarantee a boundary mutant gets
+# caught on the run that matters — an off-by-one at exactly SCHEMA_VERSION
+# survived a full pass of the generated cases (raised in review on #245).
+@example({}, 1)  # the current version: NOT future
+@example({}, 2)  # one ahead: future
+@example({}, 0)  # older: not future
+@example({}, True)  # a bool is not a version, however int-like
+def test_a_cache_reads_as_future_exactly_when_the_version_says_so(
+    document: dict, version: object
+) -> None:
+    """`future` must be earned by the version key and by nothing else.
 
-    `future` makes `save_results` REFUSE to write, so a file that wrongly earned
-    it would silently stop the cache updating for ever.
+    It is the branch that makes `save_results` REFUSE to write, so a document
+    that wrongly earned it would silently stop the cache updating for ever — and
+    one that wrongly missed it would let an older build clobber a newer file.
+
+    THE VERSION KEY IS DRAWN EXPLICITLY. The first version of this test capped
+    generated keys at 12 characters while the reserved key is 18, so no document
+    it produced could ever contain one — the assertion could not reach the
+    branch it was about, and passed for that reason (raised in review on #245).
     """
     import tempfile
 
     from projects_orchestrator import cache
 
+    if version is not None:
+        document = {**document, cache._VERSION_KEY: version}
+    expect_future = (
+        isinstance(version, int)
+        and not isinstance(version, bool)
+        and version > cache.SCHEMA_VERSION
+    )
+
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "checks.json"
         path.write_text(json.dumps(document), encoding="utf-8")
-        assert cache.read_cache(path).status != cache.FUTURE
+        assert (cache.read_cache(path).status == cache.FUTURE) == expect_future
