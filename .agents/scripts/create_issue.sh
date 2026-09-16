@@ -6,7 +6,7 @@
 # Usage:
 #   .agents/scripts/create_issue.sh <type> "Short description" [metadata flags]
 #
-# Types: feat  fix  chore  docs  test  spike  debt
+# Types: feat  fix  chore  docs  test
 #
 # Prints the created issue number to stdout so it can be piped:
 #   .agents/scripts/create_issue.sh feat "Add OAuth login" --priority high | xargs -I{} .agents/scripts/start_issue.sh {} feat
@@ -45,7 +45,7 @@ resolve_project_number() {
   printf '%s\n' "${configured:-1}"
 }
 
-VALID_TYPES="feat fix chore docs test spike debt"
+VALID_TYPES="feat fix chore docs test"
 VALID_SCALES="epic task"
 VALID_PRIORITIES="high medium low"
 VALID_SIZES="XS S M L XL"
@@ -57,7 +57,7 @@ usage() {
 Usage: create_issue.sh <type> "Short description" [options]
 
 Types:
-  feat  fix  chore  docs  test  spike  debt
+  feat  fix  chore  docs  test
 
 Options:
   --priority high|medium|low           Set Priority (issue body + project board)
@@ -318,8 +318,6 @@ fix) TYPE_LABEL="bug" ;;
 chore) TYPE_LABEL="chore" ;;
 docs) TYPE_LABEL="documentation" ;;
 test) TYPE_LABEL="test" ;;
-spike) TYPE_LABEL="spike" ;;
-debt) TYPE_LABEL="tech-debt" ;;
 esac
 
 TITLE="$DESCRIPTION"

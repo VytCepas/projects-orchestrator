@@ -26,7 +26,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # Resolve the base branch (ADR-014) from the promotion chain via gh_host.sh.
 source "$SCRIPT_DIR/gh_host.sh"
 
-VALID_TYPES="feat fix chore docs test spike debt"
+VALID_TYPES="feat fix chore docs test"
 
 usage() {
   echo "Usage: start_issue.sh <issue-number> <type>"

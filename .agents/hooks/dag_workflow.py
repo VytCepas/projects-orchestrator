@@ -758,8 +758,8 @@ def cmd_finish(pr_number: int | None, review_cycle: int | None) -> int:
     return subprocess.run(monitor_args).returncode  # noqa: S603 — fixed bash argv + resolved script path, never a shell string
 
 
-_VALID_TYPES = {"feat", "fix", "chore", "docs", "test", "spike", "debt"}
-_BRANCH_RE = re.compile(r"^(feat|fix|chore|docs|test|spike|debt)/[A-Za-z0-9._/-]+$")
+_VALID_TYPES = {"feat", "fix", "chore", "docs", "test"}
+_BRANCH_RE = re.compile(r"^(feat|fix|chore|docs|test)/[A-Za-z0-9._/-]+$")
 
 
 def _slugify(text: str) -> str:
