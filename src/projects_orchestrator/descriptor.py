@@ -56,10 +56,38 @@ def resolve_config(project_dir: Path) -> tuple[Path, str] | None:
     for root in _LAYOUT_DIRS:
         layout = project_dir / root
         candidate = layout / _CONFIG_BASENAME
-        if layout.is_symlink() or candidate.is_symlink():
+        try:
+            if layout.is_symlink() or candidate.is_symlink():
+                continue
+            if candidate.is_file():
+                return candidate, root
+        except OSError:
+            # ADR-003: the engine never raises. These are stat calls, and a
+            # stat raises for reasons that have nothing to do with this
+            # project being malformed — a layout dir at mode 000, a dead
+            # network mount, a permission-denied parent. ``load_descriptor``
+            # already guards its own read; leaving the stats bare made the
+            # guard cosmetic, because the raise happened one line earlier.
+            #
+            # The blast radius is what makes this a degradation and not a
+            # nicety: ``registry.discover`` calls this inside its loop over
+            # every candidate, so ONE unreadable directory aborted the loop
+            # and emptied the whole fleet — healthy repos included, on every
+            # verb, with ``doctor`` printing nothing at all. An undiscovered
+            # project is visibly absent; an undiscovered FLEET looks like a
+            # clean one.
+            #
+            # ``continue`` rather than ``return``: an unreadable ``.agents``
+            # must not shadow a readable legacy ``.claude``, exactly as a
+            # refused symlink does not.
+            #
+            # This is invisible to the suite's own interpreter. On CPython
+            # 3.14 ``pathlib`` swallows EACCES and these calls return False;
+            # on 3.13 — which is what a ``uv tool install`` of this package
+            # pins — they raise. The regression tests therefore inject the
+            # error rather than relying on chmod, or they would pass on a
+            # tree where the bug is live (#210).
             continue
-        if candidate.is_file():
-            return candidate, root
     return None
 
 

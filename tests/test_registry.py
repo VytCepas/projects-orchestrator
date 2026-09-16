@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from conftest import make_project
 
 from projects_orchestrator.registry import (
@@ -21,6 +22,32 @@ def test_discover_finds_projects_under_root(fleet_dir: Path) -> None:
     make_project(fleet_dir, "beta")
     fleet = discover(FleetConfig(roots=(fleet_dir,)))
     assert fleet.names == ("alpha", "beta")
+
+
+def test_one_unreadable_project_does_not_empty_the_fleet(
+    fleet_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The blast radius is the point (#210). ``discover`` calls
+    ``resolve_config`` inside its loop, so an unguarded stat on ONE project
+    aborted the loop and took every healthy repo with it — ``doctor`` printed
+    nothing at all and the fleet read like a clean one.
+
+    The error is injected rather than chmod-ed because CPython 3.14 swallows
+    EACCES in pathlib: a chmod-based version of this test passes on this
+    repo's own venv whether or not the bug is present.
+    """
+    make_project(fleet_dir, "healthy")
+    broken = make_project(fleet_dir, "broken")
+    real_is_symlink = Path.is_symlink
+
+    def only_broken_is_unreadable(self: Path) -> bool:
+        if broken.name in self.parts:
+            raise PermissionError(13, "Permission denied")
+        return real_is_symlink(self)
+
+    monkeypatch.setattr(Path, "is_symlink", only_broken_is_unreadable)
+    fleet = discover(FleetConfig(roots=(fleet_dir,)))
+    assert fleet.names == ("healthy",)
 
 
 def test_a_scanned_project_that_stops_resolving_is_named(fleet_dir: Path) -> None:
