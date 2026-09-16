@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+import pytest
 from conftest import git_init, make_project
 
 from projects_orchestrator.__main__ import main
@@ -74,3 +75,45 @@ def test_checks_jobs_one_still_correct(fleet_dir: Path, tmp_path, monkeypatch) -
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     make_project(fleet_dir, "alpha", tooling={"lint": "false"})
     assert main(["checks", "--root", str(fleet_dir), "--task", "lint", "--jobs", "1"]) == 1
+
+
+# --- A raising callable is an ENGINE BUG, and must look like one (#187) -------
+#
+# `pool.py` deliberately omits exception translation: engine callables follow
+# the never-raise rule, so a raise is a bug that should surface exactly as it
+# would have in the serial loop. That contract was documented and untested —
+# so a `collect_*` that started raising would have killed the whole fan-out
+# with nothing guarding the regression.
+
+
+def _boom(_item: int) -> int:
+    raise RuntimeError("engine callable violated never-raise")
+
+
+def test_a_raising_callable_propagates_in_the_parallel_path() -> None:
+    with pytest.raises(RuntimeError, match="never-raise"):
+        map_ordered(_boom, [1, 2, 3, 4], jobs=4)
+
+
+def test_a_raising_callable_propagates_in_the_serial_path() -> None:
+    """`jobs=1` and a single item short-circuit to a plain loop. The two paths
+    must fail the same way, or a bug reproduces only at one fan-out width."""
+    with pytest.raises(RuntimeError, match="never-raise"):
+        map_ordered(_boom, [1, 2, 3, 4], jobs=1)
+
+
+def test_a_raising_callable_propagates_for_a_single_item() -> None:
+    with pytest.raises(RuntimeError, match="never-raise"):
+        map_ordered(_boom, [1], jobs=4)
+
+
+def test_one_raising_item_does_not_silently_drop_the_others() -> None:
+    """The failure mode this guards: a partial list returned as if complete."""
+
+    def raise_on_two(item: int) -> int:
+        if item == 2:
+            raise RuntimeError("never-raise")
+        return item
+
+    with pytest.raises(RuntimeError):
+        map_ordered(raise_on_two, [1, 2, 3], jobs=3)
