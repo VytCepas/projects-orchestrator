@@ -15,10 +15,10 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from projects_orchestrator import persist
 from projects_orchestrator.audit import AuditFinding, AuditReport
 from projects_orchestrator.doctor import OK
 
@@ -142,15 +142,7 @@ def save_current(reports: list[AuditReport], path: Path | None = None) -> None:
     path = path or digest_path()
     issues = list(_issues(reports).values())
     body = json.dumps({"issues": [asdict(f) for f in issues]}, indent=2)
+    # Locked and fsynced via the shared helper (#181). The inline copy here was
+    # atomic but unlocked and unsynced.
     with contextlib.suppress(OSError, ValueError):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
-        tmp_path = Path(tmp)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(body)
-            tmp_path.replace(path)
-        except OSError:
-            with contextlib.suppress(OSError):
-                tmp_path.unlink()
-            raise
+        persist.locked_write(path, body)

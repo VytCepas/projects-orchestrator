@@ -12,8 +12,6 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-import tempfile
-from collections.abc import Iterator
 from dataclasses import asdict
 from pathlib import Path
 
@@ -22,6 +20,7 @@ try:  # POSIX advisory locking; absent on non-POSIX, where we degrade to no lock
 except ImportError:  # pragma: no cover - platform-dependent
     fcntl = None  # type: ignore[assignment]
 
+from projects_orchestrator import persist
 from projects_orchestrator.checks import CheckResult
 
 _CACHE_DIRNAME = "projects-orchestrator"
@@ -151,45 +150,8 @@ def drop_result(project: str, task: str, path: Path | None = None) -> None:
             _atomic_write(path, json.dumps(serializable, indent=2))
 
 
-@contextlib.contextmanager
-def _locked(path: Path) -> Iterator[None]:
-    """Hold an exclusive lock across the load-merge-write; best-effort.
-
-    Two overlapping writers (a cron ``ci`` while a ``checks`` run finishes, the
-    TUI open while the CLI runs) otherwise both read, both rewrite the whole
-    file, and the last writer silently discards the other's fresh results. The
-    lock serializes them. Acquisition never raises — if it fails, the save
-    proceeds unlocked rather than being lost.
-    """
-    handle = None
-    with contextlib.suppress(OSError, ValueError):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        handle = (path.parent / f"{path.name}.lock").open("w", encoding="utf-8")
-        if fcntl is not None:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-    try:
-        yield
-    finally:
-        if handle is not None:
-            with contextlib.suppress(OSError):
-                handle.close()  # closing the descriptor releases the flock
-
-
-def _atomic_write(path: Path, text: str) -> None:
-    """Write via a temp file + ``os.replace`` so an interrupt can't truncate.
-
-    A plain ``write_text`` interrupted mid-flush leaves partial JSON, and the
-    next load reads it as empty — silently wiping the whole check history.
-    ``os.replace`` swaps the file in atomically once it is fully written.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
-    tmp_path = Path(tmp)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(text)
-        tmp_path.replace(path)
-    except OSError:
-        with contextlib.suppress(OSError):
-            tmp_path.unlink()
-        raise
+#: Both helpers now delegate to :mod:`persist` (#181). They were the ONLY copy
+#: that locked and they still did not fsync, so the shared version is strictly
+#: stronger; the private names are kept so callers here read unchanged.
+_locked = persist.locked
+_atomic_write = persist.atomic_write

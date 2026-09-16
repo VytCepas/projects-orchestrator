@@ -26,6 +26,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from projects_orchestrator import persist
 from projects_orchestrator.checks import CheckResult
 from projects_orchestrator.descriptor import ProjectDescriptor
 from projects_orchestrator.naming import safe_component
@@ -174,7 +175,9 @@ def _record_death(state: RunState) -> None:
     until a restart supersedes it.
     """
     with contextlib.suppress(OSError):
-        _died_file(state.project).write_text(_serialize(state), encoding="utf-8")
+        # Was a plain write_text — not atomic at all, so an interrupt left
+        # partial JSON in the file that says whether a process is alive (#181).
+        persist.locked_write(_died_file(state.project), _serialize(state))
     _clear_state(state.project)
 
 
@@ -307,7 +310,7 @@ def start(descriptor: ProjectDescriptor) -> str:
         start_ticks=_proc_start_ticks(process.pid),
     )
     try:
-        _state_file(descriptor.name).write_text(_serialize(state), encoding="utf-8")
+        persist.locked_write(_state_file(descriptor.name), _serialize(state))
     except OSError as exc:
         # The process is ALREADY RUNNING by the time its state is written, so a
         # failed write (full disk, unwritable state dir) cannot just be reported:

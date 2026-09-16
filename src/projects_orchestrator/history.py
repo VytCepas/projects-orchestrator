@@ -15,10 +15,10 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from projects_orchestrator import persist
 from projects_orchestrator.checks import CheckResult
 
 _STATE_DIRNAME = "projects-orchestrator"
@@ -155,16 +155,10 @@ def transitions(entries: list[HistoryEntry]) -> list[HistoryEntry]:
 
 
 def _atomic_write(path: Path, text: str) -> None:
-    """Write via temp file + replace so an interrupt can't truncate the log."""
+    """Append-log write, now locked and fsynced via the shared helper (#181).
+
+    Was atomic but UNLOCKED, so two concurrent appends both read the log, both
+    rewrote it whole, and one set of events vanished.
+    """
     with contextlib.suppress(OSError, ValueError):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
-        tmp_path = Path(tmp)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(text)
-            tmp_path.replace(path)
-        except OSError:
-            with contextlib.suppress(OSError):
-                tmp_path.unlink()
-            raise
+        persist.locked_write(path, text)

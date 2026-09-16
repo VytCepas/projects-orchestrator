@@ -439,3 +439,27 @@ def test_an_incomplete_search_is_reported_even_when_it_found_nothing(
     for i in range(_HINT_BUDGET + 10):
         (fleet_dir / "s-core" / f"d{i}").mkdir()
     assert "stopped looking" in " ".join(discover(FleetConfig(roots=(fleet_dir,))).warnings)
+
+
+def test_two_concurrent_registrations_both_land(tmp_path: Path) -> None:
+    """#182: `register` is a read-modify-write of the file that DEFINES the
+    fleet. Unlocked, two concurrent calls both loaded the old list, both rewrote
+    it whole, and the second silently discarded the first project — a lost
+    update that un-manages a repo with no signal anywhere.
+    """
+    import threading
+
+    fleet_file = tmp_path / "fleet.yaml"
+    projects = [make_project(tmp_path / f"root{i}", f"proj{i}") for i in range(8)]
+
+    def register(project: Path) -> None:
+        register_project(fleet_file, project)
+
+    threads = [threading.Thread(target=register, args=(p,)) for p in projects]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    listed = load_fleet_config(fleet_file).projects
+    assert len(listed) == len(projects)
