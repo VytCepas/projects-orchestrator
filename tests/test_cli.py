@@ -1009,3 +1009,28 @@ def test_register_still_works_on_an_empty_fleet(tmp_path: Path) -> None:
     fleet_file = tmp_path / "fleet.yaml"
     assert not fleet_file.exists(), "the first-run state: no fleet file yet"
     assert main(["register", str(result), "--fleet", str(fleet_file)]) == 0
+
+
+def test_audit_digest_does_not_persist_a_baseline_on_an_unresolved_fleet(
+    fleet_dir: Path, tmp_path: Path
+) -> None:
+    """Raised in review on #239, and it is the sharper half of #204.
+
+    `_emit_digest` PERSISTS a new baseline and can post a webhook, and Python
+    evaluates an argument before the call it is passed to — so wrapping it in
+    the empty-fleet check ran the digest first. On an unresolved fleet that
+    marks every prior finding as resolved, writes the empty baseline, and with
+    `--webhook` publishes the false resolution, returning 2 only afterwards. A
+    transient discovery failure would corrupt every later delta.
+    """
+    from projects_orchestrator.digest import digest_path
+
+    make_project(fleet_dir, "alpha")
+    assert main(["audit", "--root", str(fleet_dir), "--digest"]) == 1
+    baseline = digest_path().read_text(encoding="utf-8")
+    assert "alpha" in baseline, "precondition: prior findings are recorded"
+
+    empty = tmp_path / "nothing-here"
+    empty.mkdir()
+    assert main(["audit", "--root", str(empty), "--digest"]) == 2
+    assert digest_path().read_text(encoding="utf-8") == baseline

@@ -202,7 +202,8 @@ def _cmd_projects(args: argparse.Namespace) -> int:
     """List discovered projects."""
     fleet = _discover(args)
     if args.json:
-        return _unresolved_rc(fleet, _emit_json([asdict(d) for d in fleet.descriptors]))
+        emitted = _emit_json([asdict(d) for d in fleet.descriptors])
+        return _unresolved_rc(fleet, emitted)
     for descriptor in fleet.descriptors:
         print(f"{descriptor.name}  ({descriptor.language}, {descriptor.path})")
     if not fleet.descriptors:
@@ -228,7 +229,8 @@ def _cmd_status(args: argparse.Namespace) -> int:
     if selected is None:
         return 2
     if args.json:
-        return _unresolved_rc(fleet, _emit_json([asdict(s.status) for s in selected]))
+        emitted = _emit_json([asdict(s.status) for s in selected])
+        return _unresolved_rc(fleet, emitted)
     if not selected:
         print("no projects match")
         return _unresolved_rc(fleet)
@@ -387,7 +389,8 @@ def _cmd_drift(args: argparse.Namespace) -> int:
         selected = [descriptor]
     reports = [compute_drift(d) for d in selected]
     if args.json:
-        return _unresolved_rc(fleet, _emit_json([asdict(r) for r in reports]))
+        emitted = _emit_json([asdict(r) for r in reports])
+        return _unresolved_rc(fleet, emitted)
     for report in reports:
         print(f"{report.project}: {report.summary}")
         for relpath in report.modified:
@@ -409,7 +412,8 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         selected = [descriptor]
     reports = [diagnose(d) for d in selected]
     if args.json:
-        return _unresolved_rc(fleet, _emit_json([asdict(r) for r in reports]))
+        emitted = _emit_json([asdict(r) for r in reports])
+        return _unresolved_rc(fleet, emitted)
     for report in reports:
         print(f"{report.project}: {report.status}")
         for finding in report.findings:
@@ -449,9 +453,20 @@ def _cmd_audit(args: argparse.Namespace) -> int:
     cached = cache.load_results()
     reports = [audit_project(d, cached.get(d.name)) for d in selected]
     if args.digest:
-        return _unresolved_rc(fleet, _emit_digest(args, reports))
+        # SHORT-CIRCUIT BEFORE THE EMIT, not around it. `_emit_digest`
+        # PERSISTS a new baseline and can post a webhook, and Python
+        # evaluates an argument before the call it is passed to — so
+        # wrapping it in `_unresolved_rc` ran the digest first. On an
+        # unresolved fleet that marks every prior finding as resolved,
+        # writes the empty baseline, and with --webhook PUBLISHES the
+        # false resolution, returning 2 only afterwards. A transient
+        # discovery failure would corrupt every later delta.
+        if not fleet.descriptors:
+            return NO_PROJECTS_RC
+        return _emit_digest(args, reports)
     if args.json:
-        return _unresolved_rc(fleet, _emit_json([asdict(r) for r in reports]))
+        emitted = _emit_json([asdict(r) for r in reports])
+        return _unresolved_rc(fleet, emitted)
     if args.markdown:
         print(render_markdown(reports))
     else:
@@ -474,7 +489,8 @@ def _cmd_hardening(args: argparse.Namespace) -> int:
         selected = [descriptor]
     reports = hardening_checklist(selected, cache.load_results())
     if args.json:
-        return _unresolved_rc(fleet, _emit_json([asdict(report) for report in reports]))
+        emitted = _emit_json([asdict(report) for report in reports])
+        return _unresolved_rc(fleet, emitted)
     print(render_hardening(reports))
     return _unresolved_rc(fleet, 1 if any(report.needs_attention for report in reports) else 0)
 
