@@ -110,3 +110,37 @@ def test_primary_trend_empty_without_history() -> None:
 def test_history_path_honors_xdg_state_home(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     assert history_path() == tmp_path / "projects-orchestrator" / "history.jsonl"
+
+
+def test_concurrent_record_calls_lose_no_entries(tmp_path: Path) -> None:
+    """Raised in review on #240. `record` is a read-modify-write: two concurrent
+    `checks` or `watch` runs both loaded the same snapshot, both appended to it,
+    and the second replacement discarded the first run's entries. Locking only
+    the write leaves exactly that race."""
+    import threading
+
+    from projects_orchestrator.checks import CheckResult
+
+    path = tmp_path / "history.jsonl"
+    writers = 8
+
+    def add(index: int) -> None:
+        record(
+            [
+                CheckResult(
+                    project=f"proj{index}",
+                    task="lint",
+                    status="pass",
+                    checked_at="2026-07-02T00:00:00+00:00",
+                )
+            ],
+            path,
+        )
+
+    threads = [threading.Thread(target=add, args=(i,)) for i in range(writers)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len({e.project for e in load_history(path)}) == writers

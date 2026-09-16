@@ -275,7 +275,15 @@ def test_start_reports_failure_when_it_cannot_record_state(
 ) -> None:
     import projects_orchestrator.supervisor as sup
 
-    monkeypatch.setattr(sup, "_state_file", lambda _p: tmp_path / "no-such-dir" / "alpha.json")
+    # A PARENT THAT IS A FILE, not a directory that is merely absent. The
+    # shared write helper creates a missing parent (#181) — correctly, since
+    # every other caller depends on the first write creating its own directory —
+    # so "the directory does not exist" stopped being a fault at all. What must
+    # still be a fault is "the state cannot be recorded", and a regular file
+    # where the directory belongs is one the helper cannot mkdir its way out of.
+    blocked = tmp_path / "not-a-dir"
+    blocked.write_text("", encoding="utf-8")
+    monkeypatch.setattr(sup, "_state_file", lambda _p: blocked / "alpha.json")
     assert "failed to start" in start(_runnable(fleet_dir))
 
 
@@ -289,7 +297,9 @@ def test_start_kills_a_process_whose_state_it_could_not_record(
     # command was actually killed rather than merely reported as failed.
     import projects_orchestrator.supervisor as sup
 
-    monkeypatch.setattr(sup, "_state_file", lambda _p: tmp_path / "no-such-dir" / "alpha.json")
+    blocked = tmp_path / "not-a-dir"
+    blocked.write_text("", encoding="utf-8")
+    monkeypatch.setattr(sup, "_state_file", lambda _p: blocked / "alpha.json")
     marker = tmp_path / "marker"
     start(_runnable(fleet_dir, command=f"sleep 2; touch {marker}"))
     time.sleep(3.0)

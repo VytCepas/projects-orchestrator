@@ -439,3 +439,45 @@ def test_an_incomplete_search_is_reported_even_when_it_found_nothing(
     for i in range(_HINT_BUDGET + 10):
         (fleet_dir / "s-core" / f"d{i}").mkdir()
     assert "stopped looking" in " ".join(discover(FleetConfig(roots=(fleet_dir,))).warnings)
+
+
+def test_two_concurrent_registrations_both_land(tmp_path: Path) -> None:
+    """#182: `register` is a read-modify-write of the file that DEFINES the
+    fleet. Unlocked, two concurrent calls both loaded the old list, both rewrote
+    it whole, and the second silently discarded the first project — a lost
+    update that un-manages a repo with no signal anywhere.
+    """
+    import threading
+
+    fleet_file = tmp_path / "fleet.yaml"
+    projects = [make_project(tmp_path / f"root{i}", f"proj{i}") for i in range(8)]
+
+    def register(project: Path) -> None:
+        register_project(fleet_file, project)
+
+    threads = [threading.Thread(target=register, args=(p,)) for p in projects]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    listed = load_fleet_config(fleet_file).projects
+    assert len(listed) == len(projects)
+
+
+def test_registering_writes_through_a_symlinked_fleet_file(tmp_path: Path) -> None:
+    """Raised in review on #240. `atomic_write` replaces a directory entry, so a
+    symlinked --fleet would have had the LINK replaced by a regular file:
+    registration reports success, the link is gone, and the canonical file it
+    pointed at still holds the old list. `write_text` followed the link, so this
+    was a regression the hardening introduced."""
+    canonical = tmp_path / "canonical.yaml"
+    canonical.write_text("projects: []\n", encoding="utf-8")
+    link = tmp_path / "fleet.yaml"
+    link.symlink_to(canonical)
+
+    project = make_project(tmp_path / "elsewhere", "gamma")
+    register_project(link, project)
+
+    assert link.is_symlink(), "the symlink must survive the write"
+    assert str(project.resolve()) in canonical.read_text(encoding="utf-8")

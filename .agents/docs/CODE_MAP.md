@@ -133,7 +133,9 @@ Why the agent was summoned — the context it cannot cheaply discover itself.
 
 Persistent memory of the last known check results.
 
+- `class CacheState` — A cache read, with the envelope verdict that produced it.
 - `def cache_path` — Return the checks-cache file path, honoring ``$XDG_CACHE_HOME``.
+- `def read_cache` — Load the cache WITH its envelope verdict; never raises.
 - `def load_results` — Load cached check results; never raises.
 - `def save_results` — Merge new results into the cache and write it back; never raises.
 - `def drop_result` — Remove one ``(project, task)`` entry from the cache; never raises.
@@ -386,6 +388,14 @@ Diff the live GCP inventory against the fleet — what does no repo govern?
 - `class OrphanReport` — The result of an orphan scan.
 - `def accounted_keys` — Every (name, region) the fleet accounts for, lower-cased.
 - `def find_orphans` — Report resources no fleet project accounts for; never raises.
+
+### `projects_orchestrator/persist.py`
+
+One hardened write path for every file the orchestrator persists.
+
+- `def locked` — Hold an exclusive lock across a load-modify-write; best-effort.
+- `def atomic_write` — Write via temp file + fsync + ``os.replace``; raises only on OSError.
+- `def locked_write` — Take the lock and write atomically — the whole-file case.
 
 ### `projects_orchestrator/pool.py`
 
