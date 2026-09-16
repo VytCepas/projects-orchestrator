@@ -113,7 +113,13 @@ if command -v just >/dev/null 2>&1 && [ -f "$REPO_ROOT/justfile" ] &&
       echo "  binary diff), so linting the WORKING TREE, not the staged snapshot." >&2
     fi
   fi
-  if ! (cd "$REPO_ROOT" && just lint); then
+  # Same git-environment strip as pre-push — see the note there. `just lint` is
+  # read-only so nothing was measured failing here, but the construction is
+  # identical and a lint rule that shells out to git would inherit the same
+  # redirection.
+  if ! (cd "$REPO_ROOT" && env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
+    -u GIT_PREFIX -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES \
+    -u GIT_QUARANTINE_PATH just lint); then
     _restore
     trap - EXIT
     echo "" >&2
