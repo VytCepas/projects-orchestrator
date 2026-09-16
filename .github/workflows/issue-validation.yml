@@ -54,6 +54,8 @@ jobs:
             chore) echo "chore" ;;
             docs | documentation) echo "documentation" ;;
             test) echo "test" ;;
+            spike) echo "spike" ;;
+            debt | tech-debt) echo "tech-debt" ;;
             *) echo "" ;;
             esac
           }
@@ -81,7 +83,7 @@ jobs:
           # it (this job already has issues: write). Only fall back to flagging
           # "type label" as missing when the body carries no recognizable type.
           has_type_label() {
-            if printf '%s\n' "$LABELS_JSON" | jq -e 'any(.[].name; . == "feature" or . == "bug" or . == "chore" or . == "documentation" or . == "test")' >/dev/null; then
+            if printf '%s\n' "$LABELS_JSON" | jq -e 'any(.[].name; . == "feature" or . == "bug" or . == "chore" or . == "documentation" or . == "test" or . == "tech-debt" or . == "spike")' >/dev/null; then
               return
             fi
             local body_type label

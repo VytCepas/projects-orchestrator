@@ -239,7 +239,7 @@ if [ -z "$PROJECT_ID" ]; then
   echo "  • Size         — options: XS, S, M, L, XL" >&2
   echo "  • Agent ready  — options: Yes, No" >&2
   echo "  • Confidence   — options: high, medium, low, unknown" >&2
-  echo "  • Type         — options: feature, bug, chore, documentation, test" >&2
+  echo "  • Type         — options: feature, bug, chore, documentation, test, tech-debt, spike" >&2
   echo "  Settings: $WEB_BASE/users/$OWNER/projects/$PROJECT_NUMBER/settings/fields" >&2
 else
   EXISTING_FIELDS=$(gh api graphql -f query="$PROJECT_QUERY" \
@@ -340,6 +340,8 @@ else
           { name: "chore",         color: GRAY,   description: "" }
           { name: "documentation", color: PURPLE, description: "" }
           { name: "test",          color: YELLOW, description: "" }
+          { name: "tech-debt",     color: PINK,   description: "" }
+          { name: "spike",         color: GREEN,  description: "" }
         ]
       }) { projectV2Field { ... on ProjectV2SingleSelectField { id } } }
     }'
