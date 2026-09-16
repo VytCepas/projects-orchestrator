@@ -156,6 +156,21 @@ def _read_memory_file(path: Path, project: str) -> MemoryFile | None:
     )
 
 
+def _is_dir(path: Path) -> bool:
+    """``Path.is_dir`` that answers False instead of raising; ADR-003.
+
+    The bare call was the #210 defect in a second module: this function's own
+    docstring says it never raises, and a stat raises for reasons that have
+    nothing to do with the project being malformed — an unreadable parent, a
+    dead mount. Found by the never-raise meta-test (#187), which is the point
+    of having one.
+    """
+    try:
+        return path.is_dir()
+    except OSError:
+        return False
+
+
 def load_project_memory(descriptor: ProjectDescriptor) -> ProjectMemory:
     """Read one project's memory directory; never raises.
 
@@ -167,7 +182,7 @@ def load_project_memory(descriptor: ProjectDescriptor) -> ProjectMemory:
         with a warning rather than an error.
     """
     memory_path = descriptor.memory_path
-    if memory_path is None or not memory_path.is_dir():
+    if memory_path is None or not _is_dir(memory_path):
         return ProjectMemory(
             project=descriptor.name,
             memory_path=memory_path,
