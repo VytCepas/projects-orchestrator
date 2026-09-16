@@ -39,15 +39,38 @@ size, and it is **self-bounding**: `record` truncates to the newest
 The two caches grow with the number of projects and tasks, not with the number
 of runs — a fleet of twenty projects produces a file measured in kilobytes.
 
-Supervised-process logs are the exception: `start` writes each run's stdout to
-its own file under the state directory, and those are as large as the process
-makes them. They are per-run and never appended to after the run ends, so rotate
-them by age if a long-running service is noisy:
+**Supervised-process logs are the exception, and they are not per-run.**
+`_log_file` is keyed by *project name alone* and `start` opens it with `"ab"`, so
+every restart appends to the same file and it grows without bound for as long as
+the service is noisy.
+
+Two consequences that rule out the obvious recipe:
+
+- **Age-based deletion never fires on the log that needs it.** An active service
+  refreshes the mtime continuously, so `find -mtime +30 -delete` skips exactly
+  the file that is growing.
+- **It can unlink a log a live process still holds open.** A quiet but running
+  service keeps writing to an inode with no name, so the bytes are lost and the
+  space is not reclaimed until it exits.
+
+Rotate by truncating in place, which keeps the descriptor the running process
+holds valid:
 
 ```bash
-find "${XDG_STATE_HOME:-$HOME/.local/state}/projects-orchestrator/run" \
-  -name '*.log' -mtime +30 -delete
+LOG="${XDG_STATE_HOME:-$HOME/.local/state}/projects-orchestrator/<project>.log"
+cp "$LOG" "$LOG.1" && : > "$LOG"      # copytruncate, safe while the process runs
 ```
+
+Or stop the service first, which is the only way to rotate without a window
+where writes land in the copy:
+
+```bash
+projects-orchestrator stop <project>
+mv "$LOG" "$LOG.1"
+projects-orchestrator start <project>
+```
+
+A `logrotate` entry wants `copytruncate` for the same reason.
 
 ## Back up
 
@@ -96,13 +119,36 @@ Neither direction loses a result.
 
 ## Starting clean
 
-To reset everything the orchestrator knows without touching what it governs:
+**Do not `rm -rf` the state directory.** It is not only caches: `work` places
+each agent run's git worktree under
+`$XDG_STATE_HOME/projects-orchestrator/worktrees/`, alongside its run record in
+`runs/` and its briefing. Deleting the tree therefore destroys **uncommitted
+changes in a real checkout**, strands any live agent, and leaves dangling git
+worktree metadata in the project repo. The orchestrator never writes *into* the
+repos it reads (ADR-003) — but a worktree it created is project data by any
+useful definition.
+
+Reset the derivable state only, naming each file rather than sweeping the
+directory:
 
 ```bash
-rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/projects-orchestrator" \
-       "${XDG_STATE_HOME:-$HOME/.local/state}/projects-orchestrator"
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/projects-orchestrator"
+rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/projects-orchestrator"
+rm -f  "$STATE/history.jsonl" "$STATE/audit-digest.json" "$STATE/watch-heartbeat.json"
 ```
 
-This removes no project data — the orchestrator never writes into the repos it
-reads (ADR-003) — and the next `checks` run rebuilds the cache. Expect the first
-`audit --digest` afterwards to report every finding as new, for the reason above.
+The next `checks` run rebuilds the cache, and the first `audit --digest`
+afterwards reports every finding as new, for the reason above.
+
+To clear agent runs as well, take them through their lifecycle first so the
+worktrees are removed from git's metadata rather than orphaned:
+
+```bash
+projects-orchestrator work --list            # what is still live
+projects-orchestrator work --stop <run-id>   # kill a running agent, mark it abandoned
+projects-orchestrator work --clear <run-id>  # forget a settled run and release its worktree
+```
+
+`--clear` is the one that matters here: it is what removes the worktree through
+git rather than leaving the repo with metadata pointing at a directory that no
+longer exists.
