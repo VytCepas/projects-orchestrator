@@ -63,6 +63,41 @@ def resolve_config(project_dir: Path) -> tuple[Path, str] | None:
     return None
 
 
+def layout_dir_present(project_dir: Path) -> str:
+    """Name the scaffold layout a directory carries, or ``""``; never raises.
+
+    The discriminator between a project that STOPPED RESOLVING and a directory
+    that was never a project at all, which is the whole difficulty of warning
+    about the first (#211). ``discover`` scans every directory one level under
+    a root, so "warn whenever there is no descriptor" would fire on every
+    ordinary folder beside the fleet — the §2.11 false positive that gets the
+    warning switched off, taking the true positive with it.
+
+    A layout directory is the evidence that something scaffolded this tree.
+    Present with no readable ``config.yaml`` means the descriptor was deleted,
+    replaced by a plain file, or made unreadable — all of which are worth a
+    sentence. Absent means an ordinary directory, and silence is correct.
+
+    Its LIMIT, stated because it is not obvious: removing ``.agents`` outright
+    leaves nothing to distinguish the tree from any other folder, so that case
+    stays silent unless the path is listed explicitly under ``projects:`` or is
+    a git repo reached by ``include_plain_repos``.
+
+    Args:
+        project_dir: Candidate project root.
+
+    Returns:
+        The layout directory's name (``.agents`` or ``.claude``), or ``""``.
+    """
+    for root in _LAYOUT_DIRS:
+        try:
+            if (project_dir / root).exists():
+                return root
+        except OSError:
+            continue
+    return ""
+
+
 _TOOLING_SUFFIX = "_command"
 
 CONTRACT_V2 = 2
