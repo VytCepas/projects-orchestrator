@@ -104,6 +104,11 @@ CONTRACT_V2 = 2
 
 DEPLOY_NONE = "none"
 
+#: ``memory.stack`` value meaning the project declared NO memory backend. It is a
+#: declaration, not an absence — ``unknown`` is the absence — and the shipped
+#: ``core`` preset emits it.
+MEMORY_STACK_NONE = "none"
+
 # Memory tier at which each higher-tier retrieval surface first appears
 # (ADR-024 tier model, ADR-025 §4). A child only *emits* the field at/above
 # its tier, so the orchestrator reads it tier-gated: anchors never move, higher
@@ -166,9 +171,12 @@ class ProjectDescriptor:
         contract_version: Descriptor-contract schema version (0 when absent).
         project_init_version: Scaffold version the project was rendered with.
         memory_tier: Memory tier (0 auto … 3 obsidian-graphify-rag).
-        memory_stack: Declared memory backend (``auto`` | ``obsidian-only`` |
-            ``obsidian-graphify`` | ``obsidian-graphify-rag``); ``unknown`` when
-            the config omits it.
+        memory_stack: Declared memory backend (``none`` | ``auto`` |
+            ``obsidian-only`` | ``obsidian-graphify`` | ``obsidian-graphify-rag``);
+            ``unknown`` when the config omits it. ``none`` is a real declaration
+            and not an absence — the shipped ``core`` preset emits it — and the
+            two must stay distinguishable, because a consumer that conflates them
+            asks the operator to build what the project declined (#208).
         memory_path: Absolute path to the project's memory directory.
         vault_path: Obsidian vault directory; ``None`` below tier 1 or when
             undeclared (higher-tier retrieval surface, ADR-025 §4).

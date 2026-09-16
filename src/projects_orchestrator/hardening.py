@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from projects_orchestrator.checks import DEFAULT_TASKS, CheckResult
-from projects_orchestrator.descriptor import ProjectDescriptor
+from projects_orchestrator.descriptor import MEMORY_STACK_NONE, ProjectDescriptor
 from projects_orchestrator.drift import hook_health
 from projects_orchestrator.memory import load_project_memory
 
@@ -63,6 +63,27 @@ def _hook_item(descriptor: ProjectDescriptor) -> HardeningItem | None:
 
 def _memory_items(descriptor: ProjectDescriptor) -> list[HardeningItem]:
     """Return memory setup items for one project."""
+    if descriptor.memory_stack == MEMORY_STACK_NONE:
+        # A project that declared no memory backend has nothing to set up. The
+        # branch below fires on directory ABSENCE alone, so a declared `none`
+        # and a "wanted but not created yet" were indistinguishable — and the
+        # only way to clear the item was to create the directory the project
+        # explicitly declined, which then makes its own scaffold record a lie.
+        #
+        # `core` is a SHIPPED project-init preset whose memory mode is `none`,
+        # so this was an item that could never go green on a correctly
+        # configured project. `hardening`'s contract is a setup-readiness
+        # checklist with concrete next actions; a checklist that cannot go green
+        # teaches the operator to skim past it, and the next item they skim is
+        # one that mattered. A false positive is a defect, not safety (§2.11).
+        #
+        # `_hook_item` above already has this shape — an early-out for "not
+        # applicable". This is the sibling it was missing (#208).
+        #
+        # Guarded on the declared value, never on emptiness: `unknown` means the
+        # config omitted the key, which is exactly the case that SHOULD still
+        # warn.
+        return []
     memory = load_project_memory(descriptor)
     if memory.memory_path is None or not memory.memory_path.is_dir():
         # Point the operator at the descriptor-resolved memory dir — ``.agents/memory``
