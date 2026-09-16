@@ -48,7 +48,7 @@ Notes:
 - **Tooling.** Only keys ending in `_command` with a non-empty string value are
   read; the `_command` suffix is stripped to form the task name. An undeclared
   gate is never guessed — it is skipped.
-- **Tier-gated memory surfaces (ADR-024/ADR-025).** `vault_path`, `graph_path`,
+- **Tier-gated memory surfaces (ADR-024/ADR-025 — not yet written up, #189).** `vault_path`, `graph_path`,
   and `rag_endpoint` are *higher-tier retrieval surfaces*: each is read only at
   or above the tier that introduces it (1, 2, 3 respectively). The anchors
   (`tier`, `memory_path`, `MEMORY.md`) never move between tiers — higher tiers
@@ -113,11 +113,11 @@ type: user | feedback | project | reference
 ## 5. `.claude/CAPABILITIES.md` — capability inventory
 
 Read by `capabilities.py` (the `capabilities` command). project-init generates
-this surface-independent inventory (ADR-017) of the skills, hooks, and MCP
+this surface-independent inventory (ADR-017 — not yet written up, #189) of the skills, hooks, and MCP
 servers the scaffold gave the agent, as markdown section tables
 (`## Skills (N)`, `## Hooks`, `## MCP servers (N)`). The orchestrator parses
 those tables and inverts them across the fleet — *which projects expose which
-skill/MCP* (ADR-025 §3). A missing or malformed file degrades to an empty
+skill/MCP* (ADR-025 §3 — not yet written up, #189). A missing or malformed file degrades to an empty
 inventory, never an error.
 
 ## 6. `project-init scaffold --json` — the registration seam

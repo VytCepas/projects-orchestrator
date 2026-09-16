@@ -10,6 +10,8 @@ skips teaching.
   what changed in the fleet, daily, with an optional Slack sink.
 - [Heal the fleet on a schedule](scheduled-heal.md) — open PRs that fix red
   lint/test gates, unattended, with a hard cap on how much one pass may spend.
+- [Operate the orchestrator's own state](operations.md) — what grows, what is
+  safe to delete, what to back up, and why upgrading needs no migration step.
 - [Run the dashboard as a service](serve-dashboard.md) — the live fleet view
   always on, loopback-bound, restarting itself, reachable from a phone over a
   tunnel.
