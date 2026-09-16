@@ -14,7 +14,7 @@ import json
 import os
 import tempfile
 from collections.abc import Iterator
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 try:  # POSIX advisory locking; absent on non-POSIX, where we degrade to no lock.
@@ -27,12 +27,109 @@ from projects_orchestrator.checks import CheckResult
 _CACHE_DIRNAME = "projects-orchestrator"
 _CACHE_FILENAME = "checks.json"
 
+#: Envelope format this build writes and understands.
+SCHEMA_VERSION = 1
+
+#: Version recorded for a cache written before the envelope existed. Such a file
+#: is a bare ``{project: {task: entry}}`` map with no version key at all.
+LEGACY_SCHEMA_VERSION = 0
+
+_RESULTS_KEY = "results"
+_VERSION_KEY = "schema_version"
+
+#: Envelope verdicts. ``future`` is the one that matters: it means the file was
+#: written by a NEWER build, which is version skew, not corruption — and the two
+#: were previously indistinguishable because both read as an empty cache.
+OK = "ok"
+LEGACY = "legacy"
+FUTURE = "future"
+UNREADABLE = "unreadable"
+
+
+@dataclass(frozen=True)
+class CacheState:
+    """A cache read, with the envelope verdict that produced it.
+
+    Attributes:
+        results: ``{project: {task: CheckResult}}``; empty when unusable.
+        schema_version: The version found on disk (``0`` = pre-envelope).
+        status: One of ``ok`` · ``legacy`` · ``future`` · ``unreadable``.
+    """
+
+    results: dict[str, dict[str, CheckResult]]
+    schema_version: int
+    status: str
+
+    @property
+    def is_skew(self) -> bool:
+        """Whether the cache is unusable because it is NEWER, not broken."""
+        return self.status == FUTURE
+
 
 def cache_path() -> Path:
     """Return the checks-cache file path, honoring ``$XDG_CACHE_HOME``."""
     base = os.environ.get("XDG_CACHE_HOME", "")
     root = Path(base).expanduser() if base else Path.home() / ".cache"
     return root / _CACHE_DIRNAME / _CACHE_FILENAME
+
+
+def read_cache(path: Path | None = None) -> CacheState:
+    """Load the cache WITH its envelope verdict; never raises.
+
+    The cache carried no format version, so a renamed or removed
+    :class:`CheckResult` field made every entry fail coercion and the whole file
+    read as empty — a silent full-cache wipe indistinguishable from "never
+    probed" and from genuine corruption. Worse, ``save_results`` then merged
+    into that empty view and wrote it back, DESTROYING a cache written by a
+    newer build (#183).
+
+    Args:
+        path: Cache file override (defaults to :func:`cache_path`).
+
+    Returns:
+        A :class:`CacheState`. ``results`` is empty for ``future`` and
+        ``unreadable``; the ``status`` is what tells the two apart.
+    """
+    path = path or cache_path()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return CacheState({}, LEGACY_SCHEMA_VERSION, UNREADABLE)
+    if not isinstance(raw, dict):
+        return CacheState({}, LEGACY_SCHEMA_VERSION, UNREADABLE)
+
+    version = raw.get(_VERSION_KEY)
+    if isinstance(version, int) and not isinstance(version, bool):
+        payload = raw.get(_RESULTS_KEY)
+        if version > SCHEMA_VERSION:
+            # Refuse to read it AND refuse to call it corrupt. A newer build
+            # wrote this; the right move is to leave it alone, not to silently
+            # replace it with whatever this build happens to know.
+            return CacheState({}, version, FUTURE)
+        status = OK
+    else:
+        # No version key: the pre-envelope shape, where the document IS the
+        # results map. Read it and let the next write migrate it.
+        payload, version, status = raw, LEGACY_SCHEMA_VERSION, LEGACY
+    if not isinstance(payload, dict):
+        return CacheState({}, version, UNREADABLE)
+    return CacheState(_coerce_results(payload), version, status)
+
+
+def _coerce_results(payload: dict[str, object]) -> dict[str, dict[str, CheckResult]]:
+    """Build the result map from an envelope payload, skipping malformed entries."""
+    results: dict[str, dict[str, CheckResult]] = {}
+    for project, tasks in payload.items():
+        if not isinstance(tasks, dict):
+            continue
+        for task, entry in tasks.items():
+            if not isinstance(entry, dict):
+                continue
+            result = _coerce_result(entry)
+            if result is None:
+                continue
+            results.setdefault(str(project), {})[str(task)] = result
+    return results
 
 
 def load_results(path: Path | None = None) -> dict[str, dict[str, CheckResult]]:
@@ -44,26 +141,7 @@ def load_results(path: Path | None = None) -> dict[str, dict[str, CheckResult]]:
     Returns:
         ``{project: {task: CheckResult}}``; empty on any problem.
     """
-    path = path or cache_path()
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    if not isinstance(raw, dict):
-        return {}
-
-    results: dict[str, dict[str, CheckResult]] = {}
-    for project, tasks in raw.items():
-        if not isinstance(tasks, dict):
-            continue
-        for task, entry in tasks.items():
-            if not isinstance(entry, dict):
-                continue
-            result = _coerce_result(entry)
-            if result is None:
-                continue
-            results.setdefault(str(project), {})[str(task)] = result
-    return results
+    return read_cache(path).results
 
 
 _STR_FIELDS = ("project", "task", "status", "detail", "checked_at", "head")
@@ -110,16 +188,29 @@ def save_results(
     """
     path = path or cache_path()
     with _locked(path):
-        merged = load_results(path)
+        state = read_cache(path)
+        merged = state.results
         for result in new_results:
             merged.setdefault(result.project, {})[result.task] = result
+
+        if state.is_skew:
+            # A NEWER BUILD WROTE THIS FILE, and it read as empty here. Merging
+            # into that empty view and writing it back is how version skew
+            # became data loss: the newer cache would be replaced by whatever
+            # this build happened to have in hand. The caller still gets a
+            # coherent in-memory view; the file is left for the build that owns
+            # it (#183).
+            return merged
 
         serializable = {
             project: {task: asdict(result) for task, result in tasks.items()}
             for project, tasks in merged.items()
         }
         with contextlib.suppress(OSError, ValueError):
-            _atomic_write(path, json.dumps(serializable, indent=2))
+            _atomic_write(
+                path,
+                json.dumps({_VERSION_KEY: SCHEMA_VERSION, _RESULTS_KEY: serializable}, indent=2),
+            )
     return merged
 
 

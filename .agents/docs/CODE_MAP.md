@@ -133,7 +133,9 @@ Why the agent was summoned — the context it cannot cheaply discover itself.
 
 Persistent memory of the last known check results.
 
+- `class CacheState` — A cache read, with the envelope verdict that produced it.
 - `def cache_path` — Return the checks-cache file path, honoring ``$XDG_CACHE_HOME``.
+- `def read_cache` — Load the cache WITH its envelope verdict; never raises.
 - `def load_results` — Load cached check results; never raises.
 - `def save_results` — Merge new results into the cache and write it back; never raises.
 - `def drop_result` — Remove one ``(project, task)`` entry from the cache; never raises.
