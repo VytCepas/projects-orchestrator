@@ -24,7 +24,12 @@ from pathlib import Path
 import yaml
 
 from projects_orchestrator.adapters.generic import infer_descriptor, is_git_repo
-from projects_orchestrator.descriptor import ProjectDescriptor, load_descriptor, resolve_config
+from projects_orchestrator.descriptor import (
+    ProjectDescriptor,
+    layout_dir_present,
+    load_descriptor,
+    resolve_config,
+)
 
 FLEET_FILENAME = "fleet.yaml"
 
@@ -341,6 +346,27 @@ def discover(config: FleetConfig) -> Fleet:
         if descriptor is None:
             if candidate in config.projects:
                 warnings.append(f"not a project-init project: {resolved}")
+            elif layout := layout_dir_present(resolved):
+                # A SCANNED project that stops resolving used to drop out in
+                # silence (#211). The warning existed but sat inside the
+                # `config.projects` arm, so it could only ever fire for a path
+                # someone had listed by hand — the one case where the operator
+                # already knows the path exists. Proved by running the same
+                # broken directory both ways: listed explicitly it warned,
+                # scanned it said nothing.
+                #
+                # Silence here is not a missing nicety. With a healthy project
+                # beside it the fleet is non-empty, so the "no projects
+                # discovered" hint cannot fire either, and every verb —
+                # `--json` included — returns success with the project simply
+                # absent. Absent and healthy are byte-identical to a reader.
+                #
+                # Gated on a layout directory rather than reported for every
+                # descriptor-less candidate: see `layout_dir_present`.
+                warnings.append(
+                    f"{resolved} carries {layout}/ but no readable config.yaml"
+                    " — it is NOT being governed"
+                )
             continue
         found.append(descriptor)
 

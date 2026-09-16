@@ -50,6 +50,43 @@ def test_one_unreadable_project_does_not_empty_the_fleet(
     assert fleet.names == ("healthy",)
 
 
+def test_a_scanned_project_that_stops_resolving_is_named(fleet_dir: Path) -> None:
+    """#211: the warning existed but sat in the `config.projects` arm, so it
+    could only fire for a path someone had listed by hand — the one case where
+    the operator already knows the path exists."""
+    make_project(fleet_dir, "healthy")
+    broken = make_project(fleet_dir, "broken", layout=".agents")
+    (broken / ".agents" / "config.yaml").unlink()
+    fleet = discover(FleetConfig(roots=(fleet_dir,)))
+    assert any(str(broken) in w and "no readable config.yaml" in w for w in fleet.warnings)
+
+
+def test_a_healthy_sibling_is_still_listed_when_one_drops_out(fleet_dir: Path) -> None:
+    """Silence was invisible precisely because the fleet stayed non-empty: the
+    'no projects discovered' hint cannot fire, so every verb returned success
+    with the project simply absent."""
+    make_project(fleet_dir, "healthy")
+    broken = make_project(fleet_dir, "broken", layout=".agents")
+    (broken / ".agents" / "config.yaml").unlink()
+    fleet = discover(FleetConfig(roots=(fleet_dir,)))
+    assert fleet.names == ("healthy",)
+
+
+def test_an_ordinary_directory_is_not_warned_about(fleet_dir: Path) -> None:
+    """The false-positive guard (§2.11). `_scan_root` yields EVERY directory one
+    level under a root, so warning whenever there is no descriptor would fire on
+    every folder beside the fleet — and a warning that fires on a correctly
+    configured fleet is the one that gets switched off."""
+    make_project(fleet_dir, "healthy")
+    (fleet_dir / "just-a-folder").mkdir()
+    (fleet_dir / "another-folder").mkdir()
+    fleet = discover(FleetConfig(roots=(fleet_dir,)))
+    # Asserts on the DIRECTORY NAMES, not on the message text. Matching the
+    # text only proves this particular sentence is absent, which a differently
+    # worded flood would satisfy — and the flood is what this guards.
+    assert not any("just-a-folder" in w or "another-folder" in w for w in fleet.warnings)
+
+
 def test_discover_skips_non_project_directories(fleet_dir: Path) -> None:
     make_project(fleet_dir, "alpha")
     (fleet_dir / "random-dir").mkdir()
