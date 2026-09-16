@@ -34,8 +34,24 @@ SCHEMA_VERSION = 1
 #: is a bare ``{project: {task: entry}}`` map with no version key at all.
 LEGACY_SCHEMA_VERSION = 0
 
-_RESULTS_KEY = "results"
-_VERSION_KEY = "schema_version"
+#: The version lives BESIDE the projects, not wrapping them, and that is a
+#: compatibility decision rather than a style one. A wrapper (`{"schema_version":
+#: 1, "results": {...}}`) is invisible to every build released before it: the old
+#: reader walks the top level looking for project maps, finds only `results`,
+#: coerces nothing, and reads the cache as EMPTY — then its next save writes a
+#: bare map over the file, which is precisely the skew-into-data-loss this change
+#: exists to prevent, merely relocated to the rollback path (raised in review on
+#: #242).
+#:
+#: As a sibling the old reader skips the key harmlessly (its value is an int, not
+#: a dict) and reads every project correctly, so a pre-envelope build MERGES
+#: rather than clobbers. It drops the version key when it writes, which this
+#: build reads back as `legacy` and re-stamps on the next save. Neither direction
+#: loses a result.
+#:
+#: The name is dunder-wrapped because the top level is otherwise a project
+#: namespace: a project would have to be named `__schema_version__` to collide.
+_VERSION_KEY = "__schema_version__"
 
 #: Envelope verdicts. ``future`` is the one that matters: it means the file was
 #: written by a NEWER build, which is version skew, not corruption — and the two
@@ -99,8 +115,8 @@ def read_cache(path: Path | None = None) -> CacheState:
         return CacheState({}, LEGACY_SCHEMA_VERSION, UNREADABLE)
 
     version = raw.get(_VERSION_KEY)
+    payload = {k: v for k, v in raw.items() if k != _VERSION_KEY}
     if isinstance(version, int) and not isinstance(version, bool):
-        payload = raw.get(_RESULTS_KEY)
         if version > SCHEMA_VERSION:
             # Refuse to read it AND refuse to call it corrupt. A newer build
             # wrote this; the right move is to leave it alone, not to silently
@@ -108,11 +124,9 @@ def read_cache(path: Path | None = None) -> CacheState:
             return CacheState({}, version, FUTURE)
         status = OK
     else:
-        # No version key: the pre-envelope shape, where the document IS the
-        # results map. Read it and let the next write migrate it.
-        payload, version, status = raw, LEGACY_SCHEMA_VERSION, LEGACY
-    if not isinstance(payload, dict):
-        return CacheState({}, version, UNREADABLE)
+        # No version key: written by a pre-envelope build. Read it and re-stamp
+        # on the next save.
+        version, status = LEGACY_SCHEMA_VERSION, LEGACY
     return CacheState(_coerce_results(payload), version, status)
 
 
@@ -202,16 +216,24 @@ def save_results(
             # it (#183).
             return merged
 
-        serializable = {
-            project: {task: asdict(result) for task, result in tasks.items()}
-            for project, tasks in merged.items()
-        }
         with contextlib.suppress(OSError, ValueError):
-            _atomic_write(
-                path,
-                json.dumps({_VERSION_KEY: SCHEMA_VERSION, _RESULTS_KEY: serializable}, indent=2),
-            )
+            _atomic_write(path, _serialize(merged))
     return merged
+
+
+def _serialize(results: dict[str, dict[str, CheckResult]]) -> str:
+    """Render the cache document — ONE writer, so the envelope cannot drift.
+
+    `drop_result` previously built its own payload and omitted the version key,
+    which silently demoted the file back to the pre-envelope shape between a
+    drop and the next save (raised in review on #242).
+    """
+    document: dict[str, object] = {
+        project: {task: asdict(result) for task, result in tasks.items()}
+        for project, tasks in results.items()
+    }
+    document[_VERSION_KEY] = SCHEMA_VERSION
+    return json.dumps(document, indent=2)
 
 
 def drop_result(project: str, task: str, path: Path | None = None) -> None:
@@ -229,17 +251,19 @@ def drop_result(project: str, task: str, path: Path | None = None) -> None:
     """
     path = path or cache_path()
     with _locked(path):
-        merged = load_results(path)
+        state = read_cache(path)
+        if state.is_skew:
+            # Same refusal as `save_results`: a newer build owns this file, and
+            # retiring one entry is not a reason to rewrite it with this build's
+            # understanding (raised in review on #242).
+            return
+        merged = state.results
         if merged.get(project, {}).pop(task, None) is None:
             return
         if not merged[project]:
             del merged[project]
-        serializable = {
-            proj: {t: asdict(result) for t, result in tasks.items()}
-            for proj, tasks in merged.items()
-        }
         with contextlib.suppress(OSError, ValueError):
-            _atomic_write(path, json.dumps(serializable, indent=2))
+            _atomic_write(path, _serialize(merged))
 
 
 @contextlib.contextmanager

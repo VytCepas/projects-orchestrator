@@ -125,7 +125,8 @@ def test_drop_result_missing_entry_is_a_no_op(tmp_path: Path) -> None:
 def test_a_saved_cache_records_the_schema_version(tmp_path: Path) -> None:
     path = tmp_path / "checks.json"
     save_results([_result()], path)
-    assert json.loads(path.read_text(encoding="utf-8"))["schema_version"] == cache.SCHEMA_VERSION
+    document = json.loads(path.read_text(encoding="utf-8"))
+    assert document[cache._VERSION_KEY] == cache.SCHEMA_VERSION
 
 
 def test_a_versioned_cache_round_trips(tmp_path: Path) -> None:
@@ -152,7 +153,7 @@ def test_a_newer_cache_reads_as_skew_not_corruption(tmp_path: Path) -> None:
     """The distinction the whole change is for: both used to read as empty."""
     path = tmp_path / "checks.json"
     path.write_text(
-        json.dumps({"schema_version": cache.SCHEMA_VERSION + 1, "results": {}}),
+        json.dumps({cache._VERSION_KEY: cache.SCHEMA_VERSION + 1}),
         encoding="utf-8",
     )
     assert cache.read_cache(path).status == cache.FUTURE
@@ -172,7 +173,7 @@ def test_saving_does_not_clobber_a_cache_written_by_a_newer_build(tmp_path: Path
     results OVER a file it could not understand — version skew turning into
     permanent loss on the next probe."""
     path = tmp_path / "checks.json"
-    newer = {"schema_version": cache.SCHEMA_VERSION + 1, "results": {"kept": {"data": {}}}}
+    newer = {cache._VERSION_KEY: cache.SCHEMA_VERSION + 1, "kept": {"data": {}}}
     path.write_text(json.dumps(newer), encoding="utf-8")
     save_results([_result()], path)
     assert json.loads(path.read_text(encoding="utf-8")) == newer
@@ -183,8 +184,57 @@ def test_the_caller_still_gets_its_results_when_the_cache_is_skewed(tmp_path: Pa
     happened is still valid, it simply is not persisted."""
     path = tmp_path / "checks.json"
     path.write_text(
-        json.dumps({"schema_version": cache.SCHEMA_VERSION + 1, "results": {}}),
+        json.dumps({cache._VERSION_KEY: cache.SCHEMA_VERSION + 1}),
         encoding="utf-8",
     )
     merged = save_results([_result()], path)
     assert merged["alpha"]["lint"].status == "pass"
+
+
+def _pre_envelope_read(path: Path) -> dict[str, dict[str, object]]:
+    """The reader EVERY build before the envelope shipped with.
+
+    Walks the top level and treats each dict value as a project's task map. It
+    is reproduced here rather than imported because the point is what an OLD
+    installation does with a file this build wrote.
+    """
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    results: dict[str, dict[str, object]] = {}
+    for project, tasks in raw.items():
+        if not isinstance(tasks, dict):
+            continue
+        results[project] = tasks
+    return results
+
+
+def test_a_pre_envelope_reader_still_sees_every_project(tmp_path: Path) -> None:
+    """THE ROLLBACK PATH (raised in review on #242).
+
+    A wrapper envelope is invisible to an older build: it walks the top level,
+    finds only `results`, coerces nothing, and reads the cache as EMPTY — then
+    its next save writes a bare map over the file, recreating the very
+    skew-into-data-loss this change exists to prevent. As a sibling key the old
+    reader skips the version and merges instead of clobbering.
+    """
+    path = tmp_path / "checks.json"
+    save_results([_result(project="alpha"), _result(project="beta")], path)
+    assert set(_pre_envelope_read(path)) == {"alpha", "beta"}
+
+
+def test_dropping_a_result_keeps_the_envelope(tmp_path: Path) -> None:
+    """`drop_result` built its own payload and omitted the version key, silently
+    demoting the file to the pre-envelope shape between a drop and the next
+    save (raised in review on #242)."""
+    path = tmp_path / "checks.json"
+    save_results([_result(task="lint"), _result(task="test")], path)
+    drop_result("alpha", "lint", path)
+    document = json.loads(path.read_text(encoding="utf-8"))
+    assert document[cache._VERSION_KEY] == cache.SCHEMA_VERSION
+
+
+def test_dropping_a_result_refuses_a_cache_from_a_newer_build(tmp_path: Path) -> None:
+    path = tmp_path / "checks.json"
+    newer = {cache._VERSION_KEY: cache.SCHEMA_VERSION + 1, "alpha": {"lint": {}}}
+    path.write_text(json.dumps(newer), encoding="utf-8")
+    drop_result("alpha", "lint", path)
+    assert json.loads(path.read_text(encoding="utf-8")) == newer
