@@ -231,7 +231,7 @@ jobs:
           AGENT_READY=$(parse_body_field "Agent ready" "$BODY")
           CONFIDENCE=$(parse_body_field "Confidence" "$BODY")
           AREA=$(parse_body_field "Area" "$BODY")
-          TYPE_LABEL=$(echo "$ISSUE_DATA" | jq -r '[.labels[].name | select(. == "feature" or . == "bug" or . == "chore" or . == "documentation" or . == "test")][0] // empty')
+          TYPE_LABEL=$(echo "$ISSUE_DATA" | jq -r '[.labels[].name | select(. == "feature" or . == "bug" or . == "chore" or . == "documentation" or . == "test" or . == "tech-debt" or . == "spike")][0] // empty')
 
           update_single_select() {
             local field_name="$1"
