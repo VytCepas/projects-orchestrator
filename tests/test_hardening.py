@@ -54,6 +54,40 @@ def test_checklist_flags_missing_memory(fleet_dir: Path) -> None:
     assert any(item.category == "memory" for item in report[0].items)
 
 
+_MEMORY_NONE_CONFIG = """\
+project:
+  name: "coreproj"
+  language: "python"
+memory:
+  stack: "none"
+  tier: 0
+"""
+
+_MEMORY_OMITTED_CONFIG = """\
+project:
+  name: "coreproj"
+  language: "python"
+"""
+
+
+def test_a_project_that_declared_no_memory_backend_gets_no_memory_item(fleet_dir: Path) -> None:
+    """#208: `core` is a shipped preset whose memory mode is `none`. The only
+    way to clear this item was to create the directory the project explicitly
+    declined, which makes its own scaffold record a lie — an item that can never
+    go green on a correctly configured project."""
+    project = make_project(fleet_dir, "coreproj", config_text=_MEMORY_NONE_CONFIG)
+    report = checklist([_descriptor(project)], {})
+    assert not any(item.category == "memory" for item in report[0].items)
+
+
+def test_a_project_that_omitted_the_memory_key_still_warns(fleet_dir: Path) -> None:
+    """The guard against over-fixing: `unknown` is an ABSENCE, `none` is a
+    DECLARATION. Silencing both would hide the case the item exists for."""
+    project = make_project(fleet_dir, "coreproj", config_text=_MEMORY_OMITTED_CONFIG)
+    report = checklist([_descriptor(project)], {})
+    assert any(item.category == "memory" for item in report[0].items)
+
+
 def test_missing_memory_action_targets_agents_layout(fleet_dir: Path) -> None:
     project = make_project(fleet_dir, "alpha", layout=".agents")
     report = checklist([_descriptor(project)], {})
