@@ -24,6 +24,7 @@ from projects_orchestrator import (
     orphans,
     runs,
     selector,
+    watchdog,
     work,
 )
 from projects_orchestrator.adapters import gcp
@@ -192,6 +193,19 @@ def _unresolved_rc(fleet: Fleet, ok: int = 0) -> int:
     return NO_PROJECTS_RC if not fleet.descriptors else ok
 
 
+def _print_watch_state() -> None:
+    """Tell the operator when the scheduled pass has stopped firing (#186).
+
+    Printed by the surfaces a human reads when watch is NOT running — the pass
+    itself cannot report its own death. Only a fault speaks: a fresh watch, and
+    a watch whose interval was never declared, stay quiet, because an advisory
+    on every ordinary `status` is the noise that trains people to skim.
+    """
+    state = watchdog.read_state()
+    if state.needs_attention:
+        print(f"warning: {watchdog.describe(state)}", file=sys.stderr)
+
+
 def _emit_json(payload: object) -> int:
     """Print a JSON document (paths become strings)."""
     print(json.dumps(payload, indent=2, default=str))
@@ -237,6 +251,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
     # Pass the FULL fleet as the version reference so a filtered row still shows
     # "behind" when a project the filter hid is newer — not a false "=".
     print(render_table(fleet_rows(selected, snapshots)))
+    _print_watch_state()
     return _unresolved_rc(fleet)
 
 
@@ -1261,8 +1276,9 @@ def _cmd_notify(args: argparse.Namespace) -> int:
     snapshots = [s for s in fleet_snapshots(fleet) if s.descriptor in selected]
     alerts = fleet_alerts(snapshots)
     if args.json:
-        _emit_json(alerts_payload(alerts))
+        _emit_json({**alerts_payload(alerts), "watch": asdict(watchdog.read_state())})
     else:
+        _print_watch_state()
         print(render_alerts(alerts))
     if args.webhook and alerts:
         ok = post_webhook(args.webhook, alerts)
@@ -1330,6 +1346,11 @@ def _cmd_watch(args: argparse.Namespace) -> int:
             remote.append(result)
     cache.save_results(fresh + remote)
     history_record(fresh + remote)
+    # Record the PASS, not just its results (#186). History only carries results
+    # whose status is recordable, so a pass over a fleet that produced none —
+    # everything skipped, every gate undeclared — left no trace and was
+    # indistinguishable from a pass that never happened.
+    watchdog.record_pass(args.interval)
     alerts = fleet_alerts(fleet_snapshots(fleet))
     delivered = post_webhook(args.webhook, alerts) if args.webhook and alerts else None
     if args.json:
@@ -1741,6 +1762,16 @@ def _add_watch_arguments(sub: argparse._SubParsersAction[argparse.ArgumentParser
     """Wire `watch`'s gate-selection and webhook flags onto its subparser."""
     watch_sp = sub.choices["watch"]
     watch_sp.add_argument("--webhook", help="POST alerts as JSON to this URL (Slack-compatible)")
+    watch_sp.add_argument(
+        "--interval",
+        type=int,
+        default=0,
+        metavar="SECONDS",
+        help=(
+            "the schedule this pass runs on; lets `status` and `notify` tell a stale "
+            "watch from a fresh one. Omitted leaves staleness unjudgeable rather than guessed"
+        ),
+    )
     watch_sp.add_argument(
         "--task", action="append", help="gate to run (repeatable; default: lint, test)"
     )
