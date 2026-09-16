@@ -52,6 +52,20 @@ while read -r _ local_sha remote_ref _; do
   fi
 done
 
+# GIT EXPORTS ITS REPO POINTERS INTO EVERY HOOK, AND A TEST SUITE INHERITS THEM.
+# `GIT_DIR` (plus `GIT_WORK_TREE`/`GIT_INDEX_FILE` in a worktree) is set by git
+# for the hook process, so every `git` subprocess the recipe starts — including
+# the `git init` a test runs inside its own tmpdir — is redirected back at THIS
+# repository. Measured on project-init, same tree, control vs treatment:
+#
+#     just test                      -> 413 passed
+#     GIT_DIR=<other> just test      ->   5 failed, 408 passed
+#
+# and on projects-orchestrator, 1508 passed -> 185 failed. The second-order
+# damage is worse than the red: the tests write to the developer's INDEX, which
+# is where a pile of phantom staged deletions came from. A gate that cannot pass
+# when it runs is a gate people learn to push past with --no-verify, which is the
+# one thing it exists to prevent (CONSTITUTION 2.11).
 # Fast local gate before the push leaves the machine: run `just fast-ci`
 # (lint + parallel tests) — deliberately lighter than the full `just ci` so the
 # push stays fast. CI re-runs the full gate (typecheck/coverage/audit + more),
@@ -78,7 +92,9 @@ if [[ "$PUSHING_BRANCH" == "1" ]]; then
       echo "  Commit or stash your changes to run the gate before pushing." >&2
     else
       echo "pre-push: running 'just fast-ci' (lint + tests) before push…"
-      if ! (cd "$REPO_ROOT" && just fast-ci); then
+      if ! (cd "$REPO_ROOT" && env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
+        -u GIT_PREFIX -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES \
+        -u GIT_QUARANTINE_PATH just fast-ci); then
         echo ""
         echo "❌ pre-push: 'just fast-ci' failed — fix the errors above before pushing."
         echo "   (bypass in an emergency with: git push --no-verify)"
