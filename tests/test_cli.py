@@ -951,3 +951,61 @@ def test_heal_single_project_exits_one_when_eventful(fleet_dir: Path, monkeypatc
     # still fails -> VERIFY_FAILED -> an eventful pass -> exit 1.
     assert main(["heal", "alpha", "--root", str(fleet_dir)]) == 1
     assert "verify_failed" in capsys.readouterr().out
+
+
+# --- An unresolved fleet is not a clean bill of health (#204) ---
+#
+# The reporting commands used to report an empty fleet and exit 0, and
+# `doctor`/`drift`/`audit` printed nothing at all — byte-identical to a fully
+# conformant fleet. `doctor` was the worst of them, because it is the command
+# you run TO FIND OUT whether the fleet is set up.
+
+_REPORTING_COMMANDS = ["projects", "status", "doctor", "drift", "audit", "hardening"]
+
+
+@pytest.mark.parametrize("command", _REPORTING_COMMANDS)
+def test_a_reporting_command_fails_on_an_unresolved_fleet(command: str, tmp_path: Path) -> None:
+    empty = tmp_path / "nothing-here"
+    empty.mkdir()
+    assert main([command, "--root", str(empty)]) == 2
+
+
+@pytest.mark.parametrize("command", _REPORTING_COMMANDS)
+def test_a_reporting_command_still_fails_on_an_unresolved_fleet_with_json(
+    command: str, tmp_path: Path
+) -> None:
+    """`--json` was the worst arm: a consumer reading the document saw a
+    well-formed empty result and a success code."""
+    empty = tmp_path / "nothing-here"
+    empty.mkdir()
+    assert main([command, "--root", str(empty), "--json"]) == 2
+
+
+def test_a_resolved_fleet_still_exits_zero(fleet_dir: Path) -> None:
+    """The discrimination that matters: this fires on an EMPTY fleet, never on
+    a populated one."""
+    make_project(fleet_dir, "alpha")
+    assert main(["projects", "--root", str(fleet_dir)]) == 0
+
+
+def test_a_command_keeps_its_own_failure_code_on_a_resolved_fleet(fleet_dir: Path) -> None:
+    """The `ok` passthrough: a command that already fails for its own reasons
+    must keep that code, not have it overwritten by the empty-fleet code."""
+    make_project(fleet_dir, "alpha")
+    assert main(["hardening", "--root", str(fleet_dir)]) == 1
+
+
+def test_register_still_works_on_an_empty_fleet(tmp_path: Path) -> None:
+    """THE REGRESSION THIS FIX HAD TO AVOID, and the reason `_discover` refused
+    to carry the check: an empty fleet is the NORMAL first-run state for
+    `register`, and failing there would break the first registration on a new
+    machine. The check is opted into per reporting command for exactly this."""
+    project = make_project(tmp_path / "elsewhere", "gamma")
+    result = tmp_path / "scaffold.json"
+    result.write_text(
+        json.dumps({"target": str(project), "contract_version": "1", "files_created": 1}),
+        encoding="utf-8",
+    )
+    fleet_file = tmp_path / "fleet.yaml"
+    assert not fleet_file.exists(), "the first-run state: no fleet file yet"
+    assert main(["register", str(result), "--fleet", str(fleet_file)]) == 0

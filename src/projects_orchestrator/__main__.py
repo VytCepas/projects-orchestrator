@@ -161,6 +161,37 @@ def _discover(args: argparse.Namespace) -> Fleet:
     return fleet
 
 
+#: Exit code a REPORTING command returns when discovery resolved to nothing.
+#: ``watch`` has used it since before #204; these commands now match it.
+NO_PROJECTS_RC = 2
+
+
+def _unresolved_rc(fleet: Fleet, ok: int = 0) -> int:
+    """Fail a reporting command whose fleet resolved to nothing (#204).
+
+    An unresolved fleet used to be byte-identical to a conformant one: empty
+    output and exit 0. ``doctor`` was the worst of them, because it is the
+    command you run TO FIND OUT whether the fleet is set up — silence plus
+    success is exactly what a fully conformant fleet looks like.
+
+    OPTED IN PER COMMAND, DELIBERATELY, and this is the shape :func:`_discover`
+    said the fix had to take. That helper is shared by all 20 discovery call
+    sites including ``register``, where an empty fleet is the NORMAL first-run
+    state and failing would break the first registration on a new machine. So
+    the check lives here and the reporting commands call it; the write paths do
+    not.
+
+    Args:
+        fleet: The discovered fleet.
+        ok: The exit code to use when the fleet resolved to something — so a
+            command that already fails for its own reasons keeps that code.
+
+    Returns:
+        ``NO_PROJECTS_RC`` on an empty fleet, else ``ok``.
+    """
+    return NO_PROJECTS_RC if not fleet.descriptors else ok
+
+
 def _emit_json(payload: object) -> int:
     """Print a JSON document (paths become strings)."""
     print(json.dumps(payload, indent=2, default=str))
@@ -171,12 +202,12 @@ def _cmd_projects(args: argparse.Namespace) -> int:
     """List discovered projects."""
     fleet = _discover(args)
     if args.json:
-        return _emit_json([asdict(d) for d in fleet.descriptors])
+        return _unresolved_rc(fleet, _emit_json([asdict(d) for d in fleet.descriptors]))
     for descriptor in fleet.descriptors:
         print(f"{descriptor.name}  ({descriptor.language}, {descriptor.path})")
     if not fleet.descriptors:
         print("no projects discovered")
-    return 0
+    return _unresolved_rc(fleet)
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
@@ -197,14 +228,14 @@ def _cmd_status(args: argparse.Namespace) -> int:
     if selected is None:
         return 2
     if args.json:
-        return _emit_json([asdict(s.status) for s in selected])
+        return _unresolved_rc(fleet, _emit_json([asdict(s.status) for s in selected]))
     if not selected:
         print("no projects match")
-        return 0
+        return _unresolved_rc(fleet)
     # Pass the FULL fleet as the version reference so a filtered row still shows
     # "behind" when a project the filter hid is newer — not a false "=".
     print(render_table(fleet_rows(selected, snapshots)))
-    return 0
+    return _unresolved_rc(fleet)
 
 
 def _reusable_pass(
@@ -356,14 +387,14 @@ def _cmd_drift(args: argparse.Namespace) -> int:
         selected = [descriptor]
     reports = [compute_drift(d) for d in selected]
     if args.json:
-        return _emit_json([asdict(r) for r in reports])
+        return _unresolved_rc(fleet, _emit_json([asdict(r) for r in reports]))
     for report in reports:
         print(f"{report.project}: {report.summary}")
         for relpath in report.modified:
             print(f"  modified: {relpath}")
         for relpath in report.missing:
             print(f"  missing:  {relpath}")
-    return 1 if any(r.status == "drift" for r in reports) else 0
+    return _unresolved_rc(fleet, 1 if any(r.status == "drift" for r in reports) else 0)
 
 
 def _cmd_doctor(args: argparse.Namespace) -> int:
@@ -378,12 +409,12 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         selected = [descriptor]
     reports = [diagnose(d) for d in selected]
     if args.json:
-        return _emit_json([asdict(r) for r in reports])
+        return _unresolved_rc(fleet, _emit_json([asdict(r) for r in reports]))
     for report in reports:
         print(f"{report.project}: {report.status}")
         for finding in report.findings:
             print(f"  [{finding.status}] {finding.check}: {finding.detail}")
-    return 1 if any(r.status == "fail" for r in reports) else 0
+    return _unresolved_rc(fleet, 1 if any(r.status == "fail" for r in reports) else 0)
 
 
 def _emit_digest(args: argparse.Namespace, reports: list[AuditReport]) -> int:
@@ -418,9 +449,9 @@ def _cmd_audit(args: argparse.Namespace) -> int:
     cached = cache.load_results()
     reports = [audit_project(d, cached.get(d.name)) for d in selected]
     if args.digest:
-        return _emit_digest(args, reports)
+        return _unresolved_rc(fleet, _emit_digest(args, reports))
     if args.json:
-        return _emit_json([asdict(r) for r in reports])
+        return _unresolved_rc(fleet, _emit_json([asdict(r) for r in reports]))
     if args.markdown:
         print(render_markdown(reports))
     else:
@@ -428,7 +459,7 @@ def _cmd_audit(args: argparse.Namespace) -> int:
             print(f"{report.project}: {report.status}")
             for finding in report.findings:
                 print(f"  [{finding.severity}] {finding.category}: {finding.message}")
-    return 1 if any(r.needs_attention for r in reports) else 0
+    return _unresolved_rc(fleet, 1 if any(r.needs_attention for r in reports) else 0)
 
 
 def _cmd_hardening(args: argparse.Namespace) -> int:
@@ -443,9 +474,9 @@ def _cmd_hardening(args: argparse.Namespace) -> int:
         selected = [descriptor]
     reports = hardening_checklist(selected, cache.load_results())
     if args.json:
-        return _emit_json([asdict(report) for report in reports])
+        return _unresolved_rc(fleet, _emit_json([asdict(report) for report in reports]))
     print(render_hardening(reports))
-    return 1 if any(report.needs_attention for report in reports) else 0
+    return _unresolved_rc(fleet, 1 if any(report.needs_attention for report in reports) else 0)
 
 
 def _cmd_ci(args: argparse.Namespace) -> int:
