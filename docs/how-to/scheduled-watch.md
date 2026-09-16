@@ -9,7 +9,19 @@ what `checks`, `ci`, `cloud-status` and `notify` do separately, so a timer
 needs a single invocation.
 
 ```bash
-projects-orchestrator watch --root ~/projects --webhook "$SLACK_WEBHOOK"
+projects-orchestrator watch --interval 3600 --root ~/projects --webhook "$SLACK_WEBHOOK"
+```
+
+`--interval` is the schedule this pass runs on, and it is what lets `status`
+and `notify` tell a stale watch from a fresh one. Omit it and the heartbeat
+records no schedule, so staleness is reported as unjudgeable rather than
+guessed — which means a timer that later stops firing raises nothing. The
+shipped unit passes it (`PO_WATCH_INTERVAL`, default 3600, matching its
+`OnCalendar=hourly`).
+
+```bash
+# omitted — the pass still runs, but its death would go unnoticed
+projects-orchestrator watch --root ~/projects
 ```
 
 Exit codes are scheduler-shaped: **1** means eventful (an alert fired — look

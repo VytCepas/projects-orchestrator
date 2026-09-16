@@ -523,6 +523,16 @@ Scheme and host allowlist for descriptor- and operator-declared URLs.
 - `def is_probe_safe` — Whether ``url`` may be fetched by a fleet probe (pure; never raises).
 - `def guarded_opener` — An opener that validates every redirect hop, not just the first URL.
 
+### `projects_orchestrator/watchdog.py`
+
+Whether the scheduled watch pass is still firing (#186).
+
+- `def watch_path` — Return the watch-heartbeat path, honoring ``$XDG_STATE_HOME``.
+- `class WatchState` — When the scheduled pass last ran, and whether that is recent enough.
+- `def record_pass` — Record that a scheduled pass just completed; never raises.
+- `def read_state` — Read the heartbeat and judge it; never raises.
+- `def describe` — Render a one-line verdict for an operator.
+
 ### `projects_orchestrator/work.py`
 
 ``work`` — put an agent to work on a project, as a tracked, detached run.

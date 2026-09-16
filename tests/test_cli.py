@@ -1034,3 +1034,50 @@ def test_audit_digest_does_not_persist_a_baseline_on_an_unresolved_fleet(
     empty.mkdir()
     assert main(["audit", "--root", str(empty), "--digest"]) == 2
     assert digest_path().read_text(encoding="utf-8") == baseline
+
+
+def test_status_warns_when_watch_has_never_run(fleet_dir: Path, capsys) -> None:
+    """#186: `status` is where a human looks, and the watch pass cannot report
+    its own death. A box whose timer was never installed must not read green."""
+    make_project(fleet_dir, "alpha")
+    main(["status", "--root", str(fleet_dir)])
+    assert "watch has never run" in capsys.readouterr().err
+
+
+def test_status_is_quiet_when_watch_is_fresh(fleet_dir: Path, capsys) -> None:
+    """Only a fault speaks. An advisory on every ordinary `status` is the noise
+    that trains people to skim past the one that mattered."""
+    from projects_orchestrator import watchdog
+
+    make_project(fleet_dir, "alpha")
+    watchdog.record_pass(3600)
+    main(["status", "--root", str(fleet_dir)])
+    assert "watch" not in capsys.readouterr().err
+
+
+def test_a_watch_pass_records_its_own_heartbeat(fleet_dir: Path) -> None:
+    """History only carries recordable results, so a pass that produced none
+    left no trace and was indistinguishable from a pass that never happened."""
+    from projects_orchestrator import watchdog
+
+    make_project(fleet_dir, "alpha", tooling={"lint": "true"})
+    main(["watch", "--root", str(fleet_dir), "--interval", "3600"])
+    assert watchdog.read_state().status == watchdog.FRESH
+
+
+def test_status_for_one_project_also_warns_about_watch(fleet_dir: Path, capsys) -> None:
+    """Raised in review on #244: `status PROJECT` returned before the heartbeat
+    was read, so a human drilling into one project was told nothing."""
+    make_project(fleet_dir, "alpha")
+    main(["status", "alpha", "--root", str(fleet_dir)])
+    assert "watch has never run" in capsys.readouterr().err
+
+
+def test_status_json_also_warns_about_watch(fleet_dir: Path, capsys) -> None:
+    """The warning goes to stderr so the JSON document on stdout stays exactly
+    the array its consumers parse."""
+    make_project(fleet_dir, "alpha")
+    main(["status", "--root", str(fleet_dir), "--json"])
+    captured = capsys.readouterr()
+    assert "watch has never run" in captured.err
+    assert json.loads(captured.out) == [] or isinstance(json.loads(captured.out), list)
