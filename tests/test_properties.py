@@ -15,8 +15,20 @@ Run locally with `just fuzz`.
 
 from __future__ import annotations
 
+# E402 is exempted for this file, not worked around: the Hypothesis imports MUST
+# come after `importorskip`, or the skip never runs and the ordinary suite dies
+# on the import it is meant to avoid.
+# ruff: noqa: E402
 import json
 from pathlib import Path
+
+import pytest
+
+# OPT-IN PER FILE, which is this repo's documented convention for property
+# tests: `just fuzz` provides Hypothesis and the ordinary suite does not, so an
+# unguarded import turns every `just test` and every PR CI run into an
+# ImportError. The nightly fuzz job is where these are meant to run.
+hypothesis = pytest.importorskip("hypothesis", reason="property tests run under `just fuzz`")
 
 from hypothesis import given
 from hypothesis import strategies as st
