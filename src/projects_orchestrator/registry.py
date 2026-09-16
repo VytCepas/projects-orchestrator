@@ -442,7 +442,15 @@ def register_project(fleet_file: Path, project: Path) -> RegisterOutcome:
         if existing is not None and existing.include_plain_repos:
             document["include_plain_repos"] = existing.include_plain_repos
         try:
-            persist.atomic_write(fleet_file, yaml.safe_dump(document, sort_keys=True))
+            # WRITE THROUGH A SYMLINK, never over it (raised in review on #240).
+            # `atomic_write` replaces a directory entry, so pointing --fleet at
+            # a symlink would have replaced the LINK with a regular file:
+            # registration reports success, the link is gone, and the canonical
+            # file it pointed at still holds the old list. The previous
+            # `write_text` followed the link, so this was a regression the
+            # hardening introduced rather than a pre-existing gap.
+            target = fleet_file.resolve() if fleet_file.is_symlink() else fleet_file
+            persist.atomic_write(target, yaml.safe_dump(document, sort_keys=True))
         except OSError as exc:
             return RegisterOutcome(
                 fleet_file,

@@ -65,16 +65,28 @@ def record(results: list[CheckResult], path: Path | None = None) -> None:
     if not fresh:
         return
     path = path or history_path()
-    kept = load_history(path)
-    kept.extend(HistoryEntry(r.project, r.task, r.status, r.checked_at) for r in fresh)
-    kept = kept[-MAX_ENTRIES:]
-    body = "\n".join(
-        json.dumps(
-            {"project": e.project, "task": e.task, "status": e.status, "checked_at": e.checked_at}
+    # THE LOCK SPANS THE LOAD, not just the write (raised in review on #240).
+    # `record` is a read-modify-write: two concurrent `checks` or `watch` runs
+    # both loaded the same snapshot, both appended to it, and the second
+    # replacement discarded the first run's entries. Locking only the write
+    # leaves exactly that race — the same mistake, in the same shape, that
+    # `registry.register_project` documents avoiding.
+    with persist.locked(path):
+        kept = load_history(path)
+        kept.extend(HistoryEntry(r.project, r.task, r.status, r.checked_at) for r in fresh)
+        kept = kept[-MAX_ENTRIES:]
+        body = "\n".join(
+            json.dumps(
+                {
+                    "project": e.project,
+                    "task": e.task,
+                    "status": e.status,
+                    "checked_at": e.checked_at,
+                }
+            )
+            for e in kept
         )
-        for e in kept
-    )
-    _atomic_write(path, body + "\n")
+        _atomic_write(path, body + "\n")
 
 
 def load_history(path: Path | None = None) -> list[HistoryEntry]:
@@ -160,5 +172,8 @@ def _atomic_write(path: Path, text: str) -> None:
     Was atomic but UNLOCKED, so two concurrent appends both read the log, both
     rewrote it whole, and one set of events vanished.
     """
+    # NOT `locked_write`: `record` holds the lock across its whole
+    # read-modify-write, and re-entering a held flock from the same process is
+    # not something to rely on.
     with contextlib.suppress(OSError, ValueError):
-        persist.locked_write(path, text)
+        persist.atomic_write(path, text)
