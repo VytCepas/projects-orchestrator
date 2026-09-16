@@ -140,10 +140,66 @@ diffed against the fleet. It holds no write credentials, and an unauthenticated
 scan reports `unknown` rather than "no orphans" — falsely clearing an estate
 nobody looked at is the worst lie it could tell.
 
+### Every command
+
+The complete registered surface — `projects-orchestrator --help` is the
+authority, and this table is checked against it by a test, so a command added
+without a row here fails CI.
+
+**Read the fleet**
+
+| Command | What it answers |
+|---|---|
+| `projects` | Which projects are governed, and where |
+| `status` | Git health per project, or the whole fleet table |
+| `doctor` | Does each project conform to the descriptor contract |
+| `drift` | Has a project's scaffold diverged from its manifest |
+| `audit` | The composed governance audit (`--digest` for deltas only) |
+| `hardening` | Setup gaps, each with the command that closes it |
+| `capabilities` | Which skills, hooks and MCP servers each project declares |
+| `memory` | Search every project's memory at once |
+| `history` | The recorded trend behind the status table |
+| `events` | The machine-readable event stream |
+| `snapshot` | The whole fleet as one JSON document |
+| `upgrade-plan` | Who is behind upstream project-init |
+| `orphans` | Cloud resources with no project claiming them |
+
+**Act on it**
+
+| Command | What it does |
+|---|---|
+| `checks` | Run each project's declared gates |
+| `ci` | Probe CI conclusions and open-PR counts |
+| `cloud-status` | Probe deployed services |
+| `deploy` | Dispatch a project's deploy workflow (`--apply` to mean it) |
+| `heal` | Open PRs that fix red gates |
+| `campaign` | The same change across many projects, canary-first |
+| `register` | Add a freshly-scaffolded project to the fleet |
+| `notify` | Compute threshold alerts, optionally push them |
+| `watch` | One scheduled pass: refresh, record, alert |
+
+**Agent runs and processes**
+
+| Command | What it does |
+|---|---|
+| `work` | Launch an agent run in its own worktree |
+| `start` / `stop` / `logs` | Supervise a project's long-running process |
+
+**Surfaces**
+
+| Command | What it is |
+|---|---|
+| `serve` | The live dashboard over HTTP |
+| `tui` | The terminal UI |
+| `controller` | The deterministic REPL |
+
 ### Design
 
 See [`.agents/docs/adr/`](.agents/docs/adr/) — ADR-003 (fleet engine), ADR-005
-(cloud control plane), ADR-006 (autonomous heal), ADR-007 (agent runs). In short:
+(cloud control plane), ADR-006 (autonomous heal), ADR-007 (agent runs). Some
+decisions are cited by number in code and docs but not yet written up; those are
+tracked in #189 and marked where they are cited, so a dead link is never left
+looking like a live one. In short:
 the engine never raises (broken children degrade to `unknown`/`fail` cells, the
 fleet view always renders), gates are the child's own declared commands,
 last-known results persist under `$XDG_CACHE_HOME/projects-orchestrator/`, run
