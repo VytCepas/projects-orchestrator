@@ -23,6 +23,7 @@ from pathlib import Path
 
 import yaml
 
+from projects_orchestrator import persist
 from projects_orchestrator.adapters.generic import infer_descriptor, is_git_repo
 from projects_orchestrator.descriptor import (
     ProjectDescriptor,
@@ -411,34 +412,52 @@ def register_project(fleet_file: Path, project: Path) -> RegisterOutcome:
         ``added=False`` rather than an exception.
     """
     resolved = project.resolve()
-    existing = load_fleet_config(fleet_file) if fleet_file.is_file() else None
-    warnings = existing.warnings if existing is not None else ()
-    listed = {p.resolve() for p in (existing.projects if existing is not None else ())}
-    if resolved in listed:
-        return RegisterOutcome(fleet_file, resolved, added=False, warnings=warnings)
+    # THE LOCK SPANS THE READ AS WELL AS THE WRITE (#182), which is the whole
+    # point: this is a read-modify-write of the file that DEFINES the fleet.
+    # Two concurrent `register` calls both loaded the old list, both rewrote it
+    # whole, and the second silently discarded the first project — a lost update
+    # that un-manages a repo with no signal anywhere. Locking only around the
+    # write would leave exactly that race.
+    #
+    # The write is atomic and fsynced for the second half of the same argument:
+    # an interrupt mid-write left a truncated fleet file, and a truncated fleet
+    # file loads as an EMPTY fleet rather than as an error.
+    with persist.locked(fleet_file):
+        existing = load_fleet_config(fleet_file) if fleet_file.is_file() else None
+        warnings = existing.warnings if existing is not None else ()
+        listed = {p.resolve() for p in (existing.projects if existing is not None else ())}
+        if resolved in listed:
+            return RegisterOutcome(fleet_file, resolved, added=False, warnings=warnings)
 
-    projects = sorted({*listed, resolved}, key=str)
-    document: dict[str, object] = {
-        "projects": [str(p) for p in projects],
-        "roots": [str(p) for p in (existing.roots if existing is not None else ())],
-    }
-    # Preserve fields the loader treats as first-class but this rewrite would
-    # otherwise silently drop — an omitted `exclude` re-admits excluded repos and
-    # a dropped `include_plain_repos` flips discovery, both invisibly.
-    if existing is not None and existing.exclude:
-        document["exclude"] = list(existing.exclude)
-    if existing is not None and existing.include_plain_repos:
-        document["include_plain_repos"] = existing.include_plain_repos
-    try:
-        fleet_file.parent.mkdir(parents=True, exist_ok=True)
-        fleet_file.write_text(yaml.safe_dump(document, sort_keys=True), encoding="utf-8")
-    except OSError as exc:
-        return RegisterOutcome(
-            fleet_file,
-            resolved,
-            added=False,
-            warnings=(*warnings, f"cannot write {fleet_file}: {exc}"),
-        )
+        projects = sorted({*listed, resolved}, key=str)
+        document: dict[str, object] = {
+            "projects": [str(p) for p in projects],
+            "roots": [str(p) for p in (existing.roots if existing is not None else ())],
+        }
+        # Preserve fields the loader treats as first-class but this rewrite would
+        # otherwise silently drop — an omitted `exclude` re-admits excluded repos and
+        # a dropped `include_plain_repos` flips discovery, both invisibly.
+        if existing is not None and existing.exclude:
+            document["exclude"] = list(existing.exclude)
+        if existing is not None and existing.include_plain_repos:
+            document["include_plain_repos"] = existing.include_plain_repos
+        try:
+            # WRITE THROUGH A SYMLINK, never over it (raised in review on #240).
+            # `atomic_write` replaces a directory entry, so pointing --fleet at
+            # a symlink would have replaced the LINK with a regular file:
+            # registration reports success, the link is gone, and the canonical
+            # file it pointed at still holds the old list. The previous
+            # `write_text` followed the link, so this was a regression the
+            # hardening introduced rather than a pre-existing gap.
+            target = fleet_file.resolve() if fleet_file.is_symlink() else fleet_file
+            persist.atomic_write(target, yaml.safe_dump(document, sort_keys=True))
+        except OSError as exc:
+            return RegisterOutcome(
+                fleet_file,
+                resolved,
+                added=False,
+                warnings=(*warnings, f"cannot write {fleet_file}: {exc}"),
+            )
     return RegisterOutcome(fleet_file, resolved, added=True, warnings=warnings)
 
 

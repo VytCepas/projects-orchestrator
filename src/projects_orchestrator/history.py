@@ -15,10 +15,10 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from projects_orchestrator import persist
 from projects_orchestrator.checks import CheckResult
 
 _STATE_DIRNAME = "projects-orchestrator"
@@ -65,16 +65,28 @@ def record(results: list[CheckResult], path: Path | None = None) -> None:
     if not fresh:
         return
     path = path or history_path()
-    kept = load_history(path)
-    kept.extend(HistoryEntry(r.project, r.task, r.status, r.checked_at) for r in fresh)
-    kept = kept[-MAX_ENTRIES:]
-    body = "\n".join(
-        json.dumps(
-            {"project": e.project, "task": e.task, "status": e.status, "checked_at": e.checked_at}
+    # THE LOCK SPANS THE LOAD, not just the write (raised in review on #240).
+    # `record` is a read-modify-write: two concurrent `checks` or `watch` runs
+    # both loaded the same snapshot, both appended to it, and the second
+    # replacement discarded the first run's entries. Locking only the write
+    # leaves exactly that race — the same mistake, in the same shape, that
+    # `registry.register_project` documents avoiding.
+    with persist.locked(path):
+        kept = load_history(path)
+        kept.extend(HistoryEntry(r.project, r.task, r.status, r.checked_at) for r in fresh)
+        kept = kept[-MAX_ENTRIES:]
+        body = "\n".join(
+            json.dumps(
+                {
+                    "project": e.project,
+                    "task": e.task,
+                    "status": e.status,
+                    "checked_at": e.checked_at,
+                }
+            )
+            for e in kept
         )
-        for e in kept
-    )
-    _atomic_write(path, body + "\n")
+        _atomic_write(path, body + "\n")
 
 
 def load_history(path: Path | None = None) -> list[HistoryEntry]:
@@ -155,16 +167,13 @@ def transitions(entries: list[HistoryEntry]) -> list[HistoryEntry]:
 
 
 def _atomic_write(path: Path, text: str) -> None:
-    """Write via temp file + replace so an interrupt can't truncate the log."""
+    """Append-log write, now locked and fsynced via the shared helper (#181).
+
+    Was atomic but UNLOCKED, so two concurrent appends both read the log, both
+    rewrote it whole, and one set of events vanished.
+    """
+    # NOT `locked_write`: `record` holds the lock across its whole
+    # read-modify-write, and re-entering a held flock from the same process is
+    # not something to rely on.
     with contextlib.suppress(OSError, ValueError):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
-        tmp_path = Path(tmp)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(text)
-            tmp_path.replace(path)
-        except OSError:
-            with contextlib.suppress(OSError):
-                tmp_path.unlink()
-            raise
+        persist.atomic_write(path, text)

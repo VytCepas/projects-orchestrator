@@ -40,6 +40,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from uuid import uuid4
 
+from projects_orchestrator import persist
 from projects_orchestrator.cost import RunCost, from_record
 from projects_orchestrator.naming import safe_component
 from projects_orchestrator.procs import is_our_process, proc_start_ticks
@@ -151,11 +152,11 @@ def save(run: AgentRun) -> bool:
     dead on the strength of a torn read.
     """
     path = _run_file(run.id)
-    tmp = path.with_suffix(".json.tmp")
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(json.dumps(asdict(run), indent=2), encoding="utf-8")
-        tmp.replace(path)
+        # Locked and fsynced via the shared helper (#181). The temp file here
+        # was a FIXED name, so two concurrent writers raced on the same tmp path
+        # and one could replace the other's half-written bytes.
+        persist.locked_write(path, json.dumps(asdict(run), indent=2))
     except OSError:
         return False
     return True

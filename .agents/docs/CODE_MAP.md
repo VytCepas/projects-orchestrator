@@ -387,6 +387,14 @@ Diff the live GCP inventory against the fleet — what does no repo govern?
 - `def accounted_keys` — Every (name, region) the fleet accounts for, lower-cased.
 - `def find_orphans` — Report resources no fleet project accounts for; never raises.
 
+### `projects_orchestrator/persist.py`
+
+One hardened write path for every file the orchestrator persists.
+
+- `def locked` — Hold an exclusive lock across a load-modify-write; best-effort.
+- `def atomic_write` — Write via temp file + fsync + ``os.replace``; raises only on OSError.
+- `def locked_write` — Take the lock and write atomically — the whole-file case.
+
 ### `projects_orchestrator/pool.py`
 
 Bounded thread-pool fan-out for per-project engine work.
