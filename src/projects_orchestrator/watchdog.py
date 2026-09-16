@@ -46,6 +46,12 @@ NEVER = "never"
 FRESH = "fresh"
 STALE = "stale"
 UNKNOWN = "unknown"
+#: The heartbeat is stamped in the FUTURE. Clamping the age to zero fixed the
+#: arithmetic and not the verdict: zero age still compares as fresh, so a dead
+#: timer stayed hidden until wall time caught up and then advanced two more
+#: intervals. It is its own state because the remedy is different — the clock is
+#: wrong, not the timer (raised in review on #244).
+SKEWED = "skewed"
 
 
 def watch_path() -> Path:
@@ -63,7 +69,7 @@ class WatchState:
         last_pass: ISO-8601 timestamp of the last recorded pass (``""`` = never).
         interval_seconds: The declared schedule (``0`` = not declared).
         age_seconds: Seconds since the last pass (``0`` when never).
-        status: ``never`` | ``fresh`` | ``stale`` | ``unknown``.
+        status: ``never`` | ``fresh`` | ``stale`` | ``unknown`` | ``skewed``.
     """
 
     last_pass: str = ""
@@ -79,7 +85,7 @@ class WatchState:
         not a dead monitor, and conflating the two would make the signal noisy
         on exactly the boxes that are working.
         """
-        return self.status in {NEVER, STALE}
+        return self.status in {NEVER, STALE, SKEWED}
 
 
 def record_pass(
@@ -138,15 +144,19 @@ def read_state(path: Path | None = None, now: _dt.datetime | None = None) -> Wat
     interval = max(0, interval)
 
     moment = now or _dt.datetime.now(tz=_dt.UTC)
-    # Clamped at zero: a heartbeat stamped in the future (a clock correction, a
-    # machine that woke with a bad RTC) is not negative age, and letting it go
-    # negative would read as freshly-run for as long as the skew lasts.
-    age = max(0, int((moment - last).total_seconds()))
+    delta = int((moment - last).total_seconds())
+    if delta < 0:
+        # STAMPED IN THE FUTURE. Clamping the age to zero fixes the arithmetic
+        # and not the verdict — zero age still compares as fresh, so a dead
+        # timer stays hidden until wall time catches up and then advances two
+        # more intervals. Say the clock is wrong instead of implying the timer
+        # is fine.
+        return WatchState(stamp, interval, 0, SKEWED)
 
     if interval <= 0:
-        return WatchState(stamp, 0, age, UNKNOWN)
-    status = STALE if age > interval * STALE_INTERVALS else FRESH
-    return WatchState(stamp, interval, age, status)
+        return WatchState(stamp, 0, delta, UNKNOWN)
+    status = STALE if delta > interval * STALE_INTERVALS else FRESH
+    return WatchState(stamp, interval, delta, status)
 
 
 def describe(state: WatchState) -> str:
@@ -155,6 +165,12 @@ def describe(state: WatchState) -> str:
         return "watch has never run — the scheduled pass is not installed or has never completed"
     if state.status == UNKNOWN:
         return f"watch last ran {_age(state.age_seconds)} ago; no interval declared, so staleness cannot be judged"
+    if state.status == SKEWED:
+        return (
+            f"watch's last pass is stamped in the future ({state.last_pass}) — "
+            "the clock is wrong, so staleness cannot be judged and a dead timer "
+            "would stay hidden"
+        )
     if state.status == STALE:
         return (
             f"watch last ran {_age(state.age_seconds)} ago, "

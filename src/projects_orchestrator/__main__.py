@@ -234,6 +234,12 @@ def _cmd_status(args: argparse.Namespace) -> int:
             print(f"unknown project: {args.project}", file=sys.stderr)
             return 2
         status = collect_status(descriptor)
+        # Every status mode, not just the unfiltered table: a human drilling
+        # into one project, and a monitor reading --json, were both told
+        # nothing when the timer had stopped (raised in review on #244). It
+        # goes to stderr so the JSON document on stdout stays exactly the
+        # array/object its consumers parse.
+        _print_watch_state()
         if args.json:
             return _emit_json(asdict(status))
         print(f"{status.project}: {status.health} on {status.branch or '?'}")
@@ -242,6 +248,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
     selected = _select(args, snapshots)
     if selected is None:
         return 2
+    _print_watch_state()
     if args.json:
         emitted = _emit_json([asdict(s.status) for s in selected])
         return _unresolved_rc(fleet, emitted)
@@ -251,7 +258,6 @@ def _cmd_status(args: argparse.Namespace) -> int:
     # Pass the FULL fleet as the version reference so a filtered row still shows
     # "behind" when a project the filter hid is newer — not a false "=".
     print(render_table(fleet_rows(selected, snapshots)))
-    _print_watch_state()
     return _unresolved_rc(fleet)
 
 

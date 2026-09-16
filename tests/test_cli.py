@@ -1063,3 +1063,21 @@ def test_a_watch_pass_records_its_own_heartbeat(fleet_dir: Path) -> None:
     make_project(fleet_dir, "alpha", tooling={"lint": "true"})
     main(["watch", "--root", str(fleet_dir), "--interval", "3600"])
     assert watchdog.read_state().status == watchdog.FRESH
+
+
+def test_status_for_one_project_also_warns_about_watch(fleet_dir: Path, capsys) -> None:
+    """Raised in review on #244: `status PROJECT` returned before the heartbeat
+    was read, so a human drilling into one project was told nothing."""
+    make_project(fleet_dir, "alpha")
+    main(["status", "alpha", "--root", str(fleet_dir)])
+    assert "watch has never run" in capsys.readouterr().err
+
+
+def test_status_json_also_warns_about_watch(fleet_dir: Path, capsys) -> None:
+    """The warning goes to stderr so the JSON document on stdout stays exactly
+    the array its consumers parse."""
+    make_project(fleet_dir, "alpha")
+    main(["status", "--root", str(fleet_dir), "--json"])
+    captured = capsys.readouterr()
+    assert "watch has never run" in captured.err
+    assert json.loads(captured.out) == [] or isinstance(json.loads(captured.out), list)

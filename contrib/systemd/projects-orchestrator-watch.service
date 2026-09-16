@@ -28,7 +28,7 @@ EnvironmentFile=-%h/.config/projects-orchestrator/watch.env
 # your copy if you want every firing to run every gate from scratch. The CI
 # and cloud probes always run regardless — remote state moves without any
 # local edit, so it is refreshed every firing.
-ExecStart=/bin/sh -c 'exec %h/.local/bin/projects-orchestrator watch --changed-only --root "${PO_FLEET_ROOT:-%h/projects}" ${PO_WATCH_WEBHOOK:+--webhook "$PO_WATCH_WEBHOOK"}'
+ExecStart=/bin/sh -c 'exec %h/.local/bin/projects-orchestrator watch --changed-only --interval "${PO_WATCH_INTERVAL:-3600}" --root "${PO_FLEET_ROOT:-%h/projects}" ${PO_WATCH_WEBHOOK:+--webhook "$PO_WATCH_WEBHOOK"}'
 
 # `watch` exits 1 when the pass was EVENTFUL — an alert fired and (if
 # configured) was pushed. That is a run that worked and has something for you
