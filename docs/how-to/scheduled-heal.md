@@ -9,6 +9,13 @@ runs it across the whole fleet, unattended, on a timer.
 Read this first, because unlike the digest, **an unattended heal spends money and
 opens PRs**. Everything below is about keeping that bounded.
 
+> **Platforms.** The timer that ships is a **systemd user unit**, so the install
+> below schedules on Linux, and on WSL with systemd enabled. **No launchd plist
+> ships, so on macOS nothing schedules this.** There `heal --all` runs only when
+> you run it. "Unattended-safe" describes the spend cap and the draft-PR boundary,
+> not a schedule that exists on every platform. The [cron form](#cron-instead) is
+> the one route on a Mac, and it has not been tested there (#251).
+
 ## What one pass does
 
 ```bash

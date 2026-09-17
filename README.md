@@ -37,7 +37,7 @@ projects-orchestrator work --list              # every run: state, cost, and whe
 projects-orchestrator work <project> --attach  # take over a needs-human run, interactively
 projects-orchestrator campaign <file>          # declarative fleet campaign: canary first, --apply to fan out
 projects-orchestrator heal <project>           # fix a red lint/test gate via a scoped agent — lands a DRAFT PR
-projects-orchestrator heal --all --limit 3     # heal the whole fleet, unattended-safe (caps spend); see docs/how-to/scheduled-heal.md
+projects-orchestrator heal --all --limit 3     # heal the whole fleet, unattended-safe (caps spend); schedulers ship for Linux/systemd only — see docs/how-to/scheduled-heal.md
 projects-orchestrator deploy <project>         # dispatch the child's deploy workflow (--action deploy|rollback|restart; --apply)
 projects-orchestrator start <project>          # launch the project's run_command (detached, logged)
 projects-orchestrator stop <project>           # terminate the supervised process

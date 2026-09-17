@@ -8,6 +8,12 @@ Slack.
 
 This guide sets it up to run daily, unattended.
 
+> **Platforms.** The timer that ships is a **systemd user unit**, so the install
+> below schedules on Linux, and on WSL with systemd enabled. **No launchd plist
+> ships, so on macOS nothing schedules this.** There the digest runs only when you
+> run it, and fleet health is pull-only. The [cron form](#cron-instead) is the one
+> route on a Mac, and it has not been tested there (#251).
+
 ## Try it first
 
 ```bash
