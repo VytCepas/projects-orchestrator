@@ -8,6 +8,13 @@ refreshed view and — when a webhook is configured — pushes them. It chains
 what `checks`, `ci`, `cloud-status` and `notify` do separately, so a timer
 needs a single invocation.
 
+> **Platforms.** The timer that ships is a **systemd user unit**, so the install
+> below schedules on Linux, and on WSL with systemd enabled. **No launchd plist
+> ships and this guide has no cron form, so on macOS nothing schedules `watch`.**
+> There a pass runs only when you run it, fleet health is pull-only, and the
+> heartbeat reads `never` or the time of your last manual pass. Alerts reach
+> nobody unless you run `notify` yourself (#251).
+
 ```bash
 projects-orchestrator watch --interval 3600 --root ~/projects --webhook "$SLACK_WEBHOOK"
 ```
