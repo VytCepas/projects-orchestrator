@@ -221,7 +221,9 @@ def launch(
             detail="could not cut an isolated worktree (branch may be held by a kept failed run)",
         )
 
-    prompt = briefing.build_briefing(replace(descriptor, path=tree.path), task)
+    # `_default_land` commits and opens the draft PR without running a gate of its
+    # own, so the briefing must not promise one: the gate is the agent's (#255).
+    prompt = briefing.build_briefing(replace(descriptor, path=tree.path), task, reruns_gate=False)
     log_path = _log_path(run.id)
     run = replace(run, worktree=str(tree.path), branch=branch, log_path=str(log_path))
     try:

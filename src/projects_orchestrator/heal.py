@@ -237,6 +237,9 @@ def build_heal_prompt(descriptor: ProjectDescriptor, failing: tuple[CheckResult,
             "change, then stop — do not commit."
         ),
         evidence=evidence_from_checks(descriptor, failing),
+        # heal_project re-runs these gates in the worktree and commits only on a
+        # pass, so this is the one caller whose briefing may promise it (#255).
+        reruns_gate=True,
     )
 
 
