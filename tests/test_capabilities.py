@@ -142,3 +142,26 @@ def test_real_fixture_has_no_mcp_servers() -> None:
         _REAL_FIXTURE.read_text(encoding="utf-8"), "demo-service", _REAL_FIXTURE
     )
     assert inventory.mcp_servers == ()
+
+
+_THREE_COLUMN = """\
+## Skills
+
+| Skill | Source | Description |
+|---|---|---|
+| add_adr | plugin | Records an ADR |
+| plan | in-tree | a \\| b |
+"""
+
+
+def test_a_source_column_is_read_by_header_not_joined_into_the_detail() -> None:
+    """#259: project-init 1.2.2's skills table has a Source column."""
+    inventory = parse_capabilities(_THREE_COLUMN, "demo", Path("CAPABILITIES.md"))
+    got = [(s.name, s.source, s.detail) for s in inventory.skills]
+    assert got == [("add_adr", "plugin", "Records an ADR"), ("plan", "in-tree", "a | b")]
+
+
+def test_a_two_column_table_still_reads_as_before() -> None:
+    text = "## Skills\n\n| Skill | Description |\n|---|---|\n| plan | plan it |\n"
+    skill = parse_capabilities(text, "demo", Path("CAPABILITIES.md")).skills[0]
+    assert (skill.name, skill.source, skill.detail) == ("plan", "", "plan it")

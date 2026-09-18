@@ -166,7 +166,14 @@ def test_v2_capabilities_md_exposes_the_skill_inventory() -> None:
     inventory = parse_capabilities(
         _CAPABILITIES_V2.read_text(encoding="utf-8"), "demo-service", _CAPABILITIES_V2
     )
-    assert inventory.of_kind(SKILL), "the v2 capability inventory must expose skills"
+    skills = inventory.of_kind(SKILL)
+    assert skills, "the v2 capability inventory must expose skills"
+    # #259: assert the parsed FIELDS, not just that rows exist. project-init 1.2.2
+    # added a Source column, and a parser that joins cells after the name reads
+    # every description as "plugin | …" while this test stayed green.
+    for skill in skills:
+        assert skill.source in {"plugin", "in-tree"}, (skill.name, skill.source)
+        assert not skill.detail.startswith(("plugin |", "in-tree |")), skill.detail
 
 
 def test_v2_scaffold_result_seam_targets_agents_config() -> None:
