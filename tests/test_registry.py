@@ -11,7 +11,7 @@ from conftest import make_project
 from projects_orchestrator.registry import (
     _HINT_BUDGET,
     FleetConfig,
-    _main_worktree,
+    _git_dirs,
     default_fleet_config,
     discover,
     load_fleet_config,
@@ -536,16 +536,36 @@ def test_a_bare_repositorys_worktree_is_kept(tmp_path: Path) -> None:
     _repo_with_worktree(src, tmp_path / "src-wt")
     _git(tmp_path, "clone", "-q", "--bare", str(src), str(tmp_path / "root" / "proj.git"))
     _git(tmp_path / "root" / "proj.git", "worktree", "add", "-q", str(tmp_path / "root" / "proj"))
-    assert _main_worktree(tmp_path / "root" / "proj") is None
     config = FleetConfig(roots=(tmp_path / "root",), include_plain_repos=True)
     assert "proj" in _names(config)
 
 
-def test_main_worktree_reads_only_a_linked_worktree_pointer(tmp_path: Path) -> None:
+def test_a_separate_git_dir_repos_worktree_is_not_a_second_project(tmp_path: Path) -> None:
+    # Codex on #261: `git init --separate-git-dir` puts the worktrees under
+    # <git-dir>/worktrees/, with no `.git` component in the pointer.
+    repo = tmp_path / "root" / "repo"
+    repo.parent.mkdir()
+    _git(
+        tmp_path, "init", "-q", "-b", "main", "--separate-git-dir", str(tmp_path / "gd"), str(repo)
+    )
+    (repo / "f").write_text("x", encoding="utf-8")
+    _git(repo, "add", "f")
+    _git(repo, "commit", "-q", "-m", "init")
+    _git(repo, "worktree", "add", "-q", "-b", "task", str(tmp_path / "root" / "repo-wt"))
+    config = FleetConfig(roots=(tmp_path / "root",), include_plain_repos=True)
+    assert _names(config) == ["repo"]
+
+
+def test_git_dirs_tells_a_linked_worktree_from_a_main_checkout(tmp_path: Path) -> None:
     _repo_with_worktree(tmp_path / "repo", tmp_path / "wt")
-    assert _main_worktree(tmp_path / "wt") == (tmp_path / "repo").resolve()
-    assert _main_worktree(tmp_path / "repo") is None  # an ordinary clone: .git is a dir
+    main = _git_dirs(tmp_path / "repo")
+    linked = _git_dirs(tmp_path / "wt")
+    assert main is not None and linked is not None
+    assert main[0] == main[1]  # a main checkout: one directory for both
+    assert linked[0] != linked[1] and linked[1] == main[1]  # same repository
     sub = tmp_path / "sub"
+    (tmp_path / "modgit").mkdir()
     sub.mkdir()
-    (sub / ".git").write_text("gitdir: ../repo/.git/modules/sub\n", encoding="utf-8")
-    assert _main_worktree(sub) is None  # a submodule, not a worktree
+    (sub / ".git").write_text(f"gitdir: {tmp_path / 'modgit'}\n", encoding="utf-8")
+    got = _git_dirs(sub)
+    assert got is not None and got[0] == got[1]  # a submodule reads as a main checkout

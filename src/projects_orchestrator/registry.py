@@ -319,31 +319,37 @@ def _nested_warnings(config: FleetConfig, governed: set[Path]) -> list[str]:
     return warnings
 
 
-def _main_worktree(path: Path) -> Path | None:
-    """The main working tree of a LINKED worktree at ``path``; ``None`` otherwise.
+def _git_dirs(path: Path) -> tuple[Path, Path] | None:
+    """``(gitdir, commondir)`` of the checkout at ``path``; ``None`` if unreadable.
 
-    A linked worktree's ``.git`` is a file, ``gitdir: <repo>/.git/worktrees/<name>``,
-    and ``<repo>`` is its main working tree. A bare repository has none — its
-    worktrees point at ``<repo>.git/worktrees/<name>``, with no ``.git`` component —
-    and a submodule points into ``.git/modules/``. Both return ``None``, as does
-    anything unreadable: this only ever answers "yes, and here is the main tree".
+    Git's own answer to "which repository is this": a LINKED worktree's gitdir holds a
+    ``commondir`` file naming the repository it belongs to, so its gitdir and common
+    dir differ. A main checkout has one directory for both — an ordinary ``.git``
+    directory, or, under ``git init --separate-git-dir``, a ``.git`` file pointing at
+    it. Reading ``commondir`` rather than matching ``…/.git/worktrees/…`` in the path
+    is what makes the separate-git-dir layout work (Codex on #261). A submodule's
+    ``.git`` file points at a gitdir with no ``commondir``, so it reads as a main
+    checkout and is never mistaken for a second checkout of its superproject.
     """
     dot_git = path / ".git"
     try:
+        if dot_git.is_dir():
+            resolved = dot_git.resolve()
+            return resolved, resolved
         if not dot_git.is_file():
             return None
         first = dot_git.read_text(encoding="utf-8", errors="replace").partition("\n")[0]
+        if not first.startswith("gitdir:"):
+            return None
+        gitdir = Path(first[len("gitdir:") :].strip())
+        gitdir = (gitdir if gitdir.is_absolute() else path / gitdir).resolve()
+        commondir_file = gitdir / "commondir"
+        if not commondir_file.is_file():
+            return gitdir, gitdir
+        pointer = Path(commondir_file.read_text(encoding="utf-8", errors="replace").strip())
+        return gitdir, (pointer if pointer.is_absolute() else gitdir / pointer).resolve()
     except OSError:
         return None
-    if not first.startswith("gitdir:"):
-        return None
-    gitdir = Path(first[len("gitdir:") :].strip())
-    if not gitdir.is_absolute():
-        gitdir = path / gitdir
-    parts = gitdir.parts
-    if len(parts) >= 4 and parts[-2] == "worktrees" and parts[-3] == ".git":
-        return Path(*parts[:-3])
-    return None
 
 
 def discover(config: FleetConfig) -> Fleet:
@@ -363,8 +369,10 @@ def discover(config: FleetConfig) -> Fleet:
 
     seen: set[Path] = set()
     found: list[ProjectDescriptor] = []
-    everywhere = {c.resolve() for c in candidates}
     explicit = {p.resolve() for p in config.projects}
+    dirs = {c.resolve(): _git_dirs(c.resolve()) for c in candidates}
+    # The repositories whose MAIN checkout is a candidate, keyed by common git dir.
+    mains = {d[1] for d in dirs.values() if d is not None and d[0] == d[1]}
     for candidate in candidates:
         resolved = candidate.resolve()
         if resolved in seen:
@@ -378,8 +386,9 @@ def discover(config: FleetConfig) -> Fleet:
         # main checkout lives outside the fleet, is the only checkout there is,
         # which is why `is_git_repo` admits worktrees at all. Listed explicitly
         # under `projects:`, it is kept: the operator asked for that path.
-        main = _main_worktree(resolved)
-        if main is not None and resolved not in explicit and main.resolve() in everywhere:
+        repo = dirs.get(resolved)
+        linked = repo is not None and repo[0] != repo[1]
+        if linked and resolved not in explicit and repo[1] in mains:
             continue
         descriptor = load_descriptor(resolved)
         if descriptor is None and config.include_plain_repos:
