@@ -387,8 +387,12 @@ def discover(config: FleetConfig) -> Fleet:
         # which is why `is_git_repo` admits worktrees at all. Listed explicitly
         # under `projects:`, it is kept: the operator asked for that path.
         repo = dirs.get(resolved)
-        linked = repo is not None and repo[0] != repo[1]
-        if linked and resolved not in explicit and repo[1] in mains:
+        if (
+            repo is not None
+            and repo[0] != repo[1]  # a linked worktree: its gitdir is not the repo's
+            and resolved not in explicit
+            and repo[1] in mains
+        ):
             continue
         descriptor = load_descriptor(resolved)
         if descriptor is None and config.include_plain_repos:
