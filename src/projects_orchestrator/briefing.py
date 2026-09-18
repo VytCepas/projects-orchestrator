@@ -38,6 +38,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from projects_orchestrator.checks import DEFAULT_TASKS
 from projects_orchestrator.descriptor import ProjectDescriptor
 
 #: Kinds of evidence, i.e. why a run exists at all. Open by design — a new
@@ -47,25 +48,61 @@ DOCTOR = "doctor"
 DRIFT = "drift"
 CI = "ci"
 
-#: The agent never commits, pushes, or merges — in ANY run, not merely in heal.
-#: The harness owns the write boundary (ADR-007 §3), and it must own it in one
-#: place: an agent that commits for itself is an agent whose output is no longer
-#: bounded by the thing that verifies it.
 #: The file a blocked agent writes to hand off to a human, instead of guessing.
 #: :mod:`work` detects it after the run and settles the run to ``needs-human``,
 #: keeping the worktree so ``work --attach`` can pick it up (ADR-006 §2).
 NEEDS_HUMAN_MARKER = "NEEDS_HUMAN.md"
 
-_CONTRACT = (
+#: The agent never commits, pushes, or merges — in ANY run, not merely in heal.
+#: The harness owns the write boundary (ADR-007 §3), and it must own it in one
+#: place: an agent that commits for itself has stepped around the landing step,
+#: which is the only place that decides what reaches a branch.
+_BOUNDARY = (
     "Do NOT commit, push, tag, or merge anything, and do not touch the default "
-    "branch. You are working in a throwaway checkout. The orchestrator re-runs "
-    "the failing gate itself, commits your work only if it now passes, and lands "
-    "it as a pull request a human reviews. Your job is the smallest correct "
-    "change; leave unrelated files and working code alone. "
+    "branch. You are working in a throwaway checkout."
+)
+
+#: How the work lands when the caller re-runs the failing gate and commits only on
+#: a pass. Heal does exactly that; a caller that does not must never send this.
+_VERIFIED_LANDING = (
+    "The orchestrator re-runs the failing gate itself, commits your work only if it "
+    "now passes, and lands it as a pull request a human reviews."
+)
+
+#: How the work lands for every other run. ``work`` commits whatever the agent
+#: leaves and opens a draft PR without running a gate of its own, so the gate is
+#: the agent's to run — and an agent told the orchestrator verifies has no reason
+#: to (#255). "Of its own" is load-bearing: the commit and push do not skip a
+#: child's git hooks, which may run a gate where installed — but nothing
+#: guarantees they are, so the briefing cannot lean on them.
+_UNVERIFIED_LANDING = (
+    "When you finish, the orchestrator commits whatever you leave in the checkout "
+    "and lands it as a draft pull request a human reviews. It runs no gate of its "
+    "own first."
+)
+
+_SCOPE_AND_HANDOFF = (
+    "Your job is the smallest correct change; leave unrelated files and working "
+    "code alone. "
     f"If you hit an ambiguity you genuinely cannot resolve from the repository — a "
     f"decision only a human can make — do NOT guess: write a file named "
     f"`{NEEDS_HUMAN_MARKER}` in the repo root explaining what you need decided, and "
     f"stop. A human will take over your checkout from there."
+)
+
+_DECLARED_GATES = (
+    "Checking the change is your job, not the orchestrator's: before you finish, run "
+    "this project's declared gates yourself and leave them passing:"
+)
+
+#: ADR-007's wording for a project that declares no gate: the scaffold's gate is
+#: `just ci`, named as where to look rather than asserted to exist, because the
+#: orchestrator never guesses a command (ADR-003).
+_NO_DECLARED_GATE = (
+    "Checking the change is your job, not the orchestrator's, and this project "
+    "declares no lint or test command. Find the gate it does use — `just ci` in a "
+    "project-init scaffold, otherwise what its AGENTS.md or CI configuration runs "
+    "— and run it yourself before you finish."
 )
 
 _UNTRUSTED_PREAMBLE = (
@@ -103,8 +140,7 @@ def evidence_from_checks(
     """Turn failing :class:`~projects_orchestrator.checks.CheckResult`s into evidence.
 
     Kept structural (duck-typed on ``.task``/``.detail``) so the briefing does not
-    have to import the checks module and grow a dependency on the engine's
-    result shapes.
+    grow a dependency on the engine's result shapes.
     """
     items: list[Evidence] = []
     for result in failing:
@@ -192,8 +228,33 @@ def _render_evidence(item: Evidence) -> list[str]:
     return lines
 
 
+def _render_gate_duty(descriptor: ProjectDescriptor) -> list[str]:
+    """Name the gates an agent must run itself when nothing runs them after it.
+
+    The gates are the ones ``checks`` runs for the project, with the commands the
+    project declares — read from the child's config.yaml, so fenced exactly as
+    evidence commands are. A project that declares none gets ADR-007's wording
+    instead of a guessed command.
+    """
+    declared = [
+        (task, command)
+        for task in DEFAULT_TASKS
+        if (command := descriptor.tooling.get(task, "").strip())
+    ]
+    if not declared:
+        return [_NO_DECLARED_GATE]
+    lines = [_DECLARED_GATES]
+    for task, command in declared:
+        lines += [f"- **{task}**", *_fenced("runs:", command)]
+    return lines
+
+
 def build_briefing(
-    descriptor: ProjectDescriptor, task: str, evidence: tuple[Evidence, ...] = ()
+    descriptor: ProjectDescriptor,
+    task: str,
+    evidence: tuple[Evidence, ...] = (),
+    *,
+    reruns_gate: bool = False,
 ) -> str:
     """Render the prompt handed to a coding agent (pure).
 
@@ -203,11 +264,17 @@ def build_briefing(
         evidence: Why it was summoned. May be empty — an operator-typed task
             ("add a health endpoint") has no failure behind it, and inventing one
             would be worse than admitting there is none.
+        reruns_gate: Whether the caller re-runs the failing gate itself and
+            commits only on a pass, as heal does. Only then may the rules promise
+            it. Otherwise — ``work`` — the rules say the work lands as it is and
+            name the project's gates as the agent's to run (#255). Defaults to
+            the promise every caller can keep.
 
     Returns:
         A prompt carrying the task, the evidence, and the output contract — and
         nothing the agent could have read for itself.
     """
+    landing = _VERIFIED_LANDING if reruns_gate else _UNVERIFIED_LANDING
     lines = [
         f"You are working on the project {_inline(descriptor.name)}.",
         "",
@@ -217,9 +284,11 @@ def build_briefing(
         "",
         "## The rules",
         "",
-        _CONTRACT,
+        f"{_BOUNDARY} {landing} {_SCOPE_AND_HANDOFF}",
         "",
     ]
+    if not reruns_gate:
+        lines += [*_render_gate_duty(descriptor), ""]
     if evidence:
         lines += ["## Why you are here", "", _UNTRUSTED_PREAMBLE, ""]
         for item in evidence:

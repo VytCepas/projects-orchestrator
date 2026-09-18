@@ -227,8 +227,9 @@ def open_draft_pr(worktree: Path, branch: str, title: str, body: str) -> Landing
 def commit_all(worktree: Path, message: str) -> Landing:
     """Stage and commit everything the agent changed; report the outcome.
 
-    The briefing tells the agent NOT to commit — the harness commits after it has
-    re-verified the work — so the agent's edits sit uncommitted in the worktree.
+    The briefing tells the agent NOT to commit — the harness owns the commit
+    (ADR-007 §3) — so the agent's edits sit uncommitted in the worktree. No gate of
+    the orchestrator's runs first: this commits whatever the agent left (#255).
     Skipping this and pushing straight away sends only the branch ref cut from
     ``HEAD``: an empty diff, and a PR with nothing in it (or a ``gh pr create``
     that fails for having no commits). The commit is not optional plumbing; it is
