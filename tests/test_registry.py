@@ -590,3 +590,22 @@ def test_a_nested_worktree_of_a_governed_repo_is_not_warned_about(tmp_path: Path
     fleet = discover(FleetConfig(roots=(tmp_path,), include_plain_repos=True))
     assert [d.path.name for d in fleet.descriptors] == ["repo"]
     assert not [w for w in fleet.warnings if "NOT discovered" in w], fleet.warnings
+
+
+def test_an_explicit_worktree_suppresses_its_scanned_sibling(tmp_path: Path) -> None:
+    # Codex on #261: two worktrees of one repository, one listed explicitly and one
+    # scanned, with no main checkout in the fleet: the scanned one is a duplicate.
+    _repo_with_worktree(tmp_path / "elsewhere" / "repo", tmp_path / "root" / "wt-a")
+    _git(
+        tmp_path / "elsewhere" / "repo",
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "b",
+        str(tmp_path / "root" / "wt-b"),
+    )
+    config = FleetConfig(
+        roots=(tmp_path / "root",), projects=(tmp_path / "root" / "wt-a",), include_plain_repos=True
+    )
+    assert _names(config) == ["wt-a"]

@@ -399,8 +399,13 @@ def discover(config: FleetConfig) -> Fleet:
     # git dir. Built from admitted checkouts, not from every candidate: a main checkout
     # without a descriptor (one added only on a worktree branch) is rejected below, and
     # suppressing its worktree as well would drop the repository entirely (Codex on #261).
+    # An EXPLICITLY listed linked worktree holds its repository too: the operator named
+    # that checkout, so a scanned sibling worktree is a duplicate of it, not another
+    # project (Codex on #261). The explicit path itself is exempt from the skip below.
     mains = {
-        d[1] for r, d in dirs.items() if d is not None and d[0] == d[1] and admitted[r] is not None
+        d[1]
+        for r, d in dirs.items()
+        if d is not None and admitted[r] is not None and (d[0] == d[1] or r in explicit)
     }
     seen: set[Path] = set()
     for candidate in candidates:
