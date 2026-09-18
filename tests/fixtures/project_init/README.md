@@ -21,8 +21,8 @@ the contract-v2 shape. Both are guarded by `tests/test_contract.py`.
 
 ## How to refresh (pin to a project-init version)
 
-The v2 fixtures were generated with **project-init 1.1.7** (the release that adds
-the optional `ci:` block, VytCepas/project-init#828) via:
+The v2 fixtures were generated with **project-init 1.2.2** (refreshed for #179; 1.1.7
+was the release that added the optional `ci:` block, VytCepas/project-init#828) via:
 
 ```sh
 project-init <target> \
