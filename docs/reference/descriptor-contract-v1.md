@@ -35,8 +35,8 @@ this file exists and is readable.
 | `project.project_init_version` | string (`MAJOR.MINOR.PATCH`) | `Scaffold` column + `Latest` staleness compare | `unknown` (not comparable) |
 | `language` | string | descriptor `language` | `unknown` |
 | `delivery` | string (`library`/`service`/`prototype`) | descriptor `delivery` | `unknown` |
-| `memory.tier` | int (`0`–`3`) | memory tier; selects the retrieval surface | `0` |
-| `memory.stack` | string | declared backend (`auto`/`obsidian-only`/…) | `unknown` |
+| `memory.tier` | int (`0`–`3`) | memory tier; selects the retrieval surface. **Derived from `memory.stack`** when the stack is on the ladder; a tier that disagrees is warned about (so `doctor` fails `config`), never obeyed (#257) | `0` |
+| `memory.stack` | string | declared backend (`auto`/`obsidian-only`/…); the source of truth for the tier | `unknown`; `none` when the whole `memory:` block is absent at contract ≥ 1 (a declined project renders no block, #257) |
 | `memory.memory_path` | string (repo-relative) | memory directory location (the anchor) | `.claude/memory` |
 | `memory.vault_path` | string (repo-relative) | Obsidian vault; **read only at tier ≥ 1** | `None` |
 | `memory.graph_path` | string (repo-relative) | graphify graph; **read only at tier ≥ 2** | `None` |

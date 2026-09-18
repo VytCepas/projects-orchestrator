@@ -178,7 +178,10 @@ def make_memory_project(
         lines.append(f"  graph_path: {graph_path}")
     if rag_endpoint:
         lines.append(f"  rag_endpoint: {rag_endpoint}")
-    stack = "obsidian-graphify-rag" if tier >= 3 else "obsidian-graphify"
+    # The stack that carries this tier: the reader derives the tier from the
+    # stack (#257), so a fixture pairing tier 0 with a graphify stack would
+    # describe a tier-2 project that merely claims tier 0.
+    stack = ("auto", "obsidian-only", "obsidian-graphify", "obsidian-graphify-rag")[tier]
     return make_project(
         base,
         name,

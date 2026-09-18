@@ -238,3 +238,15 @@ def test_config_finding_fails_on_a_malformed_version(fleet_dir: Path) -> None:
     # The operator-visible path: the config check names the offending field.
     report = _with_version(fleet_dir, "d", '  project_init_contract_version: "two"')
     assert _finding(report, "config").status == "fail"
+
+
+def test_doctor_fails_a_tier_that_contradicts_its_stack(fleet_dir: Path) -> None:
+    """#257 (project-init #960): the edited child printed `[ok]`."""
+    text = (
+        "project:\n  name: edited\n  project_init_contract_version: 2\n"
+        "memory:\n  tier: 0\n  stack: obsidian-graphify\n  memory_path: .agents/memory\n"
+    )
+    make_project(fleet_dir, "edited", config_text=text, layout=".agents")
+    config = next(f for f in _report(fleet_dir, "edited").findings if f.check == "config")
+    assert config.status == "fail"
+    assert "disagrees with memory.stack 'obsidian-graphify'" in config.detail

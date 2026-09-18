@@ -88,6 +88,26 @@ def test_a_project_that_omitted_the_memory_key_still_warns(fleet_dir: Path) -> N
     assert any(item.category == "memory" for item in report[0].items)
 
 
+_CORE_SCAFFOLD_CONFIG = """\
+project:
+  name: "coreproj"
+  project_init_contract_version: 2
+language: python
+"""
+
+
+def test_a_core_scaffold_that_rendered_no_memory_block_gets_no_memory_item(
+    fleet_dir: Path,
+) -> None:
+    """#257 (project-init #964 rung 2): a real `core` scaffold does not write
+    `stack: none` into a block — it renders NO block, which the contract reads as
+    declined. The test above used a block no scaffold emits, so the #208 guard
+    passed its own test and never fired on a real `core` project."""
+    project = make_project(fleet_dir, "coreproj", config_text=_CORE_SCAFFOLD_CONFIG)
+    report = checklist([_descriptor(project)], {})
+    assert not any(item.category == "memory" for item in report[0].items)
+
+
 def test_missing_memory_action_targets_agents_layout(fleet_dir: Path) -> None:
     project = make_project(fleet_dir, "alpha", layout=".agents")
     report = checklist([_descriptor(project)], {})

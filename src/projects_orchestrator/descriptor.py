@@ -128,13 +128,15 @@ def layout_dir_present(project_dir: Path) -> str:
 
 _TOOLING_SUFFIX = "_command"
 
+CONTRACT_V1 = 1
 CONTRACT_V2 = 2
 
 DEPLOY_NONE = "none"
 
 #: ``memory.stack`` value meaning the project declared NO memory backend. It is a
-#: declaration, not an absence — ``unknown`` is the absence — and the shipped
-#: ``core`` preset emits it.
+#: declaration, not an absence — ``unknown`` is the absence. The shipped ``core``
+#: preset declares it the contract's way, by rendering no ``memory:`` block, so
+#: :func:`_memory_stack` reads that absence as ``none`` at contract v1+ (#257).
 MEMORY_STACK_NONE = "none"
 
 # Memory tier at which each higher-tier retrieval surface first appears
@@ -144,6 +146,21 @@ MEMORY_STACK_NONE = "none"
 TIER_VAULT = 1
 TIER_GRAPH = 2
 TIER_RAG = 3
+
+#: The recall ladder keyed by ``memory.stack``: project-init's ``_MEMORY_TIERS``
+#: plus the permanent ``obsidian`` alias. The stack is the source of truth and
+#: the tier is derived from it (project-init #960, #257 here). Gating on a
+#: declared tier that contradicts its stack stripped surfaces with no signal: a
+#: tier-2 child edited to ``tier: 0`` lost its graph and vault while ``doctor``
+#: said ``[ok]``. Pinned to the vendored descriptor schema by
+#: ``tests/test_contract.py``, so a producer change to the ladder fails here.
+STACK_TIERS: dict[str, int] = {
+    "auto": 0,
+    "obsidian-only": 1,
+    "obsidian": 1,
+    "obsidian-graphify": 2,
+    "obsidian-graphify-rag": 3,
+}
 
 
 @dataclass(frozen=True)
@@ -198,13 +215,17 @@ class ProjectDescriptor:
         delivery: How the project ships (library | service | prototype).
         contract_version: Descriptor-contract schema version (0 when absent).
         project_init_version: Scaffold version the project was rendered with.
-        memory_tier: Memory tier (0 auto … 3 obsidian-graphify-rag).
+        memory_tier: Memory tier (0 auto … 3 obsidian-graphify-rag), derived
+            from ``memory_stack`` when the stack is on the ladder — a declared
+            tier that disagrees is reported in ``warnings``, never obeyed (#257).
         memory_stack: Declared memory backend (``none`` | ``auto`` |
             ``obsidian-only`` | ``obsidian-graphify`` | ``obsidian-graphify-rag``);
             ``unknown`` when the config omits it. ``none`` is a real declaration
-            and not an absence — the shipped ``core`` preset emits it — and the
-            two must stay distinguishable, because a consumer that conflates them
-            asks the operator to build what the project declined (#208).
+            and not an absence — the shipped ``core`` preset makes it by
+            rendering no ``memory:`` block, read as ``none`` at contract v1+ —
+            and the two must stay distinguishable, because a consumer that
+            conflates them asks the operator to build what the project declined
+            (#208, #257).
         memory_path: Absolute path to the project's memory directory.
         vault_path: Obsidian vault directory; ``None`` below tier 1 or when
             undeclared (higher-tier retrieval surface, ADR-025 §4).
@@ -552,6 +573,51 @@ def _tier_gated_endpoint(memory: _MemorySurface) -> str:
     return endpoint.strip() if isinstance(endpoint, str) else ""
 
 
+def _memory_stack(raw: dict[str, Any], memory: dict[str, Any], contract_version: int) -> str:
+    """The declared memory backend, reading an absent block under the contract.
+
+    project-init renders the ``memory:`` block only when memory is on, so under
+    the descriptor contract (v1+) a config with NO block declared ``none``: the
+    producer's own reader rule says so. Reading that absence as ``unknown`` made
+    every real ``core`` scaffold look like a project that forgot its memory, and
+    the #208 guard in ``hardening`` — keyed on a declared ``none`` — never fired
+    on one, because no scaffold writes ``stack: none`` into a block (#257,
+    project-init #960/#964). A v0 config predates the rule, so there absence
+    stays ``unknown``; so does a present block that omits ``stack``.
+    """
+    if "memory" not in raw and contract_version >= CONTRACT_V1:
+        return MEMORY_STACK_NONE
+    return str(memory.get("stack") or "unknown")
+
+
+def _memory_tier(
+    memory: dict[str, Any], stack: str, warnings: list[str], malformed: list[str]
+) -> int:
+    """The tier to gate retrieval surfaces on: the stack's, never a contradiction.
+
+    ``memory.tier`` gates which surfaces are read at all, so a silent coercion
+    to 0 downgrades a tier-3 project to flat files with no signal (#216); a
+    malformed value is recorded exactly as before. What changed (#257): for a
+    stack on the ladder the tier is DERIVED, and a declared tier that disagrees
+    is reported rather than obeyed. An absent or unrecognised stack leaves the
+    declared tier as the only evidence, which is how every legacy config read.
+    ``none`` declares memory declined: no rung, so no surface is read.
+    """
+    declared_raw = memory.get("tier")
+    declared = _as_int(declared_raw, field="memory.tier", warnings=warnings, malformed=malformed)
+    if stack == MEMORY_STACK_NONE:
+        return 0
+    derived = STACK_TIERS.get(stack)
+    if derived is None:
+        return declared
+    if declared_raw is not None and "memory.tier" not in malformed and declared != derived:
+        warnings.append(
+            f"memory.tier {declared} disagrees with memory.stack '{stack}' (tier {derived}) — "
+            f"reading tier {derived}; the stack is the source of truth"
+        )
+    return derived
+
+
 def _extract_hooks_expected(raw: dict[str, Any]) -> tuple[str, ...]:
     """Parse the v2 ``hooks.expected`` list; empty when undeclared."""
     expected = _as_mapping(raw.get("hooks")).get("expected")
@@ -607,12 +673,8 @@ def parse_config(text: str, project_dir: Path, config_root: str = ".claude") -> 
         malformed=malformed,
     )
     is_v2 = contract_version >= CONTRACT_V2
-    # memory.tier gates which retrieval surfaces are read at all, so a silent
-    # coercion to 0 downgrades a tier-3 project to flat files with no signal.
-    # Same defect as the contract version, one field over.
-    memory_tier = _as_int(
-        memory.get("tier"), field="memory.tier", warnings=warnings, malformed=malformed
-    )
+    memory_stack = _memory_stack(raw, memory, contract_version)
+    memory_tier = _memory_tier(memory, memory_stack, warnings, malformed)
     surface = _MemorySurface(block=memory, tier=memory_tier, project_dir=project_dir)
 
     return ProjectDescriptor(
@@ -624,7 +686,7 @@ def parse_config(text: str, project_dir: Path, config_root: str = ".claude") -> 
         contract_version=contract_version,
         project_init_version=str(project.get("project_init_version") or "unknown"),
         memory_tier=memory_tier,
-        memory_stack=str(memory.get("stack") or "unknown"),
+        memory_stack=memory_stack,
         memory_path=memory_path,
         vault_path=_tier_gated_path(surface, "vault_path", TIER_VAULT, warnings),
         graph_path=_tier_gated_path(surface, "graph_path", TIER_GRAPH, warnings),

@@ -24,7 +24,7 @@ import yaml
 
 from projects_orchestrator.adapters.project_init import parse_scaffold_result
 from projects_orchestrator.capabilities import MCP, SKILL, parse_capabilities
-from projects_orchestrator.descriptor import load_descriptor, parse_config
+from projects_orchestrator.descriptor import STACK_TIERS, load_descriptor, parse_config
 from projects_orchestrator.drift import _load_manifest
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "project_init"
@@ -255,3 +255,29 @@ def test_scaffold_default_leaves_ci_unset_so_the_forge_still_probes(tmp_path: Pa
 def test_vendored_schema_declares_the_ci_surface() -> None:
     schema = json.loads(_DESCRIPTOR_SCHEMA.read_text(encoding="utf-8"))
     assert {"status_url", "status_field"} <= set(schema["properties"]["ci"]["properties"])
+
+
+def test_reader_ladder_is_the_vendored_schemas_ladder() -> None:
+    """#257: `STACK_TIERS` is a copy of the producer's stack→tier table, so pin it.
+
+    Checked by behaviour against the vendored schema (project-init #960 pins
+    each stack to its tier there): for every stack and every tier 0-3, the
+    schema accepts exactly the tier this reader derives. A producer change to
+    the ladder reaches this repo through re-vendoring, and fails here until the
+    reader agrees.
+    """
+    import jsonschema
+
+    schema = json.loads(_DESCRIPTOR_SCHEMA.read_text(encoding="utf-8"))
+    stacks = schema["properties"]["memory"]["properties"]["stack"]["enum"]
+    assert set(STACK_TIERS) == set(stacks)
+    validator = jsonschema.Draft7Validator(schema)
+    for stack, tier in STACK_TIERS.items():
+        for candidate in range(4):
+            descriptor = {
+                "project": {"name": "p", "description": "d"},
+                "language": "python",
+                "delivery": "library",
+                "memory": {"tier": candidate, "stack": stack, "memory_path": ".agents/memory"},
+            }
+            assert validator.is_valid(descriptor) is (candidate == tier), (stack, candidate)
