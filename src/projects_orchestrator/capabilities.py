@@ -52,12 +52,17 @@ class Capability:
     Attributes:
         kind: ``skill`` | ``mcp`` | ``hook``.
         name: The capability's name (skill name, server name, or hook event).
-        detail: The second table column (description, invocation, or script).
+        detail: The description column when the table has one, else every
+            column after the name (an invocation or a script).
+        source: The ``Source`` column — ``plugin`` or ``in-tree`` — that
+            project-init 1.2.2 added to the skills table (its #962); empty for an
+            inventory that predates the column, and for MCP and hook tables.
     """
 
     kind: str
     name: str
     detail: str = ""
+    source: str = ""
 
 
 @dataclass(frozen=True)
@@ -108,14 +113,24 @@ def _split_sections(text: str) -> list[tuple[str, list[str]]]:
     return sections
 
 
-def _parse_table(lines: list[str]) -> list[tuple[str, str]]:
-    r"""Parse the first markdown table in ``lines`` into ``(name, detail)`` rows.
+def _parse_table(lines: list[str]) -> list[tuple[str, str, str]]:
+    r"""Parse the first markdown table in ``lines`` into ``(name, detail, source)`` rows.
 
-    Skips the header and the ``|---|---|`` separator, unescapes ``\|`` in the
-    detail column, and stops at the first non-table line after the table began.
+    Skips the separator, unescapes ``\|`` in cells, and stops at the first
+    non-table line after the table began.
+
+    COLUMNS ARE CHOSEN BY HEADER (#259). project-init 1.2.2 inserted a ``Source``
+    column into the skills table, and joining every cell after the name turned
+    each description into ``plugin | Records…`` — a silent change to what
+    ``capabilities --json`` means for every current scaffold. So ``detail`` is
+    the ``Description`` column, running to the end of the row as before, and
+    ``source`` is the ``Source`` column. A table with neither header (hooks,
+    MCP servers, a pre-1.2.2 inventory) keeps the old reading: every cell after
+    the name.
     """
-    rows: list[tuple[str, str]] = []
+    rows: list[tuple[str, str, str]] = []
     started = False
+    header: list[str] = []
     for line in lines:
         stripped = line.strip()
         if not stripped.startswith("|"):
@@ -128,13 +143,19 @@ def _parse_table(lines: list[str]) -> list[tuple[str, str]]:
         ]
         if cells and all(not cell or _SEPARATOR_CELL.fullmatch(cell) for cell in cells):
             continue
-        if not started:  # the header row (e.g. "| Skill | Description |")
+        if not started:  # the header row (e.g. "| Skill | Source | Description |")
             started = True
+            header = [cell.lower() for cell in cells]
             continue
         name = cells[0]
-        detail = " | ".join(cells[1:]) if len(cells) > 1 else ""
+        source_at = header.index("source") if "source" in header else None
+        if "description" in header:
+            detail = " | ".join(cells[header.index("description") :])
+        else:
+            detail = " | ".join(c for i, c in enumerate(cells) if i and i != source_at)
+        source = cells[source_at] if source_at is not None and source_at < len(cells) else ""
         if name:
-            rows.append((name, detail))
+            rows.append((name, detail, source))
     return rows
 
 
@@ -164,7 +185,8 @@ def parse_capabilities(text: str, project: str, path: Path) -> ProjectCapabiliti
         if kind is None:
             continue
         by_kind[kind].extend(
-            Capability(kind=kind, name=name, detail=detail) for name, detail in _parse_table(body)
+            Capability(kind=kind, name=name, detail=detail, source=source)
+            for name, detail, source in _parse_table(body)
         )
     return ProjectCapabilities(
         project=project,
