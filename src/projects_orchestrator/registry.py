@@ -330,6 +330,19 @@ def _nested_warnings(
     return warnings
 
 
+def _duplicate_checkout(repo: tuple[Path, Path] | None, explicit: bool, held: set[Path]) -> bool:
+    """Whether a linked worktree is a second checkout of a repository already held."""
+    return repo is not None and repo[0] != repo[1] and not explicit and repo[1] in held
+
+
+def _hold_repo(
+    repo: tuple[Path, Path] | None, descriptor: ProjectDescriptor | None, held: set[Path]
+) -> None:
+    """Record that an admitted linked worktree now holds its repository."""
+    if repo is not None and repo[0] != repo[1] and descriptor is not None:
+        held.add(repo[1])
+
+
 def _worktree_of(path: Path, repos: frozenset[Path] | set[Path]) -> bool:
     """Whether ``path`` is a linked worktree of one of ``repos`` (common git dirs)."""
     d = _git_dirs(path)
@@ -424,15 +437,13 @@ def discover(config: FleetConfig) -> Fleet:
         # main checkout lives outside the fleet, is the only checkout there is,
         # which is why `is_git_repo` admits worktrees at all. Listed explicitly
         # under `projects:`, it is kept: the operator asked for that path.
-        repo = dirs.get(resolved)
-        if (
-            repo is not None
-            and repo[0] != repo[1]  # a linked worktree: its gitdir is not the repo's
-            and resolved not in explicit
-            and repo[1] in mains
-        ):
+        #
+        # With no main checkout in the fleet, the FIRST admitted scanned worktree holds
+        # the repository, so a second scanned sibling is a duplicate too (Codex on #261).
+        if _duplicate_checkout(dirs.get(resolved), resolved in explicit, mains):
             continue
         descriptor = admitted[resolved]
+        _hold_repo(dirs.get(resolved), descriptor, mains)
         if descriptor is None:
             if candidate in config.projects:
                 warnings.append(f"not a project-init project: {resolved}")

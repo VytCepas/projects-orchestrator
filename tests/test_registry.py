@@ -631,3 +631,20 @@ def test_a_gitdir_through_a_symlink_loop_does_not_abort_discovery(tmp_path: Path
     with mock.patch.object(pathlib.Path, "resolve", resolve):
         assert _git_dirs(bad) is None
         assert "repo" in _names(FleetConfig(roots=(tmp_path,), include_plain_repos=True))
+
+
+def test_scanned_sibling_worktrees_are_one_project_without_a_main(tmp_path: Path) -> None:
+    # Codex on #261: main checkout outside every root, two of its worktrees scanned. The
+    # first admitted one holds the repository; the second is a duplicate berth.
+    _repo_with_worktree(tmp_path / "elsewhere" / "repo", tmp_path / "root" / "wt-a")
+    _git(
+        tmp_path / "elsewhere" / "repo",
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "b",
+        str(tmp_path / "root" / "wt-b"),
+    )
+    names = _names(FleetConfig(roots=(tmp_path / "root",), include_plain_repos=True))
+    assert len(names) == 1 and names[0] in {"wt-a", "wt-b"}, names
