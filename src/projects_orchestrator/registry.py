@@ -319,6 +319,33 @@ def _nested_warnings(config: FleetConfig, governed: set[Path]) -> list[str]:
     return warnings
 
 
+def _main_worktree(path: Path) -> Path | None:
+    """The main working tree of a LINKED worktree at ``path``; ``None`` otherwise.
+
+    A linked worktree's ``.git`` is a file, ``gitdir: <repo>/.git/worktrees/<name>``,
+    and ``<repo>`` is its main working tree. A bare repository has none — its
+    worktrees point at ``<repo>.git/worktrees/<name>``, with no ``.git`` component —
+    and a submodule points into ``.git/modules/``. Both return ``None``, as does
+    anything unreadable: this only ever answers "yes, and here is the main tree".
+    """
+    dot_git = path / ".git"
+    try:
+        if not dot_git.is_file():
+            return None
+        first = dot_git.read_text(encoding="utf-8", errors="replace").partition("\n")[0]
+    except OSError:
+        return None
+    if not first.startswith("gitdir:"):
+        return None
+    gitdir = Path(first[len("gitdir:") :].strip())
+    if not gitdir.is_absolute():
+        gitdir = path / gitdir
+    parts = gitdir.parts
+    if len(parts) >= 4 and parts[-2] == "worktrees" and parts[-3] == ".git":
+        return Path(*parts[:-3])
+    return None
+
+
 def discover(config: FleetConfig) -> Fleet:
     """Discover every project the config points at; never raises.
 
@@ -336,11 +363,24 @@ def discover(config: FleetConfig) -> Fleet:
 
     seen: set[Path] = set()
     found: list[ProjectDescriptor] = []
+    everywhere = {c.resolve() for c in candidates}
+    explicit = {p.resolve() for p in config.projects}
     for candidate in candidates:
         resolved = candidate.resolve()
         if resolved in seen:
             continue
         seen.add(resolved)
+        # A SCANNED worktree of a repo the fleet already holds is a second
+        # checkout of one project, not another project (#260). Admitting it made
+        # every task worktree beside its repo a berth — 29 of 44 on one box —
+        # and a PR branch mid-change read as fleet drift. Only when the main
+        # working tree is ALSO a candidate: a bare-repo worktree, or one whose
+        # main checkout lives outside the fleet, is the only checkout there is,
+        # which is why `is_git_repo` admits worktrees at all. Listed explicitly
+        # under `projects:`, it is kept: the operator asked for that path.
+        main = _main_worktree(resolved)
+        if main is not None and resolved not in explicit and main.resolve() in everywhere:
+            continue
         descriptor = load_descriptor(resolved)
         if descriptor is None and config.include_plain_repos:
             descriptor = infer_descriptor(resolved)
