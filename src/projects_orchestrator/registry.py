@@ -365,7 +365,10 @@ def _git_dirs(path: Path) -> tuple[Path, Path] | None:
             return gitdir, gitdir
         pointer = Path(commondir_file.read_text(encoding="utf-8", errors="replace").strip())
         return gitdir, (pointer if pointer.is_absolute() else gitdir / pointer).resolve()
-    except OSError:
+    except (OSError, RuntimeError):
+        # RuntimeError: Python 3.11's resolve() raises it, not OSError, on a symlink loop,
+        # and discovery never raises (ADR-003): one malformed pointer must not empty the
+        # fleet (Codex on #261).
         return None
 
 

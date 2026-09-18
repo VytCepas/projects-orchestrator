@@ -609,3 +609,25 @@ def test_an_explicit_worktree_suppresses_its_scanned_sibling(tmp_path: Path) -> 
         roots=(tmp_path / "root",), projects=(tmp_path / "root" / "wt-a",), include_plain_repos=True
     )
     assert _names(config) == ["wt-a"]
+
+
+def test_a_gitdir_through_a_symlink_loop_does_not_abort_discovery(tmp_path: Path) -> None:
+    # Codex on #261: on Python 3.11 resolve() raises RuntimeError on a loop, which the
+    # OSError handler did not catch, and one bad pointer emptied the whole fleet.
+    import pathlib
+    from unittest import mock
+
+    _repo_with_worktree(tmp_path / "repo", tmp_path / "repo-wt")
+    bad = tmp_path / "bad"
+    bad.mkdir()
+    (bad / ".git").write_text("gitdir: loop/worktrees/x\n", encoding="utf-8")
+    real = pathlib.Path.resolve
+
+    def resolve(self, *a, **k):  # the 3.11 behaviour, on this one path only
+        if "loop" in str(self):
+            raise RuntimeError("Symlink loop from 'loop'")
+        return real(self, *a, **k)
+
+    with mock.patch.object(pathlib.Path, "resolve", resolve):
+        assert _git_dirs(bad) is None
+        assert "repo" in _names(FleetConfig(roots=(tmp_path,), include_plain_repos=True))
