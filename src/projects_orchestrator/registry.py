@@ -274,7 +274,9 @@ def _scan_root(root: Path, config: FleetConfig, warnings: list[str]) -> list[Pat
     return [p for p in entries if not _excluded(p.name, config.exclude)]
 
 
-def _nested_warnings(config: FleetConfig, governed: set[Path]) -> list[str]:
+def _nested_warnings(
+    config: FleetConfig, governed: set[Path], repos: frozenset[Path] | set[Path] = frozenset()
+) -> list[str]:
     """Account for governed projects the one-level scan could not reach.
 
     They stay undiscovered — see :data:`_HINT_DEPTH` for why the depth is not
@@ -291,11 +293,20 @@ def _nested_warnings(config: FleetConfig, governed: set[Path]) -> list[str]:
     fleet (Codex P2 on #227). A warning that fires on a correctly configured
     fleet is the §2.11 false positive that gets the whole hint switched off, so
     what is reported is the set difference, not the raw find.
+
+    ``repos`` — the common git dirs of what discovery admitted — extends that set
+    difference to worktrees (#260): a nested linked worktree of a repository the
+    fleet already governs is a second checkout, not an unreached project, and
+    telling the operator to list it would be the same false positive (Codex on #261).
     """
     warnings: list[str] = []
     for root in config.roots:
         nested, truncated = _nested_projects(root, config)
-        unreached = [p for p in nested if p.resolve() not in governed]
+        unreached = [
+            p
+            for p in nested
+            if p.resolve() not in governed and not _worktree_of(p.resolve(), repos)
+        ]
         if unreached:
             shown = ", ".join(str(p) for p in unreached[:5])
             more = f" (+{len(unreached) - 5} more)" if len(unreached) > 5 else ""
@@ -317,6 +328,12 @@ def _nested_warnings(config: FleetConfig, governed: set[Path]) -> list[str]:
                 f"than the one level discovery scans; list any under `projects:`"
             )
     return warnings
+
+
+def _worktree_of(path: Path, repos: frozenset[Path] | set[Path]) -> bool:
+    """Whether ``path`` is a linked worktree of one of ``repos`` (common git dirs)."""
+    d = _git_dirs(path)
+    return d is not None and d[0] != d[1] and d[1] in repos
 
 
 def _git_dirs(path: Path) -> tuple[Path, Path] | None:
@@ -367,12 +384,25 @@ def discover(config: FleetConfig) -> Fleet:
     for root in config.roots:
         candidates.extend(_scan_root(root, config, warnings))
 
-    seen: set[Path] = set()
     found: list[ProjectDescriptor] = []
     explicit = {p.resolve() for p in config.projects}
-    dirs = {c.resolve(): _git_dirs(c.resolve()) for c in candidates}
-    # The repositories whose MAIN checkout is a candidate, keyed by common git dir.
-    mains = {d[1] for d in dirs.values() if d is not None and d[0] == d[1]}
+    # Pass 1: what each distinct candidate IS, before deciding what to skip.
+    unique = list(dict.fromkeys(c.resolve() for c in candidates))
+    dirs = {r: _git_dirs(r) for r in unique}
+    admitted: dict[Path, ProjectDescriptor | None] = {}
+    for resolved in unique:
+        descriptor = load_descriptor(resolved)
+        if descriptor is None and config.include_plain_repos:
+            descriptor = infer_descriptor(resolved)
+        admitted[resolved] = descriptor
+    # The repositories whose MAIN checkout discovery actually ADMITS, keyed by common
+    # git dir. Built from admitted checkouts, not from every candidate: a main checkout
+    # without a descriptor (one added only on a worktree branch) is rejected below, and
+    # suppressing its worktree as well would drop the repository entirely (Codex on #261).
+    mains = {
+        d[1] for r, d in dirs.items() if d is not None and d[0] == d[1] and admitted[r] is not None
+    }
+    seen: set[Path] = set()
     for candidate in candidates:
         resolved = candidate.resolve()
         if resolved in seen:
@@ -394,9 +424,7 @@ def discover(config: FleetConfig) -> Fleet:
             and repo[1] in mains
         ):
             continue
-        descriptor = load_descriptor(resolved)
-        if descriptor is None and config.include_plain_repos:
-            descriptor = infer_descriptor(resolved)
+        descriptor = admitted[resolved]
         if descriptor is None:
             if candidate in config.projects:
                 warnings.append(f"not a project-init project: {resolved}")
@@ -425,7 +453,9 @@ def discover(config: FleetConfig) -> Fleet:
         found.append(descriptor)
 
     found.sort(key=lambda d: d.name.lower())
-    warnings.extend(_nested_warnings(config, {d.path.resolve() for d in found}))
+    governed = {d.path.resolve() for d in found}
+    repos = {d[1] for p in governed if (d := dirs.get(p) or _git_dirs(p)) is not None}
+    warnings.extend(_nested_warnings(config, governed, repos))
     warnings.extend(_duplicate_name_warnings(found))
     return Fleet(descriptors=tuple(found), config=config, warnings=tuple(warnings))
 

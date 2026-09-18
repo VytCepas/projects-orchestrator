@@ -569,3 +569,24 @@ def test_git_dirs_tells_a_linked_worktree_from_a_main_checkout(tmp_path: Path) -
     (sub / ".git").write_text(f"gitdir: {tmp_path / 'modgit'}\n", encoding="utf-8")
     got = _git_dirs(sub)
     assert got is not None and got[0] == got[1]  # a submodule reads as a main checkout
+
+
+def test_a_worktree_is_kept_when_its_main_checkout_is_not_admitted(tmp_path: Path) -> None:
+    # Codex on #261: without include_plain_repos, a main checkout with no descriptor is
+    # rejected; if only the worktree branch carries one, suppressing the worktree too
+    # dropped the repository from the fleet entirely.
+    _repo_with_worktree(tmp_path / "repo", tmp_path / "repo-wt-task")
+    agents = tmp_path / "repo-wt-task" / ".agents"
+    agents.mkdir()
+    (agents / "config.yaml").write_text("project:\n  name: repo\n", encoding="utf-8")
+    config = FleetConfig(roots=(tmp_path,), include_plain_repos=False)
+    assert _names(config) == ["repo-wt-task"]
+
+
+def test_a_nested_worktree_of_a_governed_repo_is_not_warned_about(tmp_path: Path) -> None:
+    # Codex on #261: the nested-project hint must apply the same dedupe, or it tells
+    # the operator to list a second checkout of a repository already in the fleet.
+    _repo_with_worktree(tmp_path / "repo", tmp_path / "wts" / "repo-wt")
+    fleet = discover(FleetConfig(roots=(tmp_path,), include_plain_repos=True))
+    assert [d.path.name for d in fleet.descriptors] == ["repo"]
+    assert not [w for w in fleet.warnings if "NOT discovered" in w], fleet.warnings
