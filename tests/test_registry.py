@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from conftest import make_project
 from projects_orchestrator.registry import (
     _HINT_BUDGET,
     FleetConfig,
+    _git_dirs,
     default_fleet_config,
     discover,
     load_fleet_config,
@@ -481,3 +483,168 @@ def test_registering_writes_through_a_symlinked_fleet_file(tmp_path: Path) -> No
 
     assert link.is_symlink(), "the symlink must survive the write"
     assert str(project.resolve()) in canonical.read_text(encoding="utf-8")
+
+
+# --- #260: a scanned worktree of a repo the fleet holds is not another project ---------
+
+
+def _git(cwd: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+    )
+
+
+def _repo_with_worktree(repo: Path, worktree: Path) -> None:
+    repo.mkdir(parents=True)
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / "f").write_text("x", encoding="utf-8")
+    _git(repo, "add", "f")
+    _git(repo, "commit", "-q", "-m", "init")
+    _git(repo, "worktree", "add", "-q", "-b", "task", str(worktree))
+
+
+def _names(config: FleetConfig) -> list[str]:
+    return sorted(d.path.name for d in discover(config).descriptors)
+
+
+def test_a_worktree_beside_its_repo_is_not_a_second_project(tmp_path: Path) -> None:
+    _repo_with_worktree(tmp_path / "repo", tmp_path / "repo-wt-task")
+    config = FleetConfig(roots=(tmp_path,), include_plain_repos=True)
+    assert _names(config) == ["repo"]
+
+
+def test_a_worktree_whose_main_checkout_is_outside_the_fleet_is_kept(tmp_path: Path) -> None:
+    # It is the only checkout the fleet can see, so dropping it would lose the project.
+    _repo_with_worktree(tmp_path / "elsewhere" / "repo", tmp_path / "root" / "repo-wt-task")
+    config = FleetConfig(roots=(tmp_path / "root",), include_plain_repos=True)
+    assert _names(config) == ["repo-wt-task"]
+
+
+def test_a_worktree_listed_explicitly_is_kept(tmp_path: Path) -> None:
+    _repo_with_worktree(tmp_path / "repo", tmp_path / "repo-wt-task")
+    config = FleetConfig(
+        roots=(tmp_path,), projects=(tmp_path / "repo-wt-task",), include_plain_repos=True
+    )
+    assert _names(config) == ["repo", "repo-wt-task"]
+
+
+def test_a_bare_repositorys_worktree_is_kept(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    _repo_with_worktree(src, tmp_path / "src-wt")
+    _git(tmp_path, "clone", "-q", "--bare", str(src), str(tmp_path / "root" / "proj.git"))
+    _git(tmp_path / "root" / "proj.git", "worktree", "add", "-q", str(tmp_path / "root" / "proj"))
+    config = FleetConfig(roots=(tmp_path / "root",), include_plain_repos=True)
+    assert "proj" in _names(config)
+
+
+def test_a_separate_git_dir_repos_worktree_is_not_a_second_project(tmp_path: Path) -> None:
+    # Codex on #261: `git init --separate-git-dir` puts the worktrees under
+    # <git-dir>/worktrees/, with no `.git` component in the pointer.
+    repo = tmp_path / "root" / "repo"
+    repo.parent.mkdir()
+    _git(
+        tmp_path, "init", "-q", "-b", "main", "--separate-git-dir", str(tmp_path / "gd"), str(repo)
+    )
+    (repo / "f").write_text("x", encoding="utf-8")
+    _git(repo, "add", "f")
+    _git(repo, "commit", "-q", "-m", "init")
+    _git(repo, "worktree", "add", "-q", "-b", "task", str(tmp_path / "root" / "repo-wt"))
+    config = FleetConfig(roots=(tmp_path / "root",), include_plain_repos=True)
+    assert _names(config) == ["repo"]
+
+
+def test_git_dirs_tells_a_linked_worktree_from_a_main_checkout(tmp_path: Path) -> None:
+    _repo_with_worktree(tmp_path / "repo", tmp_path / "wt")
+    main = _git_dirs(tmp_path / "repo")
+    linked = _git_dirs(tmp_path / "wt")
+    assert main is not None and linked is not None
+    assert main[0] == main[1]  # a main checkout: one directory for both
+    assert linked[0] != linked[1] and linked[1] == main[1]  # same repository
+    sub = tmp_path / "sub"
+    (tmp_path / "modgit").mkdir()
+    sub.mkdir()
+    (sub / ".git").write_text(f"gitdir: {tmp_path / 'modgit'}\n", encoding="utf-8")
+    got = _git_dirs(sub)
+    assert got is not None and got[0] == got[1]  # a submodule reads as a main checkout
+
+
+def test_a_worktree_is_kept_when_its_main_checkout_is_not_admitted(tmp_path: Path) -> None:
+    # Codex on #261: without include_plain_repos, a main checkout with no descriptor is
+    # rejected; if only the worktree branch carries one, suppressing the worktree too
+    # dropped the repository from the fleet entirely.
+    _repo_with_worktree(tmp_path / "repo", tmp_path / "repo-wt-task")
+    agents = tmp_path / "repo-wt-task" / ".agents"
+    agents.mkdir()
+    (agents / "config.yaml").write_text("project:\n  name: repo\n", encoding="utf-8")
+    config = FleetConfig(roots=(tmp_path,), include_plain_repos=False)
+    assert _names(config) == ["repo-wt-task"]
+
+
+def test_a_nested_worktree_of_a_governed_repo_is_not_warned_about(tmp_path: Path) -> None:
+    # Codex on #261: the nested-project hint must apply the same dedupe, or it tells
+    # the operator to list a second checkout of a repository already in the fleet.
+    _repo_with_worktree(tmp_path / "repo", tmp_path / "wts" / "repo-wt")
+    fleet = discover(FleetConfig(roots=(tmp_path,), include_plain_repos=True))
+    assert [d.path.name for d in fleet.descriptors] == ["repo"]
+    assert not [w for w in fleet.warnings if "NOT discovered" in w], fleet.warnings
+
+
+def test_an_explicit_worktree_suppresses_its_scanned_sibling(tmp_path: Path) -> None:
+    # Codex on #261: two worktrees of one repository, one listed explicitly and one
+    # scanned, with no main checkout in the fleet: the scanned one is a duplicate.
+    _repo_with_worktree(tmp_path / "elsewhere" / "repo", tmp_path / "root" / "wt-a")
+    _git(
+        tmp_path / "elsewhere" / "repo",
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "b",
+        str(tmp_path / "root" / "wt-b"),
+    )
+    config = FleetConfig(
+        roots=(tmp_path / "root",), projects=(tmp_path / "root" / "wt-a",), include_plain_repos=True
+    )
+    assert _names(config) == ["wt-a"]
+
+
+def test_a_gitdir_through_a_symlink_loop_does_not_abort_discovery(tmp_path: Path) -> None:
+    # Codex on #261: on Python 3.11 resolve() raises RuntimeError on a loop, which the
+    # OSError handler did not catch, and one bad pointer emptied the whole fleet.
+    import pathlib
+    from unittest import mock
+
+    _repo_with_worktree(tmp_path / "repo", tmp_path / "repo-wt")
+    bad = tmp_path / "bad"
+    bad.mkdir()
+    (bad / ".git").write_text("gitdir: loop/worktrees/x\n", encoding="utf-8")
+    real = pathlib.Path.resolve
+
+    def resolve(self, *a, **k):  # the 3.11 behaviour, on this one path only
+        if "loop" in str(self):
+            raise RuntimeError("Symlink loop from 'loop'")
+        return real(self, *a, **k)
+
+    with mock.patch.object(pathlib.Path, "resolve", resolve):
+        assert _git_dirs(bad) is None
+        assert "repo" in _names(FleetConfig(roots=(tmp_path,), include_plain_repos=True))
+
+
+def test_scanned_sibling_worktrees_are_one_project_without_a_main(tmp_path: Path) -> None:
+    # Codex on #261: main checkout outside every root, two of its worktrees scanned. The
+    # first admitted one holds the repository; the second is a duplicate berth.
+    _repo_with_worktree(tmp_path / "elsewhere" / "repo", tmp_path / "root" / "wt-a")
+    _git(
+        tmp_path / "elsewhere" / "repo",
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "b",
+        str(tmp_path / "root" / "wt-b"),
+    )
+    names = _names(FleetConfig(roots=(tmp_path / "root",), include_plain_repos=True))
+    assert len(names) == 1 and names[0] in {"wt-a", "wt-b"}, names
