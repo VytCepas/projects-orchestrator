@@ -9,6 +9,7 @@ from conftest import make_project, make_project_v2
 
 from projects_orchestrator.capabilities import load_capabilities
 from projects_orchestrator.descriptor import (
+    MEMORY_STACK_NONE,
     contract_label,
     load_descriptor,
     parse_config,
@@ -191,16 +192,21 @@ def test_v2_deploy_defaults_to_none_target(tmp_path: Path) -> None:
     assert parse_config(text, tmp_path).deploy.target == "none"
 
 
-def _memory_config(tier: int, extra: str = "") -> str:
+_LADDER = ("auto", "obsidian-only", "obsidian-graphify", "obsidian-graphify-rag")
+
+
+def _memory_config(tier: int | str, extra: str = "", stack: str = "") -> str:
+    # The stack defaults to the one that carries `tier`: a tier the stack
+    # contradicts is its own case, tested below (#257).
     return (
         "project:\n  name: alpha\n"
-        f"memory:\n  tier: {tier}\n  stack: obsidian-graphify-rag\n"
+        f"memory:\n  tier: {tier}\n  stack: {stack or _LADDER[int(tier)]}\n"
         "  memory_path: .claude/memory\n" + extra
     )
 
 
 def test_descriptor_reads_memory_stack(tmp_path: Path) -> None:
-    assert parse_config(_memory_config(0), tmp_path).memory_stack == "obsidian-graphify-rag"
+    assert parse_config(_memory_config(3), tmp_path).memory_stack == "obsidian-graphify-rag"
 
 
 def test_memory_stack_defaults_unknown(tmp_path: Path) -> None:
@@ -730,3 +736,77 @@ def test_contract_label_renders_a_negative_version_rather_than_denying_it(
 
 def test_contract_label_renders_a_good_version(fleet_dir: Path) -> None:
     assert contract_label(_int_fields(fleet_dir, "j", "  project_init_contract_version: 2")) == "v2"
+
+
+# --- #257 (project-init #960): the stack decides the tier -------------------
+
+_BOTH_SURFACES = "  vault_path: .claude/vault\n  graph_path: graphify-out/graph.json\n"
+
+
+def test_a_tier_that_contradicts_its_stack_reads_the_stacks_surfaces(tmp_path: Path) -> None:
+    # project-init #960's reproduction: a tier-2 child with `tier` edited to 0.
+    # Gating on the edited tier dropped the graph and the vault.
+    descriptor = parse_config(
+        _memory_config(0, _BOTH_SURFACES, stack="obsidian-graphify"), tmp_path
+    )
+    assert descriptor.memory_tier == 2
+    assert descriptor.graph_path is not None
+    assert descriptor.vault_path is not None
+
+
+def test_a_tier_that_contradicts_its_stack_is_reported(tmp_path: Path) -> None:
+    descriptor = parse_config(_memory_config(0, stack="obsidian-graphify"), tmp_path)
+    assert descriptor.warnings == (
+        "memory.tier 0 disagrees with memory.stack 'obsidian-graphify' (tier 2) — "
+        "reading tier 2; the stack is the source of truth",
+    )
+
+
+def test_a_tier_that_agrees_with_its_stack_is_silent(tmp_path: Path) -> None:
+    # The control: without it, a reader that warned on every memory block would
+    # pass the test above.
+    for tier in range(4):
+        assert parse_config(_memory_config(tier), tmp_path).warnings == (), tier
+
+
+def test_the_legacy_obsidian_alias_is_tier_one(tmp_path: Path) -> None:
+    descriptor = parse_config(
+        _memory_config(1, "  vault_path: .claude/vault\n", stack="obsidian"), tmp_path
+    )
+    assert (descriptor.memory_tier, descriptor.warnings) == (1, ())
+    assert descriptor.vault_path is not None
+
+
+def test_a_stack_off_the_ladder_keeps_the_declared_tier(tmp_path: Path) -> None:
+    # Nothing to derive from, so the declared tier is the only evidence — and a
+    # stack newer than this reader must not be called a contradiction.
+    descriptor = parse_config(_memory_config(2, stack="some-future-stack"), tmp_path)
+    assert (descriptor.memory_tier, descriptor.warnings) == (2, ())
+
+
+def test_a_block_without_a_stack_keeps_the_declared_tier(tmp_path: Path) -> None:
+    text = "project:\n  name: a\nmemory:\n  tier: 2\n  memory_path: .claude/memory\n"
+    descriptor = parse_config(text, tmp_path)
+    assert (descriptor.memory_tier, descriptor.memory_stack) == (2, "unknown")
+
+
+def test_a_malformed_tier_beside_a_known_stack_is_malformed_not_contradictory(
+    tmp_path: Path,
+) -> None:
+    descriptor = parse_config(_memory_config('"deep"', stack="obsidian-graphify"), tmp_path)
+    assert "memory.tier" in descriptor.malformed
+    assert descriptor.memory_tier == 2
+    assert len(descriptor.warnings) == 1  # the malformed value, not a second "disagrees"
+
+
+def test_no_memory_block_under_the_contract_reads_as_declined(tmp_path: Path) -> None:
+    # A `core` scaffold renders no memory block; project-init's reader rule says
+    # that absence IS the declaration at contract v1+ (#964 rung 2).
+    for version in (1, 2):
+        text = f"project:\n  name: a\n  project_init_contract_version: {version}\n"
+        assert parse_config(text, tmp_path).memory_stack == MEMORY_STACK_NONE, version
+
+
+def test_a_present_block_without_a_stack_is_not_read_as_declined(tmp_path: Path) -> None:
+    text = "project:\n  name: a\n  project_init_contract_version: 2\nmemory:\n  tier: 0\n"
+    assert parse_config(text, tmp_path).memory_stack == "unknown"

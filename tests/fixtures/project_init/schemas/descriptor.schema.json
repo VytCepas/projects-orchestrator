@@ -5,6 +5,11 @@
   "description": "JSON schema for the cross-project memory descriptor contract (.agents/config.yaml).",
   "type": "object",
   "properties": {
+    "context": {
+      "type": "string",
+      "enum": ["repo", "ambient"],
+      "description": "Detect-and-defer boundary marker (PI-901). 'repo' = this project governs itself and an ambient/global agent layer must stand down inside it; 'ambient' = the owner opted out and the global layer keeps acting here. Additive within contract v2 and deliberately NOT in 'required': descriptors scaffolded before this field predate it and stay valid, and `project-init upgrade` back-fills them. A reader must therefore treat an absent 'context' as unknown and fall back to the presence of .agents/ itself, never as 'ambient'."
+    },
     "project": {
       "type": "object",
       "properties": {
@@ -45,15 +50,38 @@
     },
     "memory": {
       "type": "object",
+      "description": "The recall-ladder descriptor (#498, ADR-024). 'stack' is the source of truth and 'tier' is derived from it (#960): the allOf below pins each stack to its one tier, so a hand-edited tier that disagrees with its stack is invalid instead of silently changing which retrieval surfaces a reader gates on. A project that declined memory ('none') emits no memory block at all; at project.project_init_contract_version >= 1 a reader must read that absence as 'declined', and only a pre-contract (v0) config leaves it unknown.",
       "properties": {
         "tier": { "type": "integer" },
-        "stack": { "type": "string" },
+        "stack": {
+          "type": "string",
+          "enum": ["auto", "obsidian-only", "obsidian", "obsidian-graphify", "obsidian-graphify-rag"],
+          "description": "The memory profile. 'obsidian' is the permanent legacy alias of 'obsidian-only' (#466). 'none' never appears here: a declined project has no memory block."
+        },
         "memory_path": { "type": "string" },
         "vault_path": { "type": "string" },
         "graph_path": { "type": "string" },
         "rag_endpoint": { "type": ["string", "null"] }
       },
-      "required": ["tier", "stack", "memory_path"]
+      "required": ["tier", "stack", "memory_path"],
+      "allOf": [
+        {
+          "if": { "properties": { "stack": { "const": "auto" } }, "required": ["stack"] },
+          "then": { "properties": { "tier": { "const": 0 } } }
+        },
+        {
+          "if": { "properties": { "stack": { "enum": ["obsidian-only", "obsidian"] } }, "required": ["stack"] },
+          "then": { "properties": { "tier": { "const": 1 } } }
+        },
+        {
+          "if": { "properties": { "stack": { "const": "obsidian-graphify" } }, "required": ["stack"] },
+          "then": { "properties": { "tier": { "const": 2 } } }
+        },
+        {
+          "if": { "properties": { "stack": { "const": "obsidian-graphify-rag" } }, "required": ["stack"] },
+          "then": { "properties": { "tier": { "const": 3 } } }
+        }
+      ]
     },
     "mcps": {
       "type": "object",
