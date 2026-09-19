@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/VytCepas/projects-orchestrator/schemas/audit-digest.v1.schema.json",
   "title": "projects-orchestrator audit --json --digest (v1)",
-  "description": "Governance deltas against the previous run. Consumed by harbor L0-6. This is the ONE consumed verb whose payload is a JSON OBJECT rather than a bare array, so it is the only one that can carry an in-band `schema_version` additively -- see schemas/README.md.",
+  "description": "Governance deltas against the previous run. Consumed by the ambient layer's observability section. This is the ONE consumed verb whose payload is a JSON OBJECT rather than a bare array, so it is the only one that can carry an in-band `schema_version` additively -- see schemas/README.md.",
   "x-schema-version": 1,
   "type": "object",
   "required": ["schema_version", "changed", "new", "resolved", "text"],

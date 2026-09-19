@@ -96,15 +96,15 @@ def render_digest(digest: AuditDigest) -> str:
 
 
 #: In-band contract version for the ``audit --json --digest`` payload, frozen in
-#: ``schemas/audit-digest.v1.schema.json`` and vendored by harbor (#219).
+#: ``schemas/audit-digest.v1.schema.json`` and vendored by its consumer (#219).
 #:
 #: THIS IS THE ONLY CONSUMED VERB THAT CAN CARRY ONE. ``snapshot --json`` and
 #: ``events --json`` emit BARE ARRAYS, and there is nowhere in an array to put a
 #: version key — wrapping them in an envelope is a BREAKING change that would
-#: make harbor's statusline degrade to ``fleet: unknown`` on the next tick
-#: (`statusline-test.sh` pins "an object where an array belongs" as a
-#: degradation case). That wrap has to land lock-step with harbor and cannot be
-#: done from this repo alone, so it is deferred rather than smuggled in. For
+#: make the consumer's statusline degrade to ``fleet: unknown`` on the next
+#: tick (its own tests pin "an object where an array belongs" as a degradation
+#: case). That wrap has to land lock-step with the consumer and cannot be done
+#: from this repo alone, so it is deferred rather than smuggled in. For
 #: those two verbs the version lives in the schema file's ``x-schema-version``
 #: and consumers freshness-check the vendored copy. See ``schemas/README.md``.
 DIGEST_SCHEMA_VERSION = 1

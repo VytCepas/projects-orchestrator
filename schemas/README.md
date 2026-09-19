@@ -1,7 +1,7 @@
-# `--json` output schemas — the L2 Fleet → L0 Helm seam
+# `--json` output schemas — the fleet → ambient-layer seam
 
-These freeze the three `--json` payloads that **harbor consumes**, per its
-`CONTRACTS/orchestrator-json.md`. Before they existed the seam had no schema, no
+These freeze the three `--json` payloads that **the ambient layer consumes**,
+per its orchestrator-json contract. Before they existed the seam had no schema, no
 fixture and no producer-side validation, while the consumer side ran **live on a
 5-minute launchd timer** — so a field rename here broke a different repo at
 runtime, with nothing in this repo going red (#219).
@@ -23,8 +23,8 @@ are each asserted to be *refused*.
 
 Deliberately. The seam's rule is **additive-only within a version**, so a schema
 closed to new keys would fail validation on exactly the kind of change the
-contract calls safe. That is the CONSTITUTION §2.11 false positive that gets a
-control switched off. A **missing** required key fails; an **added** key passes,
+contract calls safe. That is the false positive that gets a control switched
+off. A **missing** required key fails; an **added** key passes,
 and a test pins that in both directions.
 
 ## Where the version lives, and why it is not in-band everywhere
@@ -35,11 +35,10 @@ in-band — adding a key to an object is the textbook additive change
 
 `snapshot --json` and `events --json` emit **bare arrays**. There is nowhere in
 an array to put a version key, and **wrapping them in an envelope is a breaking
-change**: harbor's `fleet-glyph.sh` reads the cache as an array and
-`statusline-test.sh` explicitly pins "an object where an array belongs" as a
-degradation case, so the wrap would blank the fleet tile on the next tick. The
-contract says a breaking change "bumps the version and lands lock-step" — and
-lock-step needs a simultaneous harbor release, which cannot be done from this
+change**: the consumer's statusline reads the cache as an array and its own
+tests pin "an object where an array belongs" as a degradation case, so the wrap
+would blank the fleet tile on the next tick. The contract says a breaking change "bumps the version and lands lock-step" — and
+lock-step needs a simultaneous consumer release, which cannot be done from this
 repo alone.
 
 So for those two, the version lives in the schema file's `x-schema-version`, and
@@ -78,21 +77,21 @@ Until then the schema says what is known and no more.
    fixture, keep the version. `tests/test_json_seam.py` must stay green.
 2. **Breaking** (rename, retype, remove, or wrapping an array in an envelope):
    bump to `v2` as a **new file** (`snapshot.v2.schema.json`), keep `v1` until
-   every consumer has migrated, and land it lock-step with harbor. Do not edit a
+   every consumer has migrated, and land it lock-step with the consumer. Do not edit a
    `v1` file into a `v2` meaning — a consumer's vendored copy is keyed on that
    name.
 
-## Migrating to an in-band envelope (deferred, needs harbor)
+## Migrating to an in-band envelope (deferred, needs the consumer)
 
 The end state the contract describes is every payload carrying
 `schema_version`. Getting the two arrays there:
 
 1. Add the envelope behind an opt-in flag so both shapes are emittable at once.
-2. Harbor migrates its readers to the envelope, keeping the bare-array fallback.
+2. The consumer migrates its readers to the envelope, keeping the bare-array fallback.
 3. Flip the default here and bump to `v2`.
-4. Harbor drops the fallback.
+4. The consumer drops the fallback.
 
-Steps 2 and 4 are harbor's; this repo cannot do them, which is why the work
+Steps 2 and 4 are the consumer's; this repo cannot do them, which is why the work
 stops at a versioned schema plus a validating producer rather than pretending
 the envelope landed.
 
