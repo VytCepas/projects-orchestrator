@@ -509,14 +509,16 @@ def _contained_path(project_dir: Path, relative: str) -> Path | None:
     whose resolved location is not the project dir or beneath it; contained
     values keep their plain (unresolved) join so callers compare cleanly.
 
-    A path that cannot be resolved at all (a symlink loop raises ``RuntimeError``
-    on Python 3.11/3.12) cannot be shown to be contained, so it is rejected the
-    same way. Raising here would abort discovery of the whole fleet over one
-    project's descriptor (PR #262 review).
+    A path that cannot be resolved at all cannot be shown to be contained, so it
+    is rejected the same way. A symlink loop raises ``RuntimeError`` on Python
+    3.11/3.12; a YAML escape that decodes to a NUL raises
+    ``ValueError``, and one that decodes to a lone surrogate raises
+    ``UnicodeEncodeError``, a ``ValueError``. Raising here would abort discovery
+    of the whole fleet over one project's descriptor (PR #262 review).
     """
     try:
         resolved = (project_dir / relative).resolve()
-    except (OSError, RuntimeError):
+    except (OSError, RuntimeError, ValueError):
         return None
     if resolved == project_dir or project_dir in resolved.parents:
         return project_dir / relative

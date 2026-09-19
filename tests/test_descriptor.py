@@ -307,6 +307,20 @@ def test_a_symlink_loop_below_the_gate_warns_instead_of_raising(tmp_path: Path) 
     assert descriptor.warnings[0].startswith("memory.vault_path ")
 
 
+@pytest.mark.parametrize("escape", ["\\0", "\\uD800"], ids=["nul", "lone-surrogate"])
+@pytest.mark.parametrize("line", ['  vault_path: "bad{}path"\n', '  memory_path: "bad{}path"\n'])
+def test_an_unresolvable_path_warns_instead_of_raising(
+    tmp_path: Path, escape: str, line: str
+) -> None:
+    # Valid YAML escapes that decode to a NUL or a lone surrogate make
+    # Path.resolve() raise ValueError / UnicodeEncodeError. `memory_path` is
+    # resolved at every tier, so it could already take discovery down; the
+    # below-gate `vault_path` became reachable with this change.
+    descriptor = parse_config(_memory_config(0, line.format(escape)), tmp_path)
+    assert descriptor.vault_path is None
+    assert len(descriptor.warnings) == 1
+
+
 def test_every_surface_at_its_own_tier_is_silent(tmp_path: Path) -> None:
     # The control: a reader that warned on every declared surface would pass the
     # two tests above. Each rung declares exactly what the template renders for
