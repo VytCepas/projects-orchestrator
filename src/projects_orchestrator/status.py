@@ -65,20 +65,27 @@ def _git(path: Path, *args: str) -> str | None:
 
 
 def published_default_head(path: Path) -> str:
-    """The commit ``origin``'s default branch was at when last fetched; ``""`` when unknown.
+    """The commit ``origin``'s default branch points at NOW; ``""`` when unknown.
 
-    Read from the local ``refs/remotes/origin/HEAD`` only: no network, and no
-    remote-supplied branch name ever reaches the shell string :func:`_git` runs.
-    A clone always has that ref; a repository given its remote by hand gets it
-    from ``git remote set-head origin --auto``.
+    Asked of the remote (``git ls-remote origin HEAD``), not read from the local
+    ``refs/remotes/origin/HEAD``. That ref is only as fresh as the last fetch, so
+    after another checkout pushes, a stale clone's HEAD would still match it and
+    a gate result for superseded code would pass as current (Codex on #293). The
+    arguments are constants, so no remote-supplied name reaches the shell string
+    :func:`_git` runs. Offline, unreachable or no ``origin``: ``""``.
 
     Args:
         path: The repository to ask.
 
     Returns:
-        The full SHA, or ``""`` when there is no ``origin`` default branch to read.
+        The full SHA, or ``""``.
     """
-    return _git(path, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/HEAD") or ""
+    listing = _git(path, "ls-remote", "origin", "HEAD")
+    for line in (listing or "").splitlines():
+        sha, _, ref = line.partition("\t")
+        if ref == "HEAD" and len(sha) == 40:
+            return sha
+    return ""
 
 
 def _ahead_behind(path: Path) -> tuple[int | None, int | None]:

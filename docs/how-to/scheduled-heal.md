@@ -106,9 +106,9 @@ and the next step. Only the value `1` enables it; `0` or `false` leave it off.
 - a gate that did not run at the commit `origin`'s default branch points at
   files and closes nothing: uncommitted or untracked changes, a local branch,
   or unpushed or unpulled commits describe your work, not the project. The heal
-  report still shows the failure. A checkout needs `origin/HEAD`, which every
-  clone has; a repository given its remote by hand gets it from
-  `git remote set-head origin --auto`.
+  report still shows the failure. The tip is asked of `origin` on every pass,
+  so a checkout that has not pulled a newer push is skipped too, and an
+  unreachable `origin` files and closes nothing.
 
 The issues find each other by a hidden marker in their body, read from the
 repository on every pass, so there is no state file to lose. Only issues opened

@@ -570,9 +570,30 @@ def test_a_fix_on_an_unpushed_branch_does_not_close_the_issue(
     assert github.open_issues() == {}
 
 
-def test_a_checkout_with_no_origin_head_files_nothing(fleet_dir: Path, github: _FakeGitHub) -> None:
+def test_a_checkout_with_no_origin_files_nothing(fleet_dir: Path, github: _FakeGitHub) -> None:
     project = make_project(fleet_dir, "alpha", tooling={"lint": "false"})
     git_init(project)
+    argv = ["heal", "--all", "--mode", "notify", "--root", str(fleet_dir), "--issues"]
+    assert main(argv) == 1
+    assert github.calls == []
+
+
+def test_a_stale_clone_is_not_the_published_tip(
+    fleet_dir: Path, tmp_path: Path, github: _FakeGitHub
+) -> None:
+    # Codex on #293: after another checkout pushes, this clone's HEAD and its
+    # remote-tracking ref still agree with each other. Only the remote knows.
+    project = _committed_project(fleet_dir)
+    other = tmp_path / "other"
+    subprocess.run(
+        ["git", "clone", "-q", _git(project, "remote", "get-url", "origin"), str(other)], check=True
+    )
+    _git(other, "config", "user.email", "test@example.com")
+    _git(other, "config", "user.name", "Test")
+    (other / "later.txt").write_text("pushed from another checkout\n", encoding="utf-8")
+    _git(other, "add", "later.txt")
+    _git(other, "commit", "-qm", "later")
+    _git(other, "push", "-q", "origin", "main")
     argv = ["heal", "--all", "--mode", "notify", "--root", str(fleet_dir), "--issues"]
     assert main(argv) == 1
     assert github.calls == []

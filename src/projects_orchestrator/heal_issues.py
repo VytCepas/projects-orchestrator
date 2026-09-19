@@ -23,7 +23,7 @@ failed delivery.
 
 **Only the published default branch is reported.** A result is filed or closed
 on only when it ran on a clean tree whose HEAD is the commit ``origin``'s
-default branch points at. Anything else describes the operator's own work, not
+default branch points at, asked of the remote on each pass. Anything else describes the operator's own work, not
 the project: uncommitted changes, a local feature branch, or commits not yet
 pushed or pulled. Filing on it would publish a failure the default branch may
 not have, citing a commit GitHub may never have seen. Closing on it would close
@@ -146,7 +146,7 @@ def _published(
         _log.warning(
             "%s: %s did not run at origin's default-branch tip (%s), so no issue is filed"
             " or closed for it: a dirty or untracked tree, a local branch, unpushed or"
-            " unpulled commits, or no origin/HEAD (`git remote set-head origin --auto`)",
+            " unpulled commits, or an origin that could not be reached",
             name,
             ", ".join(skipped),
             tip[:12] or "unknown",
