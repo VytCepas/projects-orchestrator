@@ -35,8 +35,11 @@ def test_a_failing_command_reads_unknown_even_when_it_printed(tmp_path: Path) ->
     assert host_health(_reporter(tmp_path, "echo ok\nexit 1\n")) == HOST_UNKNOWN
 
 
-def test_a_command_that_times_out_reads_unknown() -> None:
-    assert host_health("sleep 5", timeout=0.3) == HOST_UNKNOWN
+def test_a_command_that_times_out_reads_unknown(tmp_path: Path) -> None:
+    # It prints a verdict and then stalls, so only the timeout can make this
+    # unknown: without one, the tile would wait five seconds and read "ok".
+    command = _reporter(tmp_path, "echo ok\nexec sleep 5\n")
+    assert host_health(command, timeout=0.3) == HOST_UNKNOWN
 
 
 def test_a_command_that_prints_nothing_reads_unknown() -> None:
