@@ -102,7 +102,7 @@ that are worth understanding before you try:
    `.agents/config.yaml`. The descriptor contract records no git remote for a
    child project, so a hosted runner has no way to find — or even clone — the
    fleet it is meant to audit. Teaching it to would mean adding repo URLs to the
-   producer→consumer contract, which ADR-025 (not yet written up — #189) deliberately keeps one-way and
+   producer→consumer contract, which project-init ADR-025 §1 deliberately keeps one-way and
    pull-only.
 2. **The delta needs memory.** The digest compares against state under
    `$XDG_STATE_HOME`. A hosted runner starts empty every run, so *every* finding

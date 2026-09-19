@@ -82,7 +82,7 @@ this escape hatch that makes headless-by-default safe to run unattended.
 Every run happens in a fresh `git worktree` (not the operator's working clone),
 on a branch, and its only sanctioned output is a **draft PR**. It never pushes to
 `main` and never merges. The child project's own review-gated CI decides whether
-the work lands — the same credential-separation principle as ADR-012, applied to
+the work lands — the same credential-separation principle as project-init ADR-012, applied to
 code instead of secrets.
 
 **This must be enforced here, in the run harness.** A project-init'd repo has a
@@ -127,7 +127,7 @@ half-true safety story ADR-005 warns against. An agent that cannot call `deploy`
 can still find `gcloud`, `gsutil`, or `flyctl` on the PATH and reach production
 underneath us. So the run's **environment is scrubbed of cloud credentials**: the
 agent cannot mutate a Cloud Run service, a bucket, a database, or a secret,
-because it never holds anything that would let it. This is ADR-012 turned on the
+because it never holds anything that would let it. This is project-init ADR-012 turned on the
 agent — *it cannot leak, or wreck, what it does not have.*
 
 The asymmetry is what justifies the severity. A bad code change is a PR you
@@ -198,7 +198,7 @@ the briefing. Nothing else.
   *with a reason* and leaves the worktree on disk with the work in it. Nothing is
   silently discarded.
 - Good: no descriptor contract change. Runs, campaigns, and policy are all
-  consumer-side state; the child repos are unchanged. ADR-025's one-way,
+  consumer-side state; the child repos are unchanged. project-init ADR-025's one-way,
   pull-only relationship with project-init holds.
 - Bad: failed runs accumulate worktrees on disk. This is deliberate — a dead
   agent's worktree is the only forensic record of what it was thinking, and

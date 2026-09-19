@@ -37,7 +37,7 @@ WHAT IS REFUSED, AND WHAT DELIBERATELY IS NOT
   IPv4-mapped spelling ``::ffff:169.254.169.254``, unwrapped by this module) are
   refused:
   ``169.254.169.254`` is the AWS/GCP instance-metadata endpoint, and this fleet
-  runs on machines that may hold cloud credentials (ADR-012).
+  runs on machines that may hold cloud credentials (project-init ADR-012).
 - **Numeric-looking hosts that are not strict literals**, and **any host
   containing a percent-escape** — the two bypasses above.
 - **Loopback and RFC1918 private ranges are ALLOWED**, deliberately. A

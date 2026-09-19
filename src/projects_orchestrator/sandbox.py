@@ -57,7 +57,7 @@ from pathlib import Path
 #: - TMPDIR: a place to write scratch files that is not the repo.
 #: - the agent's OWN key: it must be able to call the model it IS. This is the
 #:   agent's credential, not the operator's cloud/production credentials — the
-#:   distinction ADR-012 draws — and without it the agent cannot run at all.
+#:   distinction project-init ADR-012 draws — and without it the agent cannot run at all.
 #: NOTE what is NOT here: HOME. It is set fresh under the sandbox home rather than
 #: copied, because the operator's HOME is the search path for every file-backed
 #: credential (see the module docstring). USER/LOGNAME are copied for git identity

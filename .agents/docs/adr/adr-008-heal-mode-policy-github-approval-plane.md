@@ -48,7 +48,7 @@ GitHub, which they already watch from Gmail and their phone:
   diagnosis (#164).
 - *Approval is a merge* — never a custom endpoint, token, or chat button. The
   dashboard's mutating actions stay loopback-bound (PO-156); production
-  credentials stay in review-gated CI (ADR-012 upstream); no new inbound
+  credentials stay in review-gated CI (project-init ADR-012); no new inbound
   surface is added anywhere.
 
 ### Consequences

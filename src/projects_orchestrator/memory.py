@@ -31,7 +31,7 @@ _MAX_FILE_BYTES = 262_144
 
 _MAX_GRAPH_BYTES = 4_194_304
 
-# Retrieval surfaces, in the degrade-by-tier order of ADR-025 §4: a reader picks
+# Retrieval surfaces, in the degrade-by-tier order of project-init ADR-025 §4: a reader picks
 # the richest surface its tier provides and degrades to the grep baseline, whose
 # anchors never move — so a tier-0 read stays correct against a tier-3 child.
 MODE_RAG = "rag"
@@ -223,7 +223,7 @@ def load_project_memory(descriptor: ProjectDescriptor) -> ProjectMemory:
 def retrieval_mode(descriptor: ProjectDescriptor) -> str:
     """Pick a project's memory retrieval surface from its tier (pure).
 
-    The ADR-025 §4 reader rule: ``tier ≥ 3`` with an endpoint queries RAG;
+    The project-init ADR-025 §4 reader rule: ``tier ≥ 3`` with an endpoint queries RAG;
     ``tier ≥ 2`` with a graph reads the graph; everything else greps the
     ``memory_path`` baseline. A higher tier only *offers* a richer surface —
     when the surface is undeclared (a tier-3 child that has not run its RAG

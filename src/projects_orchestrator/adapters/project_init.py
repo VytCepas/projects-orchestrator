@@ -8,7 +8,7 @@ timeout-bounded runner and degrading to ``None``/failure offline.
 
 The orchestrator never mutates a child tree: ``trigger_upgrade`` only *dispatches*
 the child's own reviewed-PR upgrade workflow, which stays the sole write path
-(ADR-003 / ADR-012).
+(ADR-003 / project-init ADR-012).
 """
 
 from __future__ import annotations

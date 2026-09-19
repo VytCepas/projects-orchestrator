@@ -145,9 +145,10 @@ DEPLOY_NONE = "none"
 MEMORY_STACK_NONE = "none"
 
 # Memory tier at which each higher-tier retrieval surface first appears
-# (ADR-024 tier model, ADR-025 §4). A child only *emits* the field at/above
-# its tier, so the orchestrator reads it tier-gated: anchors never move, higher
-# tiers only add surfaces, and a tier-0 read stays correct against a tier-3 child.
+# (project-init ADR-024 tier model, project-init ADR-025 §4). A child only
+# *emits* the field at/above its tier, so the orchestrator reads it tier-gated:
+# anchors never move, higher tiers only add surfaces, and a tier-0 read stays
+# correct against a tier-3 child.
 TIER_VAULT = 1
 TIER_GRAPH = 2
 TIER_RAG = 3
@@ -196,7 +197,7 @@ class CiConfig:
 
     Optional and additive within contract v2: a child that omits it (every child
     scaffolded before project-init 1.1.7) is probed through its forge exactly as
-    before. Feature-detected, per ADR-025 §4 — not gated on a version bump.
+    before. Feature-detected, per project-init ADR-025 §4 — not gated on a version bump.
 
     Attributes:
         status_url: JSON endpoint reporting the latest build; empty when the
@@ -233,7 +234,7 @@ class ProjectDescriptor:
             (#208, #257).
         memory_path: Absolute path to the project's memory directory.
         vault_path: Obsidian vault directory; ``None`` below tier 1 or when
-            undeclared (higher-tier retrieval surface, ADR-025 §4).
+            undeclared (higher-tier retrieval surface, project-init ADR-025 §4).
         graph_path: Graphify graph file; ``None`` below tier 2 or when
             undeclared.
         rag_endpoint: Tier-3 RAG query endpoint (URL or local address); empty
@@ -754,7 +755,7 @@ def parse_config(text: str, project_dir: Path, config_root: str = ".claude") -> 
         host=str(project.get("project_init_host") or ""),
         # Feature-detected, NOT version-gated (unlike deploy/observability/hooks,
         # which arrived *with* v2). `ci` is an additive field within v2, so the
-        # contract version says nothing about whether a child emits it — ADR-025
+        # contract version says nothing about whether a child emits it — project-init ADR-025
         # §4's rule is to detect the surface, not infer it from a version. A v1
         # child that hand-adds the block is honoured too, which costs nothing.
         ci=_extract_ci(raw),

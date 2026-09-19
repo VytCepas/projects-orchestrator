@@ -89,7 +89,7 @@ def test_real_config_carries_a_hashable_scaffold_manifest(tmp_path: Path) -> Non
 
 
 def test_real_capabilities_md_exposes_the_skill_inventory() -> None:
-    # CAPABILITIES.md is the ADR-025 §3 capability inventory the fleet aggregates.
+    # CAPABILITIES.md is the project-init ADR-025 §3 capability inventory the fleet aggregates.
     # A real github-lifecycle scaffold ships a non-empty skill set the parser reads.
     inventory = parse_capabilities(
         _CAPABILITIES_V1.read_text(encoding="utf-8"), "demo-service", _CAPABILITIES_V1

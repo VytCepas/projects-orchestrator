@@ -95,7 +95,7 @@ def test_search_memory_spans_projects(fleet_dir: Path) -> None:
     assert {h.file.project for h in search_memory(memories, "shared-token")} == {"alpha", "beta"}
 
 
-# --- Degrade-by-tier retrieval (ADR-025 §4) ---
+# --- Degrade-by-tier retrieval (project-init ADR-025 §4) ---
 
 
 def _descriptor(project: Path):
