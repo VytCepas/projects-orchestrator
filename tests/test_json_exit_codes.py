@@ -158,15 +158,15 @@ def _run(argv: list[str], tmp_path: Path, mode: str, monkeypatch: pytest.MonkeyP
     return main(argv)
 
 
-@pytest.mark.parametrize(("setup", "expected"), [c[1:] for c in _CASES], ids=[c[0] for c in _CASES])
+@pytest.mark.parametrize("case", _CASES, ids=[c[0] for c in _CASES])
 def test_json_exits_as_the_text_mode_does(
-    setup: Setup,
-    expected: int,
+    case: tuple[str, Setup, int],
     fleet_dir: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    _name, setup, expected = case
     argv = setup(fleet_dir, tmp_path, monkeypatch)
     text_rc = _run(argv, tmp_path, "text", monkeypatch)
     capsys.readouterr()
