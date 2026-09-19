@@ -223,5 +223,6 @@ def _differs(tracked: Path, installed: Path) -> bool:
     """
     try:
         return tracked.read_bytes() != installed.read_bytes()
-    except OSError:
+    except OSError as exc:
+        _log.debug("cannot compare %s with %s: %r", tracked, installed, exc)
         return False
