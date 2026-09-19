@@ -452,6 +452,7 @@ def test_upgrade_plan_prints_the_reason_after_the_unchanged_row(
 ) -> None:
     make_project(fleet_dir, "alpha")
     monkeypatch.setattr(cli, "latest_upstream_version", lambda _cwd: None)
+    monkeypatch.setattr(cli, "latest_plugin_version", lambda _cwd: None)
     main(["upgrade-plan", "--root", str(fleet_dir)])
     line = capsys.readouterr().out.strip()
     assert line.startswith("alpha: unknown (scaffold 0.5.2, drift ")

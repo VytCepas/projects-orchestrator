@@ -12,6 +12,10 @@ version's only source. `tests/test_version.py` fails when they disagree.
 
 ### Added
 
+- `upgrade-plan` reports each project's plugin payload against the version
+  project-init's default branch ships: `plugin 0.9.16 → 0.9.20 behind`, `ok`,
+  or `unknown`, never `ok` when upstream cannot be read. It is its own field;
+  the scaffold status and the exit code are unchanged (#212).
 - `--json` output is a frozen seam: versioned schemas under `schemas/`, golden
   fixtures, and producer-side validation (#230).
 - `watch` reports when its own timer stops, instead of going quiet (#244).

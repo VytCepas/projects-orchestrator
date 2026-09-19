@@ -10,8 +10,11 @@ from conftest import make_project
 from projects_orchestrator.adapters.project_init import (
     GITHUB_UPGRADE_WORKFLOW,
     GITLAB_UPGRADE_WORKFLOW,
+    PLUGIN_MANIFEST,
     has_upgrade_workflow,
+    latest_plugin_version,
     latest_upstream_version,
+    parse_plugin_manifest,
     parse_release_tag,
     parse_scaffold_result,
     trigger_upgrade,
@@ -156,3 +159,37 @@ def test_parse_scaffold_result_non_object_is_none() -> None:
 
 def test_parse_scaffold_result_invalid_json_is_none() -> None:
     assert parse_scaffold_result("{not json") is None
+
+
+# --- the plugin manifest on upstream's default branch (#212) -------------------------
+
+
+def test_parse_plugin_manifest_reads_the_version() -> None:
+    assert parse_plugin_manifest(json.dumps({"name": "x", "version": "0.9.20"})) == (0, 9, 20)
+
+
+def test_parse_plugin_manifest_garbage_is_none() -> None:
+    assert parse_plugin_manifest("not json") is None
+    assert parse_plugin_manifest(json.dumps({"version": "0.9"})) is None
+    assert parse_plugin_manifest(json.dumps(["0.9.20"])) is None
+
+
+def test_latest_plugin_version_reads_the_default_branch_manifest(tmp_path: Path) -> None:
+    seen: list[str] = []
+
+    def manifest_runner(command: str, cwd: Path, timeout: float) -> RunResult:  # noqa: ARG001
+        seen.append(command)
+        return RunResult(command=command, returncode=0, stdout='{"version": "0.9.20"}')
+
+    assert latest_plugin_version(tmp_path, run=manifest_runner) == (0, 9, 20)
+    # No ref: the default branch, which is what `claude plugin install` installs.
+    [command] = seen
+    assert f"repos/VytCepas/project-init/contents/{PLUGIN_MANIFEST}" in command
+    assert "?ref=" not in command
+
+
+def test_latest_plugin_version_degrades_offline(tmp_path: Path) -> None:
+    def offline_runner(command: str, cwd: Path, timeout: float) -> RunResult:  # noqa: ARG001
+        return RunResult(command=command, returncode=1, stderr="offline")
+
+    assert latest_plugin_version(tmp_path, run=offline_runner) is None

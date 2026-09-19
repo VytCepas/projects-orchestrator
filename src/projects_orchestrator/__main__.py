@@ -51,6 +51,7 @@ from projects_orchestrator.adapters.cloud import as_check_results as cloud_check
 from projects_orchestrator.adapters.forge import probe_ci
 from projects_orchestrator.adapters.gitlab import provider_is_gitlab
 from projects_orchestrator.adapters.project_init import (
+    latest_plugin_version,
     latest_upstream_version,
     parse_scaffold_result,
     trigger_upgrade,
@@ -120,7 +121,7 @@ from projects_orchestrator.supervisor import liveness_check
 from projects_orchestrator.supervisor import logs as run_logs
 from projects_orchestrator.supervisor import start as run_start
 from projects_orchestrator.supervisor import stop as run_stop
-from projects_orchestrator.upgrade import upgrade_plan
+from projects_orchestrator.upgrade import UpgradeRow, upgrade_plan
 
 _log = logging.getLogger(__name__)
 
@@ -625,6 +626,13 @@ def _cmd_events(args: argparse.Namespace) -> int:
     return 0
 
 
+def _plugin_cell(row: UpgradeRow) -> str:
+    """Render the plugin standing, e.g. ``plugin 0.9.16 → 0.9.20 behind`` (pure)."""
+    if row.plugin_status == "behind":
+        return f"plugin {row.plugin_version} → {row.plugin_latest} behind"
+    return f"plugin {row.plugin_version} {row.plugin_status}"
+
+
 def _cmd_upgrade_plan(args: argparse.Namespace) -> int:
     """Compare each project's scaffold version against upstream project-init.
 
@@ -640,7 +648,9 @@ def _cmd_upgrade_plan(args: argparse.Namespace) -> int:
             return 2
         selected = [descriptor]
     latest = latest_upstream_version(Path.cwd())
-    rows = upgrade_plan(selected, latest, cache.load_results())
+    rows = upgrade_plan(
+        selected, latest, cache.load_results(), plugin_latest=latest_plugin_version(Path.cwd())
+    )
     applied: dict[str, str] = {}
     if args.apply:
         by_name = {d.name: d for d in selected}
@@ -654,7 +664,8 @@ def _cmd_upgrade_plan(args: argparse.Namespace) -> int:
     for row in rows:
         line = (
             f"{row.project}: {row.status} "
-            f"(scaffold {row.scaffold_version}, drift {row.drift}, PRs {row.open_prs})"
+            f"(scaffold {row.scaffold_version}, drift {row.drift}, PRs {row.open_prs}, "
+            f"{_plugin_cell(row)})"
         )
         if row.reason:
             line += f" — {row.reason}"

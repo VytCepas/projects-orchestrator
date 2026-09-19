@@ -92,6 +92,8 @@ Upstream project-init state via ``gh`` — latest release, upgrade dispatch.
 - `def parse_scaffold_result` — Parse ``scaffold --json`` stdout into a :class:`ScaffoldResult` (pure).
 - `def parse_release_tag` — Parse ``gh release view --json tagName`` output to a version tuple (pure).
 - `def latest_upstream_version` — Fetch the newest upstream project-init release; never raises.
+- `def parse_plugin_manifest` — Parse a raw ``plugin.json`` into its version tuple (pure).
+- `def latest_plugin_version` — Fetch the plugin version project-init's default branch ships; never raises.
 - `def upgrade_workflow_relpath` — Return where this child's upgrade workflow lives, by forge (pure).
 - `def has_upgrade_workflow` — Whether the child ships a reachable upgrade workflow for its forge.
 - `def trigger_upgrade` — Dispatch a child's forge-appropriate upgrade workflow; never raises.
@@ -532,6 +534,7 @@ Fleet upgrade planning — who is behind upstream project-init, and act on it.
 
 - `class UpgradeRow` — One project's standing versus upstream project-init.
 - `def plan_status` — Classify a scaffold version against the latest upstream (pure).
+- `def plugin_status` — Classify a recorded plugin version against upstream's (pure).
 - `def unknown_reason` — Say why a row cannot be classified (pure); empty when it can.
 - `def build_row` — Build one upgrade-plan row for a project (never raises).
 - `def upgrade_plan` — Build the whole fleet's upgrade plan (pure over its inputs).
