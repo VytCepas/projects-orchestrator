@@ -55,8 +55,9 @@ Notes:
   only **add** surfaces — so a tier-0 reader stays correct against a tier-3
   child, and a stray higher-tier value on a lower-tier config is ignored —
   with a warning, so a surface declared below its gate is distinguishable from
-  one never declared (#236). `vault_path`/`graph_path` escaping the project root
-  are dropped with a warning at any tier, exactly like `memory_path`. Retrieval degrades by tier
+  one never declared (#236). `vault_path`/`graph_path` escaping the project
+  root, or not resolvable at all, are dropped with a warning at any tier,
+  exactly like `memory_path`. Retrieval degrades by tier
   (`memory.retrieval_mode`): RAG → graph → grep.
 - **Version format.** `project_init_version` is compared by splitting on `.`
   into integer components (`0.5.2` → `(0, 5, 2)`). Any non-integer component

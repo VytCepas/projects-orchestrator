@@ -319,6 +319,7 @@ def test_an_unresolvable_path_warns_instead_of_raising(
     descriptor = parse_config(_memory_config(0, line.format(escape)), tmp_path)
     assert descriptor.vault_path is None
     assert len(descriptor.warnings) == 1
+    assert "cannot be resolved" in descriptor.warnings[0]
     # The warning quotes the value, and doctor/audit print it: it must encode.
     descriptor.warnings[0].encode("utf-8")
     assert escape.lower() in descriptor.warnings[0].replace("\\x00", "\\0").lower()

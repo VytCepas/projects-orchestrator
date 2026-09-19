@@ -500,8 +500,12 @@ def _extract_context(raw: dict[str, Any], warnings: list[str]) -> str:
     return context
 
 
-def _contained_path(project_dir: Path, relative: str) -> Path | None:
-    """Join ``relative`` under ``project_dir``, or ``None`` if it escapes.
+ESCAPES = "escapes the project root"
+UNRESOLVABLE = "cannot be resolved"
+
+
+def _contain(project_dir: Path, relative: str) -> Path | str:
+    """Join ``relative`` under ``project_dir``, or say why it cannot be used.
 
     A descriptor is data the orchestrator only reads, but a ``memory_path`` or
     ``observability.path`` of ``../../etc`` or ``/etc`` would resolve outside
@@ -510,19 +514,23 @@ def _contained_path(project_dir: Path, relative: str) -> Path | None:
     values keep their plain (unresolved) join so callers compare cleanly.
 
     A path that cannot be resolved at all cannot be shown to be contained, so it
-    is rejected the same way. A symlink loop raises ``RuntimeError`` on Python
-    3.11/3.12; a YAML escape that decodes to a NUL raises
+    is rejected too, with its own reason. A symlink loop raises ``RuntimeError``
+    on Python 3.11/3.12; a YAML escape that decodes to a NUL raises
     ``ValueError``, and one that decodes to a lone surrogate raises
     ``UnicodeEncodeError``, a ``ValueError``. Raising here would abort discovery
     of the whole fleet over one project's descriptor (PR #262 review).
+
+    Returns:
+        The contained path, or the reason it was rejected: :data:`ESCAPES` or
+        :data:`UNRESOLVABLE`, worded to complete a warning sentence.
     """
     try:
         resolved = (project_dir / relative).resolve()
     except (OSError, RuntimeError, ValueError):
-        return None
+        return UNRESOLVABLE
     if resolved == project_dir or project_dir in resolved.parents:
         return project_dir / relative
-    return None
+    return ESCAPES
 
 
 def _extract_observability_path(
@@ -532,11 +540,10 @@ def _extract_observability_path(
     declared = _as_mapping(raw.get("observability")).get("path")
     if not isinstance(declared, str) or not declared.strip():
         return None
-    contained = _contained_path(project_dir, declared.strip())
-    if contained is None:
-        warnings.append(
-            f"observability.path '{declared.strip()}' escapes the project root — ignored"
-        )
+    contained = _contain(project_dir, declared.strip())
+    if isinstance(contained, str):
+        warnings.append(f"observability.path '{declared.strip()}' {contained} — ignored")
+        return None
     return contained
 
 
@@ -562,16 +569,16 @@ def _tier_gated_path(
     Dropping it silently made the one descriptor fault this reader said nothing
     about look like a project that never declared the surface.
 
-    Containment is checked BEFORE the gate, so an escaping path warns as an
-    escape at any tier. Gating first let a below-gate escape through both
+    Containment is checked BEFORE the gate, so an escaping or unresolvable
+    path warns as such at any tier. Gating first let a below-gate escape through both
     checks without a word.
     """
     declared = memory.block.get(key)
     if not isinstance(declared, str) or not declared.strip():
         return None
-    contained = _contained_path(memory.project_dir, declared.strip())
-    if contained is None:
-        warnings.append(f"memory.{key} '{declared.strip()}' escapes the project root — ignored")
+    contained = _contain(memory.project_dir, declared.strip())
+    if isinstance(contained, str):
+        warnings.append(f"memory.{key} '{declared.strip()}' {contained} — ignored")
         return None
     if memory.tier < min_tier:
         warnings.append(_below_gate(key, memory.tier, min_tier))
@@ -700,12 +707,11 @@ def parse_config(text: str, project_dir: Path, config_root: str = ".claude") -> 
     memory = _as_mapping(raw.get("memory"))
     memory_default = f"{config_root}/memory"
     memory_rel = str(memory.get("memory_path") or memory_default)
-    memory_path = _contained_path(project_dir, memory_rel)
-    if memory_path is None:
-        warnings.append(
-            f"memory_path '{memory_rel}' escapes the project root — using {memory_default}"
-        )
-        memory_path = project_dir / memory_default
+    contained = _contain(project_dir, memory_rel)
+    if isinstance(contained, str):
+        warnings.append(f"memory_path '{memory_rel}' {contained} — using {memory_default}")
+        contained = project_dir / memory_default
+    memory_path = contained
     malformed: list[str] = []
     contract_version = _as_int(
         project.get("project_init_contract_version"),
