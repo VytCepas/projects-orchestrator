@@ -49,6 +49,10 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# tests/integration/ runs in CI's own "Integration tests" job, which names the
+# directory explicitly (an explicit path overrides --ignore). Ignoring it here
+# keeps the unit run and mutmut from running those subprocess tests a second time.
+addopts = "--ignore=tests/integration"
 markers = [
     "inspects_agent_launch: exercises _default_agent_run itself (must stub subprocess.run); exempt from the no-live-agent fixture",
     "reads_the_checkout: reads files through git's top level, which under mutmut is the original checkout, not mutants/; exempt from the mutmut copy check",
