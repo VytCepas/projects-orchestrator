@@ -283,11 +283,16 @@ def test_a_host_root_logger_at_debug_neither_leaks_nor_doubles_the_trail(
     assert (ours, "debug:" in quiet, "debug:" in loud) == ([], False, True)
 
 
-def test_main_hands_the_package_logger_back_as_it_found_it(fleet_dir: Path) -> None:
+def test_main_hands_the_package_logger_back_as_it_found_it(
+    fleet_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A state main() would never set itself, so a missing restore cannot pass by
+    # coincidence with whatever an earlier test left behind.
     logger = logging.getLogger("projects_orchestrator")
-    before = (logger.level, logger.propagate, list(logger.handlers))
+    monkeypatch.setattr(logger, "level", logging.INFO)
+    monkeypatch.setattr(logger, "propagate", True)
     main(["snapshot", "--fleet", str(_plain_repo_fleet(fleet_dir)), "--verbose"])
-    assert (logger.level, logger.propagate, list(logger.handlers)) == before
+    assert (logger.level, logger.propagate, logger.handlers) == (logging.INFO, True, [])
 
 
 # --- upgrade-plan carries the reason into the row --------------------------------------
