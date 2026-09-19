@@ -79,6 +79,10 @@ def snapshot_alerts(snapshot: ProjectSnapshot) -> list[Alert]:
         alerts.append(
             Alert(name, WARNING, "hooks", f"git hooks {snapshot.hooks} — enforcement inactive")
         )
+    if snapshot.hooks == "stale":
+        alerts.append(
+            Alert(name, WARNING, "hooks", "git hooks stale — installed copy predates .github/hooks")
+        )
     return alerts
 
 

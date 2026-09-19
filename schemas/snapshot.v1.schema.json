@@ -32,9 +32,9 @@
         "memory": { "$ref": "#/$defs/memory" },
         "drift": { "$ref": "#/$defs/drift" },
         "hooks": {
-          "description": "Git-hook installation health. `-` means not a git repo / not applicable.",
+          "description": "Git-hook installation health. `stale` = every shipped hook is installed but at least one differs from its tracked `.github/hooks/` source (additive, #241). `-` means not a git repo / not applicable.",
           "type": "string",
-          "enum": ["ok", "partial", "missing", "-"]
+          "enum": ["ok", "stale", "partial", "missing", "-"]
         },
         "run_state": {
           "description": "Live supervised-process state, or null when not running. The non-null shape is UNOBSERVED in the golden fixture (no process was running); typed loosely on purpose rather than invented. See schemas/README.md.",

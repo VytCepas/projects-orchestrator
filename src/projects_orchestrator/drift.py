@@ -172,14 +172,24 @@ def hook_health(descriptor: ProjectDescriptor) -> str:
         descriptor: The project to inspect.
 
     Returns:
-        ``ok`` (all shipped hooks present in ``.git/hooks/``), ``partial``,
-        ``missing``, or ``-`` when the project ships no hooks. The shipped
-        set comes from the contract-v2 ``hooks.expected`` list when declared,
-        else from globbing ``.github/hooks/``.
+        ``ok`` (all shipped hooks present in ``.git/hooks/`` and matching their
+        tracked source), ``stale`` (all present, but at least one differs from
+        ``.github/hooks/``), ``partial``, ``missing``, or ``-`` when the project
+        ships no hooks. The shipped set comes from the contract-v2
+        ``hooks.expected`` list when declared, else from globbing
+        ``.github/hooks/``.
+
+    ``stale`` is the state nothing reported before #241. A merge updates
+    ``.github/hooks/`` and nothing updates ``.git/hooks/``, so a merged hook fix
+    runs only once someone re-installs it, and "present but old" read ``ok``,
+    exactly like "present and current". The installer copies byte for byte
+    (``cp -P``), so any difference is an install that predates the tracked hook.
+    A hook with no tracked source (declared only in ``hooks.expected``) has
+    nothing to compare against, and an unreadable file is not called stale.
     """
     declared = list(descriptor.hooks_expected)
+    source_dir = descriptor.path / HOOKS_SOURCE_DIR
     if not declared:
-        source_dir = descriptor.path / HOOKS_SOURCE_DIR
         try:
             declared = sorted(p.name for p in source_dir.iterdir() if p.is_file())
         except OSError:
@@ -188,6 +198,20 @@ def hook_health(descriptor: ProjectDescriptor) -> str:
         return "-"
     installed_dir = _hooks_dir(descriptor.path)
     installed = sum(1 for name in declared if (installed_dir / name).is_file())
-    if installed == len(declared):
-        return "ok"
-    return "partial" if installed else "missing"
+    if installed != len(declared):
+        return "partial" if installed else "missing"
+    if any(_differs(source_dir / name, installed_dir / name) for name in declared):
+        return "stale"
+    return "ok"
+
+
+def _differs(tracked: Path, installed: Path) -> bool:
+    """Whether an installed hook's bytes differ from its tracked source.
+
+    ``False`` when either side cannot be read — no tracked source, or an I/O
+    error — because an unknown is not evidence of staleness.
+    """
+    try:
+        return tracked.read_bytes() != installed.read_bytes()
+    except OSError:
+        return False

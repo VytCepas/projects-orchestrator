@@ -45,7 +45,7 @@ class HardeningReport:
 def _hook_item(descriptor: ProjectDescriptor) -> HardeningItem | None:
     """Return a hook-installation item when enforcement is inactive."""
     health = hook_health(descriptor)
-    if health not in {"missing", "partial"}:
+    if health not in {"missing", "partial", "stale"}:
         return None
     # Resolve against the descriptor's own config root — ``.agents/scripts`` on a
     # PI-627 scaffold, ``.claude/scripts`` on a legacy one — never a hardcoded
@@ -56,7 +56,11 @@ def _hook_item(descriptor: ProjectDescriptor) -> HardeningItem | None:
     return HardeningItem(
         category="hooks",
         status=WARN,
-        detail=f"git hooks {health}; local enforcement is inactive",
+        detail=(
+            "git hooks stale; the installed copy predates .github/hooks"
+            if health == "stale"
+            else f"git hooks {health}; local enforcement is inactive"
+        ),
         action=f"run {script}",
     )
 

@@ -66,6 +66,20 @@ def test_snapshot_alerts_flags_uninstalled_hooks(fleet_dir: Path) -> None:
     assert any(a.category == "hooks" for a in snapshot_alerts(_snapshot(fleet_dir)))
 
 
+def test_snapshot_alerts_flags_a_stale_hook(fleet_dir: Path) -> None:
+    # #241: installed and older than the tracked hook.
+    project = make_project(fleet_dir, "alpha")
+    source = project / ".github" / "hooks"
+    source.mkdir(parents=True)
+    (source / "pre-commit").write_text("#!/bin/sh\n# fixed\n", encoding="utf-8")
+    installed = project / ".git" / "hooks"
+    installed.mkdir(parents=True)
+    (installed / "pre-commit").write_text("#!/bin/sh\n# unfixed\n", encoding="utf-8")
+    assert Alert(
+        "alpha", WARNING, "hooks", "git hooks stale — installed copy predates .github/hooks"
+    ) in snapshot_alerts(_snapshot(fleet_dir))
+
+
 def test_fleet_alerts_orders_critical_before_warning(fleet_dir: Path) -> None:
     make_project(fleet_dir, "alpha")
     snap = _snapshot(fleet_dir, {**_cached("test", "fail"), **_cached("lint", "fail")})

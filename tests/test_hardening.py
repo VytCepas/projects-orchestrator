@@ -48,6 +48,20 @@ def test_missing_hooks_action_targets_legacy_layout(fleet_dir: Path) -> None:
     assert action.endswith(".claude/scripts/install_hooks.sh")
 
 
+def test_checklist_flags_a_stale_hook(fleet_dir: Path) -> None:
+    # #241: every hook installed, one older than its tracked source.
+    project = make_project(fleet_dir, "alpha")
+    source = project / ".github" / "hooks"
+    source.mkdir(parents=True)
+    (source / "pre-commit").write_text("#!/bin/sh\n# fixed\n", encoding="utf-8")
+    installed = project / ".git" / "hooks"
+    installed.mkdir(parents=True)
+    (installed / "pre-commit").write_text("#!/bin/sh\n# unfixed\n", encoding="utf-8")
+    report = checklist([_descriptor(project)], {})
+    item = next(item for item in report[0].items if item.category == "hooks")
+    assert item.detail == "git hooks stale; the installed copy predates .github/hooks"
+
+
 def test_checklist_flags_missing_memory(fleet_dir: Path) -> None:
     project = make_project(fleet_dir, "alpha")
     report = checklist([_descriptor(project)], {})
