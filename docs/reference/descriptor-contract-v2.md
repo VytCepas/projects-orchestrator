@@ -20,8 +20,18 @@ orchestrator consumes.
   reader would.
 - **Machine-generated.** The scaffold renders these fields; humans edit them
   through project-init, not by hand.
-- **Hash-covered.** `.claude/config.yaml` stays covered by
-  `scaffold.manifest`, so drift detection sees contract edits.
+- **Not hash-covered.** The descriptor is NOT in `scaffold.manifest`, and
+  `drift` does not see an edit to it. The manifest lives inside the descriptor,
+  so the descriptor cannot record its own hash; project-init's
+  `write_scaffold_record` skips it by name, and it is user-owned besides
+  (`project_key` and the like). Measured 2026-09-19: none of six real manifests
+  lists it. What partly checks the descriptor instead is this reader. SOME
+  malformed or contradictory values become a warning that `doctor`'s `config`
+  check FAILs on: an unreadable contract version or tier, a tier that
+  contradicts its stack, an escaping path. Others are coerced to defaults
+  silently. A non-mapping `deploy:` reads as `target: none`, and a non-list
+  `hooks.expected` reads as empty. An edit that stays well-formed is not
+  detected by anything (#212, #220).
 - **Read-only.** The orchestrator never writes any of this (ADR-003).
 
 ## New surfaces
