@@ -40,9 +40,11 @@ _ROOT = Path(__file__).resolve().parents[1]
 _ADR_DIR = _ROOT / ".agents" / "docs" / "adr"
 _INDEX = ".agents/docs/adr/UPSTREAM.md"
 
-#: Any digit run, not exactly three: a dropped or doubled digit (``ADR-03``,
-#: ``ADR-0250``) must be reported, not silently unmatched.
-_CITATION = re.compile(r"ADR-(\d+)")
+#: The whole token that starts with a digit, not exactly three digits: a dropped
+#: or doubled digit (``ADR-03``, ``ADR-0250``) or a trailing character
+#: (``ADR-025O``) must be reported, not silently read as a valid number. The
+#: ``ADR-NNN`` placeholder starts with a letter and is not a citation.
+_CITATION = re.compile(r"ADR-(\d\w*)")
 _UPSTREAM = "project-init "
 _INDEX_ROW = re.compile(
     r"^\| project-init ADR-(\d{3}) \| `adr-(\d{3})-[a-z0-9-]+\.md` \|", flags=re.MULTILINE
@@ -228,6 +230,8 @@ def test_the_scan_sees_local_citations(scanned: dict[str, str]) -> None:
         ("project-init ADR-003 is not this repo's ADR-003", [(1, "project-init ADR-003")]),
         ("per project-init ADR-0250, a doubled digit", [(1, "project-init ADR-0250")]),
         ("see ADR-03, a dropped digit", [(1, "ADR-03")]),
+        ("per project-init ADR-025O, a trailing letter", [(1, "project-init ADR-025O")]),
+        ("cite it as ADR-NNN, the placeholder", []),
     ],
 )
 def test_phantoms(text: str, expected: list[tuple[int, str]]) -> None:
