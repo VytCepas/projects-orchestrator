@@ -10,6 +10,12 @@ version's only source. `tests/test_version.py` fails when they disagree.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-19
+
+The first release since 0.2.0: the fleet-audit fixes, the frozen `--json`
+seam, heal notifications (webhook and notify-mode issues), and the first build
+meant for PyPI.
+
 ### Added
 
 - `upgrade-plan` reports each project's plugin payload against the version
@@ -135,5 +141,6 @@ The first release: the fleet engine (descriptor registry, checks, drift, memory
 search, controller, TUI) and the project-init scaffold. Full notes:
 [GitHub release v0.2.0](https://github.com/VytCepas/projects-orchestrator/releases/tag/v0.2.0).
 
-[Unreleased]: https://github.com/VytCepas/projects-orchestrator/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/VytCepas/projects-orchestrator/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/VytCepas/projects-orchestrator/releases/tag/v0.3.0
 [0.2.0]: https://github.com/VytCepas/projects-orchestrator/releases/tag/v0.2.0
