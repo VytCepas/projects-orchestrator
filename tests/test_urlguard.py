@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import ipaddress
+
 import pytest
 
-from projects_orchestrator.urlguard import is_probe_safe
+from projects_orchestrator.urlguard import _literal_host, is_probe_safe
 
 # --- Allowed: the shapes a real self-hosted CI endpoint actually takes ---
 
@@ -59,14 +61,23 @@ def test_ipv6_link_local_address_is_refused() -> None:
 
 
 def test_ipv4_mapped_metadata_address_is_refused() -> None:
-    """``::ffff:169.254.169.254`` reaches the same endpoint, and is refused.
-
-    This pins STDLIB behaviour, not ours: :attr:`IPv6Address.is_link_local`
-    already reports the mapped address's verdict. Kept because the guarantee is
-    load-bearing and the mechanism is not obvious — if this predicate is ever
-    rewritten to check ranges by hand, this is the case that will be missed.
-    """
+    """``::ffff:169.254.169.254`` reaches the same endpoint, and is refused."""
     assert is_probe_safe("http://[::ffff:169.254.169.254]/latest/meta-data/") is False
+
+
+def test_ipv4_mapped_literal_is_judged_as_its_ipv4_address() -> None:
+    """The guard unwraps the mapped spelling itself, on every interpreter.
+
+    The end-to-end test above passes on its own wherever the stdlib's
+    :attr:`IPv6Address.is_link_local` already reports the mapped verdict, so it
+    cannot tell whether the guard or the interpreter did the refusing. CPython
+    3.12.3 does not, and the nightly 3.12 job went red on it. This pins the
+    unwrap directly, so deleting it fails here on any interpreter.
+    """
+    assert _literal_host("::ffff:169.254.169.254") == ipaddress.IPv4Address("169.254.169.254")
+    assert _literal_host("::ffff:10.0.0.5") == ipaddress.IPv4Address("10.0.0.5")
+    assert _literal_host("fe80::1") == ipaddress.IPv6Address("fe80::1")
+    assert is_probe_safe("http://[::ffff:10.0.0.5]/") is True
 
 
 # --- Refused: malformed input, because this predicate must never raise ---

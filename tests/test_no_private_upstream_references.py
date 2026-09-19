@@ -110,6 +110,7 @@ def _scanned_files() -> list[Path]:
     )
 
 
+@pytest.mark.reads_the_checkout
 @pytest.mark.parametrize("name", _PRIVATE_NAMES)
 def test_nothing_shipped_or_public_names_the_private_upstream(name: str) -> None:
     pattern = re.compile(re.escape(name), re.IGNORECASE)
