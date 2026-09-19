@@ -61,5 +61,6 @@ release:
 1. Move the `Unreleased` entries in `CHANGELOG.md` under the new version heading.
 2. Set `__version__` to that version. `tests/test_version.py` fails if the two
    disagree.
-3. Merge, then `git tag vX.Y.Z && git push --tags`. The release workflow builds
-   the package and cuts a GitHub Release.
+3. Merge, then `git tag vX.Y.Z && git push origin vX.Y.Z`. Push that one tag, not
+   `--tags`: every `v*` tag that reaches GitHub starts a release run. The release
+   workflow builds the package and cuts a GitHub Release.
