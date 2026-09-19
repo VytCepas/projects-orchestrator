@@ -13,6 +13,8 @@ files degrade to untyped entries.
 from __future__ import annotations
 
 import json
+import math
+import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -89,13 +91,16 @@ class MemoryHit:
         file: The memory file that matched.
         line_number: 1-based line of the match within the body (0 = metadata).
         line: The matching line (or the description for metadata hits).
-        score: Rank weight — higher sorts first.
+        score: The document's BM25 relevance.
+        matched: How many distinct query terms the document contains. It sorts
+            before ``score``: a note with more of the query ranks first.
     """
 
     file: MemoryFile
     line_number: int
     line: str
-    score: int = 0
+    score: float = 0.0
+    matched: int = 0
 
 
 def _split_frontmatter(text: str) -> tuple[dict[str, str], str]:
@@ -296,40 +301,153 @@ def load_memory(descriptor: ProjectDescriptor) -> ProjectMemory:
     return base
 
 
-def _score_metadata(memory_file: MemoryFile, needle: str) -> MemoryHit | None:
-    """Match against name/description — the highest-signal surfaces."""
-    if needle in memory_file.name.lower():
-        return MemoryHit(file=memory_file, line_number=0, line=memory_file.description, score=3)
-    if needle in memory_file.description.lower():
-        return MemoryHit(file=memory_file, line_number=0, line=memory_file.description, score=2)
-    return None
+# BM25 (Robertson/Sparck Jones) over memory FILES, one fact file = one document.
+# k1 and b are the textbook defaults: k1 caps how much a repeated term can add,
+# b scales the length normalisation (0 = none, 1 = full).
+BM25_K1 = 1.2
+BM25_B = 0.75
+
+# Field weights, BM25F-style: a term in the name counts three times and in the
+# description twice. They keep the preference the hard-coded 3/2/1 scores used
+# to encode, since the name and description are the highest-signal surfaces,
+# while the rest of the score now comes from the corpus instead of a constant.
+_FIELD_WEIGHTS = ((3, "name"), (2, "description"), (1, "body"))
+
+_TOKEN = re.compile(r"\w+")
+
+
+def _query_terms(query: str) -> tuple[str, ...]:
+    """Split a query into distinct lowercased terms, in order (pure).
+
+    Terms split on whitespace only, so ``fly.io`` stays one term and matches the
+    way it always did.
+    """
+    return tuple(dict.fromkeys(query.lower().split()))
+
+
+def _weighted_fields(memory_file: MemoryFile) -> tuple[tuple[int, str], ...]:
+    """Each searchable field with its weight, lowercased (pure)."""
+    return tuple((weight, getattr(memory_file, field).lower()) for weight, field in _FIELD_WEIGHTS)
+
+
+def _term_frequency(fields: tuple[tuple[int, str], ...], term: str) -> int:
+    """Weighted occurrences of ``term`` across a document's fields (pure).
+
+    Matching is by SUBSTRING, as the scan it replaces was, so every document
+    the old search found is still found: ``postgres`` still matches
+    ``PostgreSQL``. BM25 changes the order, never the recall.
+    """
+    return sum(weight * text.count(term) for weight, text in fields)
+
+
+def _document_length(fields: tuple[tuple[int, str], ...]) -> int:
+    """Weighted token count, the length BM25 normalises by (pure)."""
+    return sum(weight * len(_TOKEN.findall(text)) for weight, text in fields)
+
+
+def _bm25_scores(files: list[MemoryFile], terms: tuple[str, ...]) -> list[tuple[float, int]]:
+    """Score every document against ``terms``, with how many it matched (pure).
+
+    ``(0.0, 0)`` means no term matched.
+
+    IDF is the non-negative form ``ln(1 + (N - n + 0.5) / (n + 0.5))``. The
+    classic form goes negative once a term is in more than half the documents,
+    which would rank a document BELOW one that does not contain the term.
+    """
+    docs = [_weighted_fields(f) for f in files]
+    lengths = [_document_length(d) for d in docs]
+    total = len(docs)
+    average = (sum(lengths) / total) if total else 0.0
+    tfs = [[_term_frequency(d, term) for term in terms] for d in docs]
+    idf = [
+        math.log(1 + (total - n + 0.5) / (n + 0.5))
+        for n in (sum(1 for row in tfs if row[i]) for i in range(len(terms)))
+    ]
+    scores: list[tuple[float, int]] = []
+    for row, length in zip(tfs, lengths, strict=True):
+        norm = BM25_K1 * (1 - BM25_B + BM25_B * (length / average if average else 0.0))
+        score = sum(idf[i] * tf * (BM25_K1 + 1) / (tf + norm) for i, tf in enumerate(row) if tf)
+        scores.append((score, sum(1 for tf in row if tf)))
+    return scores
+
+
+def _file_hits(
+    memory_file: MemoryFile, terms: tuple[str, ...], score: float, matched: int
+) -> list[MemoryHit]:
+    """The lines of one matching document to show, each carrying its score (pure).
+
+    One metadata hit (line 0) when a term is in the name or description, then
+    every body line containing a term.
+    """
+    hits: list[MemoryHit] = []
+    metadata = f"{memory_file.name}\n{memory_file.description}".lower()
+    if any(term in metadata for term in terms):
+        hits.append(
+            MemoryHit(
+                file=memory_file,
+                line_number=0,
+                line=memory_file.description,
+                score=score,
+                matched=matched,
+            )
+        )
+    for number, line in enumerate(memory_file.body.splitlines(), start=1):
+        lowered = line.lower()
+        if any(term in lowered for term in terms):
+            hits.append(
+                MemoryHit(
+                    file=memory_file,
+                    line_number=number,
+                    line=line.strip(),
+                    score=score,
+                    matched=matched,
+                )
+            )
+    return hits
 
 
 def search_memory(memories: list[ProjectMemory], query: str) -> list[MemoryHit]:
-    """Search all loaded memories for a case-insensitive substring.
+    """Search all loaded memories, ranked by BM25 relevance (pure).
+
+    Each fact file is one document, and the corpus is every file across the
+    memories passed in, so a term's rarity is judged fleet-wide. The query is
+    split on whitespace into terms, and a document matches when it contains
+    ANY term: ``descriptor drift`` finds a note that uses the two words apart.
+
+    Order is by how many distinct terms a note contains, then by BM25
+    (:data:`BM25_K1`, :data:`BM25_B`), with the name and description weighted
+    above the body. Coverage comes first because BM25 alone does not guarantee
+    it: its length normalisation can score a short note with one term above a
+    long note with every term, and a note that answers the whole query should
+    not be buried under one that answers half. Among notes matching the same
+    number of terms, a rare term outranks a common one.
 
     Args:
         memories: Per-project memories (see :func:`load_project_memory`).
         query: Text to look for in names, descriptions, and bodies.
 
     Returns:
-        Hits sorted by score (metadata first), then project and file.
+        Hits sorted by terms matched, then score, highest first, then
+        project, file and line. A document's metadata hit (line 0) precedes
+        its body lines.
     """
-    needle = query.strip().lower()
-    if not needle:
+    terms = _query_terms(query)
+    if not terms:
         return []
 
+    files = [memory_file for memory in memories for memory_file in memory.files]
     hits: list[MemoryHit] = []
-    for memory in memories:
-        for memory_file in memory.files:
-            metadata_hit = _score_metadata(memory_file, needle)
-            if metadata_hit is not None:
-                hits.append(metadata_hit)
-            for number, line in enumerate(memory_file.body.splitlines(), start=1):
-                if needle in line.lower():
-                    hits.append(
-                        MemoryHit(file=memory_file, line_number=number, line=line.strip(), score=1)
-                    )
+    for memory_file, (score, matched) in zip(files, _bm25_scores(files, terms), strict=True):
+        if matched:
+            hits.extend(_file_hits(memory_file, terms, score, matched))
 
-    hits.sort(key=lambda h: (-h.score, h.file.project.lower(), h.file.path.name, h.line_number))
+    hits.sort(
+        key=lambda h: (
+            -h.matched,
+            -h.score,
+            h.file.project.lower(),
+            h.file.path.name,
+            h.line_number,
+        )
+    )
     return hits

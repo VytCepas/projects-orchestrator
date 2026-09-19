@@ -162,7 +162,9 @@ def test_memory_search_finds_fact(fleet_dir: Path, capsys) -> None:
 def test_memory_search_json(fleet_dir: Path, capsys) -> None:
     add_memory(make_project(fleet_dir, "alpha"), "project_context.md", body="uses postgres 16")
     main(["memory", "postgres", "--root", str(fleet_dir), "--json"])
-    assert json.loads(capsys.readouterr().out)[0]["file"]["project"] == "alpha"
+    hit = json.loads(capsys.readouterr().out)[0]
+    assert hit["file"]["project"] == "alpha"
+    assert isinstance(hit["score"], float) and hit["score"] > 0
 
 
 def test_capabilities_summarizes_each_project(fleet_dir: Path, capsys) -> None:
