@@ -2,7 +2,11 @@
 
 ``upgrade_plan`` joins each child's recorded ``project_init_version`` against
 the latest upstream release into ``ok | outdated | unknown``, alongside the
-local drift summary and (from the checks cache) open-PR count. It is a pure
+local drift summary and (from the checks cache) open-PR count. The plugin
+payload is judged separately (#212): the recorded
+``project.project_init_plugin_version`` against the manifest on project-init's
+default branch, as ``ok | behind | unknown`` in its own field, because a
+release and the plugin it ships are two different versions. It is a pure
 reader; the only write path is dispatching a child's own upgrade workflow
 (``adapters.project_init.trigger_upgrade``), never a direct tree edit.
 """
@@ -19,6 +23,8 @@ from projects_orchestrator.drift import compute_drift
 OK = "ok"
 OUTDATED = "outdated"
 UNKNOWN = "unknown"
+#: A plugin payload older than the one project-init's default branch ships.
+BEHIND = "behind"
 
 
 @dataclass(frozen=True)
@@ -34,6 +40,12 @@ class UpgradeRow:
         reason: Why ``status`` is ``unknown``; empty for every other status. The
             cause was already known in-process and dropped at the row, so an
             operator could not tell a plain repo from an offline ``gh`` (#185).
+        plugin_version: The recorded ``project_init_plugin_version`` (display
+            form, ``-`` when absent).
+        plugin_latest: The plugin version project-init's default branch ships
+            (``-`` when it could not be read).
+        plugin_status: ``ok`` (at or ahead of upstream) | ``behind`` |
+            ``unknown``. Separate from ``status``, which judges the scaffold.
     """
 
     project: str
@@ -42,6 +54,9 @@ class UpgradeRow:
     drift: str
     open_prs: str
     reason: str = ""
+    plugin_version: str = "-"
+    plugin_latest: str = "-"
+    plugin_status: str = UNKNOWN
 
 
 def plan_status(current: tuple[int, ...] | None, latest: tuple[int, ...] | None) -> str:
@@ -58,6 +73,21 @@ def plan_status(current: tuple[int, ...] | None, latest: tuple[int, ...] | None)
     if current is None or latest is None:
         return UNKNOWN
     return OK if current >= latest else OUTDATED
+
+
+def plugin_status(current: tuple[int, ...] | None, latest: tuple[int, ...] | None) -> str:
+    """Classify a recorded plugin version against upstream's (pure).
+
+    ``unknown`` whenever either side is missing, never ``ok``: a comparison that
+    could not be made must not read as a repo that is current (#212).
+    """
+    if current is None or latest is None:
+        return UNKNOWN
+    return OK if current >= latest else BEHIND
+
+
+def _display(version: tuple[int, ...] | None) -> str:
+    return ".".join(str(part) for part in version) if version is not None else "-"
 
 
 def unknown_reason(
@@ -95,6 +125,7 @@ def build_row(
     descriptor: ProjectDescriptor,
     latest: tuple[int, ...] | None,
     cached: dict[str, CheckResult] | None = None,
+    plugin_latest: tuple[int, ...] | None = None,
 ) -> UpgradeRow:
     """Build one upgrade-plan row for a project (never raises).
 
@@ -102,12 +133,15 @@ def build_row(
         descriptor: The project to assess.
         latest: The latest upstream version, or ``None`` when unknown.
         cached: Last-known check results for the project, for the PR count.
+        plugin_latest: The plugin version upstream's default branch ships, or
+            ``None`` when unknown.
 
     Returns:
         The composed :class:`UpgradeRow`.
     """
     current = parse_scaffold_version(descriptor.project_init_version)
     version = descriptor.project_init_version
+    plugin = descriptor.project_init_plugin_version
     return UpgradeRow(
         project=descriptor.name,
         scaffold_version=version if version != "unknown" else "-",
@@ -115,6 +149,9 @@ def build_row(
         drift=compute_drift(descriptor).summary,
         open_prs=_prs_cell(cached),
         reason=unknown_reason(descriptor, current, latest),
+        plugin_version=plugin if plugin != "unknown" else "-",
+        plugin_latest=_display(plugin_latest),
+        plugin_status=plugin_status(parse_scaffold_version(plugin), plugin_latest),
     )
 
 
@@ -122,6 +159,7 @@ def upgrade_plan(
     descriptors: list[ProjectDescriptor],
     latest: tuple[int, ...] | None,
     cache: dict[str, dict[str, CheckResult]] | None = None,
+    plugin_latest: tuple[int, ...] | None = None,
 ) -> list[UpgradeRow]:
     """Build the whole fleet's upgrade plan (pure over its inputs).
 
@@ -129,9 +167,10 @@ def upgrade_plan(
         descriptors: The fleet's projects.
         latest: The latest upstream version, or ``None`` when unknown.
         cache: ``{project: {task: CheckResult}}`` for PR counts.
+        plugin_latest: The plugin version upstream's default branch ships.
 
     Returns:
         One :class:`UpgradeRow` per project, in input order.
     """
     cache = cache or {}
-    return [build_row(d, latest, cache.get(d.name)) for d in descriptors]
+    return [build_row(d, latest, cache.get(d.name), plugin_latest) for d in descriptors]

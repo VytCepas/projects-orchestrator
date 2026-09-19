@@ -252,6 +252,8 @@ class ProjectDescriptor:
         delivery: How the project ships (library | service | prototype).
         contract_version: Descriptor-contract schema version (0 when absent).
         project_init_version: Scaffold version the project was rendered with.
+        project_init_plugin_version: The project-init plugin payload version
+            the visible ``project:`` block records (#212); ``unknown`` when absent.
         memory_tier: Memory tier (0 auto … 3 obsidian-graphify-rag), derived
             from ``memory_stack`` when the stack is on the ladder — a declared
             tier that disagrees is reported in ``warnings``, never obeyed (#257).
@@ -305,6 +307,7 @@ class ProjectDescriptor:
     delivery: str = "unknown"
     contract_version: int = 0
     project_init_version: str = "unknown"
+    project_init_plugin_version: str = "unknown"
     memory_tier: int = 0
     memory_stack: str = "unknown"
     memory_path: Path | None = None
@@ -771,6 +774,7 @@ def parse_config(text: str, project_dir: Path, config_root: str = ".claude") -> 
         delivery=str(raw.get("delivery") or "unknown"),
         contract_version=contract_version,
         project_init_version=str(project.get("project_init_version") or "unknown"),
+        project_init_plugin_version=str(project.get("project_init_plugin_version") or "unknown"),
         memory_tier=memory_tier,
         memory_stack=memory_stack,
         memory_path=memory_path,

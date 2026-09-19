@@ -43,6 +43,17 @@ FAILED = "failed"
 NO_WORKFLOW = "no upgrade workflow"
 
 _LATEST_COMMAND = f"gh release view --repo {UPSTREAM_REPO} --json tagName"
+
+# The plugin payload `claude plugin install` installs: the manifest on
+# project-init's DEFAULT BRANCH, not a release (#212). The latest release can lag
+# it by many plugin versions (v1.2.2 ships plugin 0.8.1 while main ships 0.9.x),
+# and a repo that installed from main would then read "ahead" of upstream. This
+# is the manifest project-init's own `__plugin_version__` is pinned to.
+PLUGIN_MANIFEST = "plugins/project-init-workflow/.claude-plugin/plugin.json"
+_PLUGIN_COMMAND = (
+    f"gh api repos/{UPSTREAM_REPO}/contents/{PLUGIN_MANIFEST}"
+    " -H 'Accept: application/vnd.github.raw'"
+)
 _GITHUB_TRIGGER_COMMAND = f"gh workflow run {UPGRADE_WORKFLOW}"
 # GitLab has no per-file workflow_dispatch; the mirror is triggering the child's
 # pipeline (the reviewed upgrade job runs inside it). Only reached when the child
@@ -181,6 +192,53 @@ def latest_upstream_version(
         )
         return None
     return parse_release_tag(result.stdout)
+
+
+def parse_plugin_manifest(stdout: str) -> tuple[int, int, int] | None:
+    """Parse a raw ``plugin.json`` into its version tuple (pure).
+
+    Args:
+        stdout: The manifest's JSON text.
+
+    Returns:
+        The manifest's ``version`` (``v`` prefix tolerated), or ``None`` when the
+        text is not a JSON object or the version is not ``MAJOR.MINOR.PATCH``.
+    """
+    data = _loads(stdout)
+    if not isinstance(data, dict):
+        return None
+    version = data.get("version")
+    if not isinstance(version, str):
+        return None
+    return parse_scaffold_version(version.removeprefix("v"))
+
+
+def latest_plugin_version(
+    cwd: Path, timeout: float = _GH_TIMEOUT, run: Runner = run_command
+) -> tuple[int, int, int] | None:
+    """Fetch the plugin version project-init's default branch ships; never raises.
+
+    Same seam and degradation as :func:`latest_upstream_version`: ``gh``, repo-
+    explicit, and ``None`` when it is unavailable, unauthenticated or offline.
+
+    Args:
+        cwd: Directory to run ``gh`` in (any valid directory).
+        timeout: Command timeout in seconds.
+        run: Command runner; tests inject a fake.
+
+    Returns:
+        The upstream plugin version, or ``None`` when it cannot be read.
+    """
+    result = run(_PLUGIN_COMMAND, cwd, timeout)
+    if not result.ok:
+        _log.debug(
+            "upstream plugin manifest lookup failed (rc=%s, timed out=%s): %s",
+            result.returncode,
+            result.timed_out,
+            (result.error or result.stderr).strip()[-200:],
+        )
+        return None
+    return parse_plugin_manifest(result.stdout)
 
 
 def upgrade_workflow_relpath(descriptor: ProjectDescriptor) -> Path:

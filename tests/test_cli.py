@@ -419,6 +419,7 @@ def _unreachable_forge(_descriptor):
 def test_upgrade_plan_offline_renders(fleet_dir: Path, capsys, monkeypatch) -> None:
     make_project(fleet_dir, "alpha")
     monkeypatch.setattr(cli, "latest_upstream_version", lambda _cwd: None)
+    monkeypatch.setattr(cli, "latest_plugin_version", lambda _cwd: None)
     main(["upgrade-plan", "--root", str(fleet_dir)])
     assert "alpha: unknown" in capsys.readouterr().out
 
@@ -426,6 +427,7 @@ def test_upgrade_plan_offline_renders(fleet_dir: Path, capsys, monkeypatch) -> N
 def test_upgrade_plan_json_has_status(fleet_dir: Path, capsys, monkeypatch) -> None:
     make_project(fleet_dir, "alpha")
     monkeypatch.setattr(cli, "latest_upstream_version", lambda _cwd: None)
+    monkeypatch.setattr(cli, "latest_plugin_version", lambda _cwd: None)
     main(["upgrade-plan", "--root", str(fleet_dir), "--json"])
     assert json.loads(capsys.readouterr().out)[0]["status"] == "unknown"
 
@@ -435,8 +437,54 @@ def test_upgrade_plan_renders_outdated_when_upstream_available(
 ) -> None:
     make_project(fleet_dir, "alpha")
     monkeypatch.setattr(cli, "latest_upstream_version", lambda _cwd: (0, 6, 0))
+    monkeypatch.setattr(cli, "latest_plugin_version", lambda _cwd: None)
     main(["upgrade-plan", "--root", str(fleet_dir)])
     assert "alpha: outdated" in capsys.readouterr().out
+
+
+def _plugin_project(fleet_dir: Path, name: str, plugin: str) -> None:
+    make_project(
+        fleet_dir,
+        name,
+        config_text=(
+            "project:\n"
+            f"  name: {name}\n"
+            "  project_init_version: 1.2.2\n"
+            f"  project_init_plugin_version: {plugin}\n"
+        ),
+    )
+
+
+def test_upgrade_plan_reports_the_plugin_against_upstream_main(
+    fleet_dir: Path, capsys, monkeypatch
+) -> None:
+    # #212: at upstream reads ok, behind reads behind, and neither changes the
+    # scaffold status beside it.
+    _plugin_project(fleet_dir, "alpha", "0.9.20")
+    _plugin_project(fleet_dir, "beta", "0.9.16")
+    monkeypatch.setattr(cli, "latest_upstream_version", lambda _cwd: (1, 2, 2))
+    monkeypatch.setattr(cli, "latest_plugin_version", lambda _cwd: (0, 9, 20))
+    assert main(["upgrade-plan", "--root", str(fleet_dir)]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines == [
+        "alpha: ok (scaffold 1.2.2, drift -, PRs ?, plugin 0.9.20 ok)",
+        "beta: ok (scaffold 1.2.2, drift -, PRs ?, plugin 0.9.16 → 0.9.20 behind)",
+    ]
+
+
+def test_upgrade_plan_plugin_is_unknown_never_ok_when_upstream_is_unreadable(
+    fleet_dir: Path, capsys, monkeypatch
+) -> None:
+    _plugin_project(fleet_dir, "alpha", "0.9.20")
+    monkeypatch.setattr(cli, "latest_upstream_version", lambda _cwd: (1, 2, 2))
+    monkeypatch.setattr(cli, "latest_plugin_version", lambda _cwd: None)
+    main(["upgrade-plan", "--root", str(fleet_dir), "--json"])
+    row = json.loads(capsys.readouterr().out)[0]
+    assert (row["plugin_version"], row["plugin_latest"], row["plugin_status"]) == (
+        "0.9.20",
+        "-",
+        "unknown",
+    )
 
 
 def test_snapshot_json_has_descriptor(fleet_dir: Path, capsys) -> None:
