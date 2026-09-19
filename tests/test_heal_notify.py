@@ -106,7 +106,7 @@ def test_a_successful_heal_names_the_project_the_repaired_gate_and_the_pr(
         ["lint"],
         result.pr_url,
     )
-    assert result.pr_url in str(payload["text"])
+    assert f"alpha: fixed (lint) — draft PR {result.pr_url}" in str(payload["text"])
 
 
 def test_a_failed_heal_carries_its_diagnosis(fleet_dir: Path) -> None:
@@ -120,6 +120,9 @@ def test_a_failed_heal_carries_its_diagnosis(fleet_dir: Path) -> None:
     assert heal["status"] == VERIFY_FAILED
     assert heal["detail"] == "still failing after the agent's fix: lint"
     assert heal["tasks"] == ["lint"]
+    assert "alpha: verify_failed (lint) — still failing after the agent's fix: lint" in str(
+        payload["text"]
+    )
 
 
 def test_a_notify_mode_project_says_what_to_do_by_hand(fleet_dir: Path) -> None:
@@ -137,6 +140,7 @@ def test_a_deferred_project_is_told_too() -> None:
     payload = heal_payload(report)
     assert payload is not None
     assert payload["deferred"] == ["beta"]
+    assert "deferred (limit 1): beta" in str(payload["text"])
 
 
 def test_a_clean_pass_has_nothing_to_tell() -> None:
