@@ -713,6 +713,15 @@ def test_notify_result_names_what_failed_and_what_to_do_next(fleet_dir: Path) ->
     assert "lint failing" in result.detail and "heal alpha" in result.detail
 
 
+def test_a_declared_notify_is_not_advised_to_rerun_heal(fleet_dir: Path) -> None:
+    # `heal alpha` cannot lift a DECLARED notify (ADR-008: the declaration wins
+    # over every run), so advising it sent the operator round a loop.
+    alpha = replace(_failing(fleet_dir, "alpha"), heal_mode=MODE_NOTIFY)
+    result = heal_project(alpha, _cached_fail("alpha"), agent_run=_exploding_agent)
+    assert "projects-orchestrator heal alpha" not in result.detail
+    assert "declares heal.mode: notify" in result.detail
+
+
 def test_heal_project_honors_a_declared_notify_without_the_caller_resolving(
     fleet_dir: Path,
 ) -> None:

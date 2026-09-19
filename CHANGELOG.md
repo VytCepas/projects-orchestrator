@@ -74,6 +74,9 @@ version's only source. `tests/test_version.py` fails when they disagree.
   copies every file the tests read (#273).
 - A descriptor refused because it is a symlink was reported as "not a
   project-init project". The warning now names the refused link (#220).
+- A project that declares `heal.mode: notify` was advised to run `heal <project>`,
+  which its own declaration overrides. The advice now says the declaration has
+  to change first.
 
 ### Security
 
