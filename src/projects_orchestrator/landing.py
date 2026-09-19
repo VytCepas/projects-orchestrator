@@ -315,6 +315,10 @@ def marker_key(body: str) -> str:
 def own_open_issues(repo: Path, limit: int = ISSUE_LIST_LIMIT) -> tuple[OwnIssue, ...] | None:
     """The open issues in ``repo``'s GitHub repository that carry a finding marker.
 
+    Only issues opened by the account ``gh`` is signed in as are read. On a public
+    repository anyone can open an issue, and one that pasted a marker would
+    otherwise suppress the real report and later be closed as if it were ours.
+
     Returns ``None`` when the answer is unknown: ``gh`` failed, its output did not
     parse, or the page was full, so an issue beyond it could be missed. Unknown
     is not "none": a caller that read ``None`` as "no open issues" would file a
@@ -327,6 +331,8 @@ def own_open_issues(repo: Path, limit: int = ISSUE_LIST_LIMIT) -> tuple[OwnIssue
             "list",
             "--state",
             "open",
+            "--author",
+            "@me",
             "--limit",
             str(limit),
             "--json",

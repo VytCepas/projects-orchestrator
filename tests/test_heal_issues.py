@@ -255,6 +255,16 @@ def test_an_issue_a_person_already_closed_is_not_closed_again(
     assert [args for args in github.calls if args[2] == "close"] == []
 
 
+def test_only_issues_the_signed_in_account_opened_are_read(
+    fleet_dir: Path, github: _FakeGitHub
+) -> None:
+    # Anyone can open an issue on a public repository. One that pasted a marker
+    # must not suppress the real report, nor be closed as if it were ours.
+    _pass(_alpha(fleet_dir), {"lint": _check("lint", "fail", "x")})
+    [listed] = [args for args in github.calls if args[2] == "list"]
+    assert listed[listed.index("--author") + 1] == "@me"
+
+
 # --- what reaches nobody ----------------------------------------------------------------
 
 
