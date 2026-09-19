@@ -7,6 +7,12 @@ with [project-init](https://github.com/VytCepas/project-init): one interface
 to see every project's health, run its gates, search everything the fleet
 remembers — and **put an agent to work on what it finds**.
 
+## Install
+
+Not on PyPI yet. Install from a checkout with `uv tool install`, and reinstall
+after every pull: [Install and upgrade the orchestrator itself](docs/how-to/install-and-upgrade.md).
+Changes per release are in [CHANGELOG.md](CHANGELOG.md).
+
 ## Usage
 
 ### See the fleet
