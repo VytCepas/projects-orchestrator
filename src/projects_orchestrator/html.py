@@ -13,6 +13,7 @@ from __future__ import annotations
 import html as _html
 
 from projects_orchestrator.fleet import COLUMNS, cell_status
+from projects_orchestrator.host import HOST_UNKNOWN
 
 _STYLE = """
 body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; margin: 2rem;
@@ -27,6 +28,7 @@ tr:hover td { background: #f6f8fa; }
 .bad { color: #cf222e; font-weight: 600; }
 .warn { color: #9a6700; font-weight: 600; }
 footer { margin-top: 1rem; color: #59636e; font-size: .8rem; }
+#host { color: #59636e; font-size: .85rem; margin: .25rem 0 .75rem; }
 """
 
 
@@ -37,12 +39,13 @@ def _cell(text: str) -> str:
     return f"<td{attr}>{_html.escape(text)}</td>"
 
 
-def render_html(rows: list[dict[str, str]], generated_at: str) -> str:
+def render_html(rows: list[dict[str, str]], generated_at: str, host: str = HOST_UNKNOWN) -> str:
     """Render fleet rows as a complete standalone HTML document (pure).
 
     Args:
         rows: Output of :func:`~projects_orchestrator.fleet.fleet_rows`.
         generated_at: Timestamp text for the footer.
+        host: The host-health tile's text (:func:`~projects_orchestrator.host.host_health`).
 
     Returns:
         A full HTML document; an empty fleet renders a friendly line
@@ -63,6 +66,7 @@ def render_html(rows: list[dict[str, str]], generated_at: str) -> str:
         "<title>projects-orchestrator — fleet</title>\n"
         f"<style>{_STYLE}</style></head>\n"
         "<body><h1>projects-orchestrator — fleet</h1>\n"
+        f'<p id="host">{_html.escape(host or HOST_UNKNOWN)}</p>\n'
         f"{table}\n"
         f"<footer>generated {_html.escape(generated_at)}</footer></body></html>\n"
     )

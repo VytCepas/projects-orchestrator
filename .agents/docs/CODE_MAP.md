@@ -337,6 +337,12 @@ Append-only check history — trends the last-known cache can't show.
 - `def primary_trend` — The sparkline for a project's primary gate; ``""`` when it has no history.
 - `def transitions` — Return the entries where status changed from the previous run (pure).
 
+### `projects_orchestrator/host.py`
+
+The host-health tile: one line about the machine the fleet runs on (#247).
+
+- `def host_health` — Run the declared host-health command and return the tile's text; never raises.
+
 ### `projects_orchestrator/html.py`
 
 Render the fleet view as one self-contained HTML page.
@@ -368,6 +374,8 @@ Read and search the fleet's memory — the "all-knowing" layer.
 - `class ProjectMemory` — Everything one project remembers.
 - `class MemoryHit` — One search match.
 - `def load_project_memory` — Read one project's memory directory; never raises.
+- `def memory_source_label` — How hits from an external memory source are labelled (pure).
+- `def load_memory_sources` — Read the fleet file's extra memory directories (#247); never raises.
 - `def retrieval_mode` — Pick a project's memory retrieval surface from its tier (pure).
 - `def load_graph_facts` — Read a graphify graph's nodes as memory facts; never raises.
 - `def load_memory` — Load one project's memory via its tier's retrieval surface; never raises.

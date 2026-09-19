@@ -20,6 +20,7 @@ from projects_orchestrator import cache
 from projects_orchestrator.controller import ControllerContext, Intent, dispatch, parse_command
 from projects_orchestrator.detail import build_detail, render_detail
 from projects_orchestrator.fleet import COLUMNS, cell_status, fleet_rows, fleet_snapshots
+from projects_orchestrator.host import host_health
 from projects_orchestrator.registry import FleetConfig
 
 # Map the shared, presentation-free cell status to a terminal colour.
@@ -71,6 +72,8 @@ class OrchestratorApp(App[None]):
         """Rebuild the overview rows from a fresh fleet snapshot."""
         table = self.query_one("#fleet-table", DataTable)
         table.clear()
+        # The host-health tile (#247) rides in the header, beside the title.
+        self.sub_title = host_health(self.ctx.config.host_health_command)
         for row in fleet_rows(fleet_snapshots(self.ctx.fleet, self.ctx.cache_file)):
             table.add_row(*(self._styled(row[column]) for column in COLUMNS), key=row["Project"])
 

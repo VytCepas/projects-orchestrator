@@ -57,6 +57,7 @@ from projects_orchestrator.heal import (
     pending_failures,
     render_heal_result,
 )
+from projects_orchestrator.host import host_health
 from projects_orchestrator.registry import FleetConfig, discover
 
 DEFAULT_HOST = "127.0.0.1"
@@ -258,6 +259,8 @@ def snapshot_payload(
         # without re-encoding the good/bad/warn vocabulary client-side.
         "statuses": [{column: cell_status(row[column]) for column in COLUMNS} for row in rows],
         "warnings": list(fleet.warnings),
+        # The host-health tile (#247): one line, never blank.
+        "host": host_health(config.host_health_command),
     }
     if actions is not None:
         payload["actions"] = actions
@@ -513,6 +516,7 @@ tbody tr:hover td { background: #f6f8fa; }
 .warn { color: #9a6700; font-weight: 600; }
 footer { margin-top: 1rem; color: #59636e; font-size: .8rem; }
 #warnings { color: #9a6700; font-size: .8rem; margin: .5rem 0; white-space: pre-line; }
+#host { color: #59636e; font-size: .85rem; margin: .25rem 0; }
 #drawer { position: fixed; top: 0; right: 0; height: 100%; width: min(90vw, 32rem);
           background: #fff; box-shadow: -2px 0 8px rgba(0,0,0,.15); padding: 1.5rem;
           overflow: auto; transform: translateX(100%); transition: transform .2s; }
@@ -529,6 +533,7 @@ footer { margin-top: 1rem; color: #59636e; font-size: .8rem; }
 </style></head>
 <body>
 <h1>projects-orchestrator — fleet</h1>
+<div id="host">host: unknown</div>
 <div id="warnings"></div>
 <table><thead><tr id="head"></tr></thead><tbody id="rows"></tbody></table>
 <footer id="footer">connecting…</footer>
@@ -559,6 +564,7 @@ async function refresh(){
         return "<td"+(k?" class='"+k+"'":"")+">"+text(v)+"</td>";
       }).join("") + "</tr>").join("");
     document.getElementById("warnings").textContent = (data.warnings||[]).join("\\n");
+    document.getElementById("host").textContent = data.host || "host: unknown";
     document.getElementById("footer").textContent = "updated " + data.generated_at;
     for(const tr of document.querySelectorAll("#rows tr"))
       tr.onclick = () => openDetail(tr.getAttribute("data-name"));

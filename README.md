@@ -141,7 +141,9 @@ commands* — the deterministic dispatcher still executes them.
 ### Which projects?
 
 Copy [`fleet.yaml.example`](fleet.yaml.example) to `fleet.yaml` and list
-scan roots / explicit paths. Without it, the orchestrator scans the parent
+scan roots / explicit paths. The same file can list extra `memory_sources` for
+`memory` search, and a `host_health_command` whose first output line becomes the
+fleet view's host tile (`host: unknown` until one is declared and answers). Without it, the orchestrator scans the parent
 directory of the checkout — the `~/projects/<name>` sibling convention.
 Anything with a descriptor (`.agents/config.yaml` on a current scaffold,
 `.claude/config.yaml` on a pre-PI-627 one — either is found) counts as a
@@ -171,7 +173,7 @@ without a row here fails CI.
 | `audit` | The composed governance audit (`--digest` for deltas only) |
 | `hardening` | Setup gaps, each with the command that closes it |
 | `capabilities` | Which skills, hooks and MCP servers each project declares |
-| `memory` | Search every project's memory at once |
+| `memory` | Search every project's memory at once, plus any `memory_sources` the fleet file lists |
 | `history` | The recorded trend behind the status table |
 | `events` | The machine-readable event stream |
 | `snapshot` | The whole fleet as one JSON document |
