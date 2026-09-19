@@ -108,8 +108,10 @@ carrying that marker is ever closed, and the marker is re-read just before
 closing. A read that fails files and closes nothing for that project, and the
 pass logs `issues: delivery failed`. The evidence has your home directory
 replaced with `~`, but it is still your gate's output: read it with the
-repository's visibility in mind. Fix-mode projects never get an issue; their
-report is the draft PR.
+repository's visibility in mind. Fix-mode projects never get an issue, and
+their issues are never read: their report is the draft PR. So a project moved
+from notify to fix keeps any issue it already has open until it returns to
+notify mode or you close it.
 
 `gh` must be authenticated for every repository in the fleet. Try it once by
 hand on one notify-mode project before enabling it on the timer:
