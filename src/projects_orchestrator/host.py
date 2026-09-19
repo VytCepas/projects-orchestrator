@@ -112,7 +112,7 @@ def _run_capped(argv: list[str], timeout: float) -> tuple[int | None, bytes]:
         if raw is None:
             raise subprocess.TimeoutExpired(argv, timeout)
         code = proc.wait(timeout=max(0.0, deadline - time.monotonic()))
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired:  # expected: the caller logs the timeout and reads unknown
         _kill_session(proc)
         proc.wait()
         return None, b""
