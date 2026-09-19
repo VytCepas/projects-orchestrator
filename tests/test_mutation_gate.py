@@ -10,17 +10,19 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
+from conftest import _REPO, _tracked_top_level, touched_by, uncopied
 
 # The gate lives under .agents/scripts/ (it is CI tooling, not library code), so
 # it is loaded by path. It must be registered in sys.modules BEFORE exec_module:
 # it uses `from __future__ import annotations`, and @dataclass resolves those
 # string annotations by looking its own module up in sys.modules.
 _GATE = Path(__file__).parent.parent / ".agents" / "scripts" / "mutation_gate.py"
+_PYPROJECT = Path(__file__).resolve().parents[1] / "pyproject.toml"
 _spec = importlib.util.spec_from_file_location("mutation_gate", _GATE)
 assert _spec and _spec.loader
 mutation_gate = importlib.util.module_from_spec(_spec)
@@ -132,72 +134,44 @@ def test_main_exits_nonzero_on_a_real_failing_run(tmp_path: Path) -> None:
 # --- The coupling that only breaks at 3am --------------------------------------
 
 
-#: mutmut's own additions to ``also_copy`` (``mutmut/configuration.py``), plus
-#: the source tree it copies itself. Kept as a literal because the point of the
-#: guard is to fail in a PR, where mutmut is not installed.
-_MUTMUT_COPIES = frozenset({"src", "tests", "test", "setup.cfg", "pyproject.toml", "uv.lock"})
+def test_also_copy_names_only_tracked_top_level_paths() -> None:
+    """The runtime guard in conftest.py checks what each test reads against
+    `[tool.mutmut] also_copy`; this checks the list itself.
 
-#: Tracked top-level names that tests quote WITHOUT reading the real one. Each
-#: needs a reason; an entry that no longer matches anything fails below.
-_NOT_READ_FROM_THE_TREE = {
-    ".claude": "tests build synthetic fleet repos with a .claude/ layout; none "
-    "reads this repo's own, and its untracked agent worktrees would be copied too",
-}
-
-
-def _git(*args: str, cwd: Path) -> str:
-    return subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True, check=True
-    ).stdout
-
-
-def _tracked_top_level() -> set[str]:
-    # Ask git for the work tree's top level rather than assuming it is the
-    # parent of tests/: this test also runs inside `mutants/`, an untracked copy
-    # where `git ls-files` lists nothing.
-    root = Path(_git("rev-parse", "--show-toplevel", cwd=Path(__file__).resolve().parent).strip())
-    return {line.split("/", 1)[0] for line in _git("ls-files", cwd=root).splitlines() if line}
-
-
-def _quoted_in_tests(names: set[str]) -> set[str]:
-    # This file is skipped: its own exemption table quotes every name it
-    # exempts, which would make any exemption look current.
-    here = Path(__file__).resolve()
-    sources = [
-        path.read_text(encoding="utf-8") for path in here.parent.rglob("*.py") if path != here
-    ]
-    return {name for name in names if any(f'"{name}"' in text for text in sources)}
-
-
-def test_mutmuts_test_tree_carries_every_repo_path_a_test_names() -> None:
-    """mutmut runs pytest from a COPY of the tree (`mutants/`), and copies only
-    the source, `tests/` and what `[tool.mutmut] also_copy` names. A test that
-    opens a repo file mutmut did not copy fails there with FileNotFoundError,
-    and pytest's `-x` stops the whole nightly run at the first one.
-
-    It happened twice. The gate script under `.agents/scripts/` first; then the
-    README read by test_docs.py, which kept the nightly red for eleven days
-    while every PR stayed green (#253). The first fix pinned one path by hand,
-    so the second went unseen. This derives the set instead: every tracked
-    top-level name a test quotes must be copied, or exempted with a reason.
-    Over-copying a name a test only uses for a synthetic repo costs nothing.
-
-    Directory entries, not nested files: mutmut's `copy_also_copy_files` does
-    `shutil.copy2` for a file and never creates the parent dirs.
+    Top-level names only: mutmut's `copy_also_copy_files` does `shutil.copy2`
+    for a file and never creates the parent dirs, so a nested file entry is
+    never copied. And every entry must be tracked, or it copies nothing.
     """
-    import tomllib
+    config = tomllib.loads(_PYPROJECT.read_text(encoding="utf-8"))
+    also_copy = {entry.rstrip("/") for entry in config["tool"]["mutmut"]["also_copy"]}
+    assert sorted(entry for entry in also_copy if "/" in entry) == [], "nested entry"
+    assert sorted(also_copy - _tracked_top_level()) == [], "also_copy names an untracked path"
 
-    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
-    also_copy = set(
-        tomllib.loads(pyproject.read_text(encoding="utf-8"))["tool"]["mutmut"]["also_copy"]
-    )
-    assert not {entry for entry in also_copy if "/" in entry and not entry.endswith("/")}, (
-        "also_copy entries must be top-level names; a nested file is never copied"
-    )
-    copied = {entry.rstrip("/") for entry in also_copy} | _MUTMUT_COPIES
-    tracked = _tracked_top_level()
-    needed = _quoted_in_tests(tracked) - set(_NOT_READ_FROM_THE_TREE)
-    assert sorted(needed - copied) == [], "add these to [tool.mutmut] also_copy"
-    stale = {name for name in _NOT_READ_FROM_THE_TREE if name not in _quoted_in_tests(tracked)}
-    assert sorted(stale) == [], "exemption no longer matches a quoted tracked name"
-    assert sorted(also_copy - tracked) == [], "also_copy names a path the repo does not track"
+
+def test_a_read_is_placed_by_the_path_it_resolves_to_not_by_how_it_was_spelled() -> None:
+    """The first version of this guard matched quoted names in test sources, so
+    a path built at runtime was missed and a name in a comment looked live."""
+    computed = _REPO.joinpath("".join(["LI", "CENSE"]))
+    assert touched_by("open", (str(computed), "r", 0)) == {"LICENSE"}
+    assert touched_by("os.scandir", (str(_REPO / "docs" / "reference"),)) == {"docs"}
+    assert touched_by(
+        "subprocess.Popen", ("/bin/sh", ["/bin/sh", str(_REPO / "contrib" / "x.sh")], None, None)
+    ) == {"contrib"}
+    assert touched_by(
+        "subprocess.Popen",
+        ("/usr/bin/git", ["/usr/bin/git", "status"], str(_REPO / ".github"), None),
+    ) == {".github"}
+
+
+def test_what_cannot_be_placed_under_the_repo_is_not_counted() -> None:
+    assert touched_by("open", ("/etc/hosts", "r", 0)) == set()
+    # `os.open` with no mode may be relative to a directory fd, as in shutil.rmtree.
+    assert touched_by("open", (".claude", None, 0)) == set()
+    assert touched_by("os.scandir", (3,)) == set()
+    assert touched_by("exec", (str(_REPO / "LICENSE"),)) == set()
+
+
+def test_only_tracked_names_mutmut_will_not_copy_are_reported() -> None:
+    # README.md is in also_copy, src/ is copied by mutmut itself, .venv is not
+    # tracked, and LICENSE is tracked and not copied.
+    assert uncopied({"LICENSE", "README.md", "src", ".venv"}) == ["LICENSE"]
