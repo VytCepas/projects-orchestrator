@@ -319,6 +319,17 @@ def test_an_unresolvable_path_warns_instead_of_raising(
     descriptor = parse_config(_memory_config(0, line.format(escape)), tmp_path)
     assert descriptor.vault_path is None
     assert len(descriptor.warnings) == 1
+    # The warning quotes the value, and doctor/audit print it: it must encode.
+    descriptor.warnings[0].encode("utf-8")
+    assert escape.lower() in descriptor.warnings[0].replace("\\x00", "\\0").lower()
+
+
+def test_a_warning_keeps_printable_non_ascii_as_written(tmp_path: Path) -> None:
+    # The control: escaping must not mangle an ordinary non-ASCII path.
+    descriptor = parse_config(_memory_config(1, "  vault_path: ../užrašai\n"), tmp_path)
+    assert descriptor.warnings == (
+        "memory.vault_path '../užrašai' escapes the project root — ignored",
+    )
 
 
 def test_every_surface_at_its_own_tier_is_silent(tmp_path: Path) -> None:

@@ -653,6 +653,20 @@ def _extract_hooks_expected(raw: dict[str, Any]) -> tuple[str, ...]:
     return tuple(str(name) for name in expected if isinstance(name, str) and name.strip())
 
 
+def _printable(text: str) -> str:
+    """Escape the characters of ``text`` that a terminal cannot be handed.
+
+    A warning quotes the declared value, and a YAML escape can declare a NUL or
+    a lone surrogate. A surrogate makes ``print`` raise ``UnicodeEncodeError`` on
+    a UTF-8 stream, so the non-JSON ``doctor`` and ``audit`` paths would crash
+    while reporting the very descriptor fault they found (PR #262 review).
+    Printable text, non-ASCII included, is kept as written.
+    """
+    return "".join(
+        c if c.isprintable() else c.encode("unicode_escape").decode("ascii") for c in text
+    )
+
+
 def parse_config(text: str, project_dir: Path, config_root: str = ".claude") -> ProjectDescriptor:
     """Build a descriptor from raw config text (pure; never raises).
 
@@ -733,7 +747,7 @@ def parse_config(text: str, project_dir: Path, config_root: str = ".claude") -> 
         ci=_extract_ci(raw),
         heal_mode=_extract_heal_mode(raw, warnings),
         context=_extract_context(raw, warnings),
-        warnings=tuple(warnings),
+        warnings=tuple(_printable(w) for w in warnings),
         malformed=tuple(malformed),
     )
 
