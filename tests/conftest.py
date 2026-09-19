@@ -400,11 +400,16 @@ def touched_by(event: str, args: tuple[object, ...]) -> set[str]:
     """The repo top-level names one audit event reads (pure; never raises)."""
     if event not in _AUDITED or not args:
         return set()
+    base = Path.cwd()
     if event == "subprocess.Popen":
-        # (executable, args, cwd, env): a script run by path is a read too.
+        # (executable, args, cwd, env): a script run by path is a read too, and
+        # a relative argument is relative to the child's working directory.
         argv = args[1] if len(args) > 1 else None
+        cwd = args[2] if len(args) > 2 else None
         candidates = list(argv) if isinstance(argv, (list, tuple)) else [argv]
-        candidates.append(args[2] if len(args) > 2 else None)
+        candidates.append(cwd)
+        if isinstance(cwd, (str, bytes, os.PathLike)) and _absolute(cwd):
+            base = Path(os.fsdecode(cwd))
     elif event == "open" and len(args) > 1 and args[1] is None and not _absolute(args[0]):
         # (path, mode, flags) with no mode is `os.open`, and a relative path
         # there may be relative to a directory fd rather than the working
@@ -418,7 +423,7 @@ def touched_by(event: str, args: tuple[object, ...]) -> set[str]:
             continue
         try:
             path = Path(os.fsdecode(candidate))
-            parts = (path if path.is_absolute() else Path.cwd() / path).relative_to(_REPO).parts
+            parts = (path if path.is_absolute() else base / path).relative_to(_REPO).parts
         except (TypeError, ValueError, OSError):
             continue
         if parts:
