@@ -68,6 +68,8 @@ version's only source. `tests/test_version.py` fails when they disagree.
 - The URL guard let the IPv4-mapped cloud metadata address through on CPython
   3.12.3. It now unwraps the mapped address itself. The nightly mutation job
   copies every file the tests read (#273).
+- A descriptor refused because it is a symlink was reported as "not a
+  project-init project". The warning now names the refused link (#220).
 
 ### Security
 
