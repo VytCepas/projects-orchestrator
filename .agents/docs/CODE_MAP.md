@@ -516,6 +516,7 @@ Fleet upgrade planning — who is behind upstream project-init, and act on it.
 
 - `class UpgradeRow` — One project's standing versus upstream project-init.
 - `def plan_status` — Classify a scaffold version against the latest upstream (pure).
+- `def unknown_reason` — Say why a row cannot be classified (pure); empty when it can.
 - `def build_row` — Build one upgrade-plan row for a project (never raises).
 - `def upgrade_plan` — Build the whole fleet's upgrade plan (pure over its inputs).
 
