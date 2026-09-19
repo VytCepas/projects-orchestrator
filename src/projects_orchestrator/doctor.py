@@ -111,7 +111,15 @@ def _check_contract(descriptor: ProjectDescriptor) -> Finding:
                 FAIL,
                 "project_init_contract_version is present but unreadable — fix the value, not the absence",
             )
-        return Finding("contract", FAIL, "no project_init_contract_version — predates the contract")
+        # Absent and an explicit 0 both land here, and only the parsed int is on
+        # the descriptor. "No project_init_contract_version" was false for a
+        # present 0 (#221). The two mean the same thing, v0, and share a remedy,
+        # so one message that is true of both replaces one that was false of one.
+        return Finding(
+            "contract",
+            FAIL,
+            f"project_init_contract_version absent or 0 — predates the contract (v{CONTRACT_VERSION} is the floor)",
+        )
     if version > CONTRACT_VERSION_MAX:
         # A newer child may use surfaces this orchestrator misreads — flag it
         # rather than silently claiming full conformance.
