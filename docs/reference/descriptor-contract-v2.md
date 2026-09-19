@@ -25,9 +25,13 @@ orchestrator consumes.
   so the descriptor cannot record its own hash; project-init's
   `write_scaffold_record` skips it by name, and it is user-owned besides
   (`project_key` and the like). Measured 2026-09-19: none of six real manifests
-  lists it. What checks the descriptor instead is this reader. A malformed or
-  contradictory value becomes a warning, and `doctor`'s `config` check FAILs on
-  it. An edit that stays well-formed is not detected by anything (#212, #220).
+  lists it. What partly checks the descriptor instead is this reader. SOME
+  malformed or contradictory values become a warning that `doctor`'s `config`
+  check FAILs on: an unreadable contract version or tier, a tier that
+  contradicts its stack, an escaping path. Others are coerced to defaults
+  silently. A non-mapping `deploy:` reads as `target: none`, and a non-list
+  `hooks.expected` reads as empty. An edit that stays well-formed is not
+  detected by anything (#212, #220).
 - **Read-only.** The orchestrator never writes any of this (ADR-003).
 
 ## New surfaces
