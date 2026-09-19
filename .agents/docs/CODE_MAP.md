@@ -368,6 +368,8 @@ Threshold alerts and a notifications sink — governance that reaches out.
 - `def alerts_payload` — Build the JSON/webhook payload (Slack-compatible ``text`` + details).
 - `def post_payload` — Deliver any JSON payload to a webhook; report acceptance (never raises).
 - `def post_webhook` — Deliver alerts to a webhook; return whether it was accepted (never raises).
+- `def heal_payload` — Build the webhook payload for a heal pass; ``None`` when there is nothing to tell (pure).
+- `def heal_webhook_sink` — A :data:`~projects_orchestrator.heal.HealSink` posting each eventful pass to ``url``.
 
 ### `projects_orchestrator/observability.py`
 

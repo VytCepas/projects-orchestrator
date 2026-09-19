@@ -79,6 +79,18 @@ declare `heal: { mode: fix | notify }` and that declaration wins over the
 run's mode, in both directions (ADR-008). `--limit` caps *paid* attempts
 only; notify-mode diagnoses are free and uncapped.
 
+A heal opens a **draft** PR, and a draft notifies nobody. To hear about it, add
+`PO_HEAL_WEBHOOK=<url>` (a Slack-compatible incoming webhook) to the same file.
+Each eventful pass then posts one message naming every project it touched:
+- a fix, with the PR URL and the gates it repaired;
+- a failed heal, with the diagnosis;
+- a notify-mode project, with what to do by hand;
+- the projects the limit deferred.
+
+A pass with nothing failing posts nothing. The PR stays a draft either way:
+the notification replaces promoting it, which is what would put an agent's work
+one auto-merge rule away from landing unreviewed.
+
 ```bash
 mkdir -p ~/.config/systemd/user
 cp contrib/systemd/projects-orchestrator-heal.* ~/.config/systemd/user/

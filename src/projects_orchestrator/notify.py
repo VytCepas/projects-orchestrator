@@ -6,7 +6,9 @@ installed, a service turning unhealthy. :func:`fleet_alerts` distills a fleet
 snapshot into a flat list of such alerts (pure, threshold-based);
 :func:`post_webhook` delivers them to an HTTP endpoint (Slack-compatible JSON),
 opt-in and — like the rest of the engine — never raising. The ``notify``
-command wires them together for a cron/CI job.
+command wires them together for a cron/CI job. :func:`heal_webhook_sink` is the
+same transport for a heal pass: what an unattended heal did, told to the operator
+without promoting its draft PR (#165).
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 
 from projects_orchestrator.fleet import ProjectSnapshot
+from projects_orchestrator.heal import FleetHealReport, HealSink, render_fleet_heal_report
 from projects_orchestrator.urlguard import is_probe_safe
 
 CRITICAL = "critical"
@@ -141,3 +144,46 @@ def post_payload(url: str, payload: dict[str, object], send: Sender | None = Non
 def post_webhook(url: str, alerts: list[Alert], send: Sender | None = None) -> bool:
     """Deliver alerts to a webhook; return whether it was accepted (never raises)."""
     return post_payload(url, alerts_payload(alerts), send)
+
+
+def heal_payload(report: FleetHealReport) -> dict[str, object] | None:
+    """Build the webhook payload for a heal pass; ``None`` when there is nothing to tell (pure).
+
+    Every attempted project is in it — a fix with its PR URL and repaired gates, a
+    failure with its diagnosis, a notify-mode project with what to do by hand —
+    and so is every project the spend cap deferred. A pass that found nothing
+    failing yields ``None``: a notifier that speaks on a clean night is filtered,
+    and then the night that matters reads the same.
+    """
+    if not report.eventful:
+        return None
+    return {
+        "text": render_fleet_heal_report(report),
+        "heals": [
+            {
+                "project": result.project,
+                "status": result.status,
+                "tasks": list(result.tasks),
+                "pr_url": result.pr_url,
+                "detail": result.detail,
+                "branch": result.branch,
+            }
+            for result in report.results
+        ],
+        "deferred": list(report.deferred),
+    }
+
+
+def heal_webhook_sink(url: str, send: Sender | None = None) -> HealSink:
+    """A :data:`~projects_orchestrator.heal.HealSink` posting each eventful pass to ``url``.
+
+    The draft PR stays a draft: this tells the operator the PR exists instead of
+    making it one click from mergeable, which is the boundary ``heal`` keeps
+    (``heal._default_open_pr``).
+    """
+
+    def sink(report: FleetHealReport) -> bool | None:
+        payload = heal_payload(report)
+        return None if payload is None else post_payload(url, payload, send)
+
+    return sink
