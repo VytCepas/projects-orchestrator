@@ -44,6 +44,7 @@ _EXEMPT: dict[str, str] = {
     "tests/fixtures/project_init/config.v2.yaml": "golden project-init output, not authored here",
     "tests/fixtures/project_init/capabilities.v2.md": "golden project-init output, not authored here",
     "tests/fixtures/project_init/schemas/descriptor.schema.json": "vendored project-init schema",
+    "tests/test_adr_citations.py": "this file: its docstring and cases name bare numbers on purpose",
 }
 
 _UPGRADE_BASES = (".agents/.upgrade-base.json", ".claude/.upgrade-base.json")
