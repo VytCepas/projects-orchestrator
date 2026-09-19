@@ -206,3 +206,11 @@ def test_local_delta_keeps_only_lines_project_init_did_not_render() -> None:
     text = "rendered ADR-012 line\nlocal edit citing ADR-099\nrendered tail"
     delta = local_delta(text, {"rendered ADR-012 line", "rendered tail"})
     assert phantoms(delta, {"003"}, set()) == [(2, "ADR-099")]
+
+
+def test_managed_files_are_scanned_for_their_local_edits(scanned: dict[str, str]) -> None:
+    # Control for the wiring: several managed files carry local edits today, so
+    # a scan that dropped managed files wholesale would leave every one blank.
+    managed = _managed()
+    edited = [path for path in scanned if path in managed and scanned[path].strip()]
+    assert edited, "no managed file has a scanned local edit — managed files are being skipped"
