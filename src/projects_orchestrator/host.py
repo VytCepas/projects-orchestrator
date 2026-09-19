@@ -11,6 +11,12 @@ no command is declared, the command cannot start, exits non-zero, times out or
 prints nothing. A tile that went blank, or defaulted to healthy, would look the
 same as a host that was checked and is fine.
 
+**Bounded, and it cleans up after itself.** The dashboard draws the tile on
+every poll, so a broken reporter must not cost memory or leave processes
+behind. At most :data:`_MAX_OUTPUT_BYTES` of its stdout is ever held (stderr is
+discarded), and it runs in its own session: on a timeout the whole process
+group is killed, so a reporter script's stalled children die with it.
+
 **An argv, never a shell.** The command is split with :func:`shlex.split` and
 run without a shell, like every other subprocess this package launches with
 declared input. With no shell to expand it, a leading ``~`` in the program's
@@ -22,9 +28,14 @@ Never raises.
 from __future__ import annotations
 
 import logging
+import os
 import shlex
+import signal
 import subprocess
+import threading
+import time
 from pathlib import Path
+from typing import IO, cast
 
 _log = logging.getLogger(__name__)
 
@@ -37,6 +48,61 @@ HOST_TIMEOUT = 5.0
 
 #: The tile is one line; a reporter that prints a paragraph is cut here.
 _MAX_CHARS = 200
+
+#: The most stdout ever held from one run. A reporter that keeps printing past
+#: it without exiting runs into the timeout and reads unknown.
+_MAX_OUTPUT_BYTES = 65_536
+
+
+def _kill_session(proc: subprocess.Popen[bytes]) -> None:
+    """Kill the reporter's whole process group; never raises.
+
+    Called only before the leader is reaped, so its pid (the group id) cannot
+    have been reused by an unrelated process.
+    """
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except OSError as exc:
+        _log.debug("cannot kill process group %d: %r", proc.pid, exc)
+        proc.kill()
+
+
+def _run_capped(argv: list[str], timeout: float) -> tuple[int | None, bytes]:
+    """Run ``argv`` in its own session, holding at most :data:`_MAX_OUTPUT_BYTES` of stdout.
+
+    Returns:
+        ``(exit code, stdout)``, or ``(None, b"")`` when it did not finish in time.
+
+    Raises:
+        OSError: The program could not be started.
+    """
+    deadline = time.monotonic() + timeout
+    proc = subprocess.Popen(  # noqa: S603 — argv from shlex, no shell
+        argv,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    stdout = cast("IO[bytes]", proc.stdout)  # stdout=PIPE always sets it
+    out: list[bytes] = []
+    reader = threading.Thread(
+        target=lambda: out.append(stdout.read(_MAX_OUTPUT_BYTES)), daemon=True
+    )
+    reader.start()
+    try:
+        reader.join(max(0.0, deadline - time.monotonic()))
+        if reader.is_alive():
+            raise subprocess.TimeoutExpired(argv, timeout)
+        code = proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        _kill_session(proc)
+        proc.wait()
+        reader.join(1.0)
+        return None, b""
+    finally:
+        stdout.close()
+    return code, out[0] if out else b""
 
 
 def host_health(command: str, timeout: float = HOST_TIMEOUT) -> str:
@@ -63,16 +129,18 @@ def host_health(command: str, timeout: float = HOST_TIMEOUT) -> str:
         # `reporter`, turning a relative path into a PATH lookup.
         argv[0] = str(Path(argv[0]).expanduser())
     try:
-        proc = subprocess.run(  # noqa: S603 — argv from shlex, no shell
-            argv, capture_output=True, text=True, timeout=timeout, check=False
-        )
+        code, raw = _run_capped(argv, timeout)
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         _log.warning("host_health_command did not run: %r", exc)
         return HOST_UNKNOWN
-    if proc.returncode != 0:
-        _log.warning("host_health_command exited %d", proc.returncode)
+    if code is None:
+        _log.warning("host_health_command timed out after %ss", timeout)
         return HOST_UNKNOWN
-    line = next((line.strip() for line in proc.stdout.splitlines() if line.strip()), "")
+    if code != 0:
+        _log.warning("host_health_command exited %d", code)
+        return HOST_UNKNOWN
+    text = raw.decode("utf-8", errors="replace")
+    line = next((line.strip() for line in text.splitlines() if line.strip()), "")
     if not line:
         _log.warning("host_health_command printed nothing")
         return HOST_UNKNOWN

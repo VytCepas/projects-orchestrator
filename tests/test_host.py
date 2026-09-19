@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 from pathlib import Path
 
 import pytest
@@ -64,6 +66,30 @@ def test_a_tilde_in_the_program_path_is_expanded(
     reporter.write_text("#!/bin/sh\necho ok\n", encoding="utf-8")
     reporter.chmod(0o755)
     assert host_health("~/reporter") == "host: ok"
+
+
+def test_only_a_bounded_amount_of_output_is_held(monkeypatch: pytest.MonkeyPatch) -> None:
+    # With the cap at 10 bytes, only the first 10 characters of a longer line
+    # can reach the tile: the rest was never read (Codex on #290).
+    monkeypatch.setattr("projects_orchestrator.host._MAX_OUTPUT_BYTES", 10)
+    assert host_health("echo " + "x" * 100) == "host: " + "x" * 10
+
+
+def test_a_timeout_kills_the_reporters_children(tmp_path: Path) -> None:
+    # The reporter starts a child that would outlive it, then stalls. The
+    # timeout must take the child down too, or every dashboard poll against a
+    # broken reporter leaves one more process behind (Codex on #290).
+    pid_file = tmp_path / "child.pid"
+    command = _reporter(tmp_path, f"sleep 30 &\necho $! > {pid_file}\nexec sleep 30\n")
+    assert host_health(command, timeout=0.5) == HOST_UNKNOWN
+    child = int(pid_file.read_text(encoding="utf-8"))
+    for _ in range(200):  # a bounded number of polls, not a clock reading
+        try:
+            os.kill(child, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.01)  # the orphan is reparented; give its reaper a moment
+    pytest.fail(f"the reporter's child {child} survived the timeout")
 
 
 def test_a_long_line_is_cut_to_one_tile() -> None:
