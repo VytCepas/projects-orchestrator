@@ -20,6 +20,11 @@ the upgrade base records what project-init rendered. Only lines absent from that
 base, the local edits a merge-managed file keeps, are scanned. Both the set and
 its base are READ from ``.upgrade-base.json``: a hand-written list of managed
 files would be a second copy of a fact the scaffold already records.
+
+The descriptor (``.agents/config.yaml``) has no recorded base and is safe to
+hand-edit, so it is scanned too. A comment there whose text matches a comment in
+the golden project-init descriptors is project-init's and is blanked; anything
+else, a hand-written note or an edited comment, is checked.
 """
 
 from __future__ import annotations
@@ -46,7 +51,6 @@ _INDEX_ROW = re.compile(
 #: Tracked paths not scanned, each with the reason. Scaffold-managed files are
 #: never listed: they are scanned for their local edits (see ``local_delta``).
 _EXEMPT: dict[str, str] = {
-    ".agents/config.yaml": "the descriptor, rendered by project-init; its comments are project-init's",
     ".agents/.upgrade-base.json": "verbatim bodies of project-init's managed files",
     ".claude/.upgrade-base.json": "verbatim bodies of project-init's managed files",
     "tests/fixtures/project_init/config.v1.yaml": "golden project-init output, not authored here",
@@ -57,6 +61,11 @@ _EXEMPT: dict[str, str] = {
 }
 
 _UPGRADE_BASES = (".agents/.upgrade-base.json", ".claude/.upgrade-base.json")
+_DESCRIPTOR = ".agents/config.yaml"
+_GOLDEN_DESCRIPTORS = (
+    "tests/fixtures/project_init/config.v1.yaml",
+    "tests/fixtures/project_init/config.v2.yaml",
+)
 
 
 def citations(text: str) -> list[tuple[int, str, bool]]:
@@ -115,6 +124,27 @@ def local_delta(text: str, rendered: set[str]) -> str:
     return "\n".join("" if line in rendered else line for line in text.splitlines())
 
 
+def _comment(line: str) -> str | None:
+    return line.split("#", 1)[1].strip() if "#" in line else None
+
+
+def _rendered_comments() -> set[str]:
+    """Every comment text the golden project-init descriptors carry."""
+    comments = set()
+    for golden in _GOLDEN_DESCRIPTORS:
+        for line in (_ROOT / golden).read_text(encoding="utf-8").splitlines():
+            if (comment := _comment(line)) is not None:
+                comments.add(comment)
+    return comments
+
+
+def descriptor_delta(text: str, rendered: set[str]) -> str:
+    """``text`` with each project-init comment cut off its line; line numbers kept."""
+    return "\n".join(
+        line.split("#", 1)[0] if _comment(line) in rendered else line for line in text.splitlines()
+    )
+
+
 @pytest.fixture(scope="module")
 def scanned() -> dict[str, str]:
     """Path -> text for every tracked, authored-here text file."""
@@ -134,7 +164,11 @@ def scanned() -> dict[str, str]:
             text = (_ROOT / path).read_text(encoding="utf-8")
         except (UnicodeDecodeError, FileNotFoundError, IsADirectoryError):
             continue
-        texts[path] = local_delta(text, managed[path]) if path in managed else text
+        if path in managed:
+            text = local_delta(text, managed[path])
+        elif path == _DESCRIPTOR:
+            text = descriptor_delta(text, _rendered_comments())
+        texts[path] = text
     assert len(texts) > 50, f"scanned only {len(texts)} files — the listing is broken, not clean"
     return texts
 
@@ -218,3 +252,14 @@ def test_managed_files_are_scanned_for_their_local_edits(scanned: dict[str, str]
     managed = _managed()
     edited = [path for path in scanned if path in managed and scanned[path].strip()]
     assert edited, "no managed file has a scanned local edit — managed files are being skipped"
+
+
+def test_descriptor_delta_keeps_hand_written_comments() -> None:
+    text = "a: 1  # plugin payload version (ADR-010)\nb: 2  # local note, see ADR-099\n"
+    delta = descriptor_delta(text, {"plugin payload version (ADR-010)"})
+    assert phantoms(delta, {"003"}, set()) == [(2, "ADR-099")]
+
+
+def test_the_descriptor_reaches_the_scan(scanned: dict[str, str]) -> None:
+    # Control for the wiring: its keys are hand-editable and always scanned.
+    assert "memory:" in scanned[_DESCRIPTOR]
