@@ -146,7 +146,9 @@ _NOT_READ_FROM_THE_TREE = {
 
 
 def _git(*args: str, cwd: Path) -> str:
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout
+    return subprocess.run(
+        ["git", *args], cwd=cwd, capture_output=True, text=True, check=True
+    ).stdout
 
 
 def _tracked_top_level() -> set[str]:
@@ -162,9 +164,7 @@ def _quoted_in_tests(names: set[str]) -> set[str]:
     # exempts, which would make any exemption look current.
     here = Path(__file__).resolve()
     sources = [
-        path.read_text(encoding="utf-8")
-        for path in here.parent.rglob("*.py")
-        if path != here
+        path.read_text(encoding="utf-8") for path in here.parent.rglob("*.py") if path != here
     ]
     return {name for name in names if any(f'"{name}"' in text for text in sources)}
 
@@ -188,7 +188,9 @@ def test_mutmuts_test_tree_carries_every_repo_path_a_test_names() -> None:
     import tomllib
 
     pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
-    also_copy = set(tomllib.loads(pyproject.read_text(encoding="utf-8"))["tool"]["mutmut"]["also_copy"])
+    also_copy = set(
+        tomllib.loads(pyproject.read_text(encoding="utf-8"))["tool"]["mutmut"]["also_copy"]
+    )
     assert not {entry for entry in also_copy if "/" in entry and not entry.endswith("/")}, (
         "also_copy entries must be top-level names; a nested file is never copied"
     )
