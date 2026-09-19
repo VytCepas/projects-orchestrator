@@ -68,9 +68,11 @@ are meaningful (`checks` exits 1 when any gate fails, `drift` when any
 project diverged from its scaffold, `doctor` when any project fails
 contract-v1 conformance, `audit` when anything needs attention, `upgrade-plan`
 when any project is behind upstream project-init). A degraded cell
-(`unknown`, `-`, `?`) never stops a command; `--verbose` (or
-`PROJECTS_ORCHESTRATOR_VERBOSE=1`) logs the reason behind each one to stderr,
-and `upgrade-plan` names the reason for every `unknown` row itself. An
+(`unknown`, `-`, `?`) never stops a command. `--verbose` (or
+`PROJECTS_ORCHESTRATOR_VERBOSE=1`) logs to stderr every error a degraded path
+swallowed: an unreadable file, a failed probe, unparseable output. A cell that
+degraded with no error behind it (an empty answer, a gate never probed) is not
+logged. `upgrade-plan` names the reason for every `unknown` row itself. An
 unexpected internal error exits 70 with one line, and `--verbose` adds the
 traceback. `audit` is
 the one-shot governance report: it composes `doctor`'s conformance findings

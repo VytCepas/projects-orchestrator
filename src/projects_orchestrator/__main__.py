@@ -17,6 +17,7 @@ import math
 import os
 import sys
 import traceback
+from collections.abc import Iterator
 from dataclasses import asdict, replace
 from pathlib import Path
 
@@ -1869,29 +1870,34 @@ def _verbose(args: argparse.Namespace) -> bool:
     return os.environ.get(VERBOSE_ENV, "").strip().lower() in _TRUTHY
 
 
-_trail: logging.Handler | None = None
+@contextlib.contextmanager
+def _diagnostic_trail(verbose: bool) -> Iterator[None]:
+    """Own the package's debug records for one command, then hand them back.
 
-
-def _configure_trail(verbose: bool) -> None:
-    """Route the package's debug records to stderr when verbose; else keep them silent.
-
-    Degraded paths log at DEBUG, below the stdlib's last-resort WARNING handler,
-    so with no handler attached nothing prints and the default output is
-    byte-identical to a build without the seam. The handler is replaced rather
-    than added, so repeated ``main()`` calls in one process never double a line.
+    Degraded paths log at DEBUG. The package logger stops propagating while a
+    command runs, so a host process whose ROOT logger is configured at DEBUG
+    neither prints the trail on a quiet run nor prints each line twice on a
+    verbose one (Codex on #269). Quiet: no handler at all, so a default run
+    prints exactly what it did before the seam existed. Verbose: one stderr
+    handler. Everything is restored on the way out, so a repeated ``main()``
+    never stacks a second handler and an embedding caller gets its logger back.
     """
-    global _trail
     logger = logging.getLogger("projects_orchestrator")
-    if _trail is not None:
-        logger.removeHandler(_trail)
-        _trail = None
-    if not verbose:
-        logger.setLevel(logging.NOTSET)
-        return
-    _trail = logging.StreamHandler(sys.stderr)
-    _trail.setFormatter(logging.Formatter("debug: %(name)s: %(message)s"))
-    logger.addHandler(_trail)
-    logger.setLevel(logging.DEBUG)
+    saved_level, saved_propagate = logger.level, logger.propagate
+    handler: logging.Handler | None = None
+    logger.propagate = False
+    if verbose:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter("debug: %(name)s: %(message)s"))
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+    try:
+        yield
+    finally:
+        if handler is not None:
+            logger.removeHandler(handler)
+        logger.setLevel(saved_level)
+        logger.propagate = saved_propagate
 
 
 def _internal_error(command: str, exc: Exception, verbose: bool) -> int:
@@ -1929,19 +1935,19 @@ def main(argv: list[str] | None = None) -> int:
     """
     parser = _build_parser()
     args = parser.parse_args(argv)
-    verbose = _verbose(args)
-    _configure_trail(verbose)
     if args.command is None:
         parser.print_help()
         return 0
-    try:
-        exit_code: int = args.handler(args)
-    except BrokenPipeError:
-        # expected: the reader went away (`… | head`), and nothing is wrong with the command
-        _silence_stdout()
-        return 1
-    except Exception as exc:  # noqa: BLE001 — the CLI boundary is where never-raise ends
-        return _internal_error(args.command, exc, verbose)
+    verbose = _verbose(args)
+    with _diagnostic_trail(verbose):
+        try:
+            exit_code: int = args.handler(args)
+        except BrokenPipeError:
+            # expected: the reader went away (`… | head`), and nothing is wrong with the command
+            _silence_stdout()
+            return 1
+        except Exception as exc:  # noqa: BLE001 — the CLI boundary is where never-raise ends
+            return _internal_error(args.command, exc, verbose)
     return exit_code
 
 
