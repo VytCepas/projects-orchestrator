@@ -145,12 +145,16 @@ _NOT_READ_FROM_THE_TREE = {
 }
 
 
+def _git(*args: str, cwd: Path) -> str:
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout
+
+
 def _tracked_top_level() -> set[str]:
-    root = Path(__file__).resolve().parents[1]
-    result = subprocess.run(
-        ["git", "ls-files"], cwd=root, capture_output=True, text=True, check=True
-    )
-    return {line.split("/", 1)[0] for line in result.stdout.splitlines() if line}
+    # Ask git for the work tree's top level rather than assuming it is the
+    # parent of tests/: this test also runs inside `mutants/`, an untracked copy
+    # where `git ls-files` lists nothing.
+    root = Path(_git("rev-parse", "--show-toplevel", cwd=Path(__file__).resolve().parent).strip())
+    return {line.split("/", 1)[0] for line in _git("ls-files", cwd=root).splitlines() if line}
 
 
 def _quoted_in_tests(names: set[str]) -> set[str]:
