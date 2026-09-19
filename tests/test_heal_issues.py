@@ -242,6 +242,19 @@ def test_an_issue_edited_to_drop_its_marker_is_not_closed(
     assert github.issues[1]["state"] == "OPEN"
 
 
+def test_an_issue_a_person_already_closed_is_not_closed_again(
+    fleet_dir: Path, github: _FakeGitHub
+) -> None:
+    alpha = _alpha(fleet_dir)
+    _pass(alpha, {"lint": _check("lint", "fail", "x")})
+    issues = landing.own_open_issues(alpha.path)
+    assert issues is not None
+    github.issues[1]["state"] = "CLOSED"
+    closed = landing.close_own_issue(alpha.path, issues[0].number, "alpha/lint", "done")
+    assert closed.status == landing.REFUSED
+    assert [args for args in github.calls if args[2] == "close"] == []
+
+
 # --- what reaches nobody ----------------------------------------------------------------
 
 
@@ -261,8 +274,10 @@ def test_a_project_with_no_healable_result_is_not_even_read(
 
 
 def test_a_fix_mode_project_never_gets_an_issue(fleet_dir: Path, github: _FakeGitHub) -> None:
+    # Its report is the draft PR. Not even a read: a passing gate on a fix-mode
+    # project must not send the sink looking for issues to close.
     alpha = replace(_alpha(fleet_dir), heal_mode=MODE_FIX)
-    cached = {"lint": _check("lint", "fail", "x")}
+    cached = {"lint": _check("lint", "fail", "x"), "test": _check("test", "pass")}
     report = FleetHealReport(results=(HealResult("alpha", FIXED, tasks=("lint",)),), limit=1)
     assert heal_issue_sink([(alpha, cached)], MODE_NOTIFY)(report) is None
     assert github.calls == []
