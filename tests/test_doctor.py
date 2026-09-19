@@ -224,7 +224,8 @@ def test_contract_finding_names_a_malformed_version_as_present(fleet_dir: Path) 
 
 
 def test_contract_finding_still_reports_a_genuinely_absent_version(fleet_dir: Path) -> None:
-    # The control: absence must keep its own, correct message.
+    # The control: absence keeps a message that is true of it. It shares that
+    # message with an explicit 0 on purpose (#221): both mean v0.
     report = _with_version(fleet_dir, "b", "")
     assert _finding(report, "contract").detail.startswith("project_init_contract_version absent")
 

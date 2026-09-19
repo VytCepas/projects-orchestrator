@@ -54,6 +54,7 @@ version's only source. `tests/test_version.py` fails when they disagree.
 - A retrieval surface declared below its memory-tier gate was dropped without a
   warning, and a descriptor path that could not be resolved aborted discovery
   of the whole fleet (#262).
+- `doctor` called an explicit contract version of `0` absent (#265).
 
 ### Security
 
