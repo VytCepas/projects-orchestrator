@@ -51,6 +51,9 @@ version's only source. `tests/test_version.py` fails when they disagree.
 - Four Linux-only tests failed on macOS (#206). `PO_FLEET_ROOT` is read, and
   discovery says where it looked when it finds nothing (#207).
 - The golden fixtures are regenerated with project-init 1.2.2 (#259).
+- A retrieval surface declared below its memory-tier gate was dropped without a
+  warning, and a descriptor path that could not be resolved aborted discovery
+  of the whole fleet (#262).
 
 ### Security
 

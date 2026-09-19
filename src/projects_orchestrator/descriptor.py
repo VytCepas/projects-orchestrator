@@ -500,19 +500,37 @@ def _extract_context(raw: dict[str, Any], warnings: list[str]) -> str:
     return context
 
 
-def _contained_path(project_dir: Path, relative: str) -> Path | None:
-    """Join ``relative`` under ``project_dir``, or ``None`` if it escapes.
+ESCAPES = "escapes the project root"
+UNRESOLVABLE = "cannot be resolved"
+
+
+def _contain(project_dir: Path, relative: str) -> Path | str:
+    """Join ``relative`` under ``project_dir``, or say why it cannot be used.
 
     A descriptor is data the orchestrator only reads, but a ``memory_path`` or
     ``observability.path`` of ``../../etc`` or ``/etc`` would resolve outside
     the project root (``Path('/proj') / '/etc'`` is ``/etc``). Reject any value
     whose resolved location is not the project dir or beneath it; contained
     values keep their plain (unresolved) join so callers compare cleanly.
+
+    A path that cannot be resolved at all cannot be shown to be contained, so it
+    is rejected too, with its own reason. A symlink loop raises ``RuntimeError``
+    on Python 3.11/3.12; a YAML escape that decodes to a NUL raises
+    ``ValueError``, and one that decodes to a lone surrogate raises
+    ``UnicodeEncodeError``, a ``ValueError``. Raising here would abort discovery
+    of the whole fleet over one project's descriptor (PR #262 review).
+
+    Returns:
+        The contained path, or the reason it was rejected: :data:`ESCAPES` or
+        :data:`UNRESOLVABLE`, worded to complete a warning sentence.
     """
-    resolved = (project_dir / relative).resolve()
+    try:
+        resolved = (project_dir / relative).resolve()
+    except (OSError, RuntimeError, ValueError):
+        return UNRESOLVABLE
     if resolved == project_dir or project_dir in resolved.parents:
         return project_dir / relative
-    return None
+    return ESCAPES
 
 
 def _extract_observability_path(
@@ -522,11 +540,10 @@ def _extract_observability_path(
     declared = _as_mapping(raw.get("observability")).get("path")
     if not isinstance(declared, str) or not declared.strip():
         return None
-    contained = _contained_path(project_dir, declared.strip())
-    if contained is None:
-        warnings.append(
-            f"observability.path '{declared.strip()}' escapes the project root — ignored"
-        )
+    contained = _contain(project_dir, declared.strip())
+    if isinstance(contained, str):
+        warnings.append(f"observability.path '{declared.strip()}' {contained} — ignored")
+        return None
     return contained
 
 
@@ -547,30 +564,47 @@ def _tier_gated_path(
     Read only at/above ``min_tier`` — a lower-tier child never emits it, and
     ignoring a stray value keeps the anchors-never-move invariant (a value that
     only appears with its tier can never shift a lower-tier reader's behaviour).
-    A path escaping the project root is dropped with a warning, exactly as
-    ``memory_path`` is.
+    Ignored is not the same as unreported, though (#236): a value declared below
+    its gate is dropped WITH a warning, the same channel an escaping path uses.
+    Dropping it silently made the one descriptor fault this reader said nothing
+    about look like a project that never declared the surface.
+
+    Containment is checked BEFORE the gate, so an escaping or unresolvable
+    path warns as such at any tier. Gating first let a below-gate escape through both
+    checks without a word.
     """
-    if memory.tier < min_tier:
-        return None
     declared = memory.block.get(key)
     if not isinstance(declared, str) or not declared.strip():
         return None
-    contained = _contained_path(memory.project_dir, declared.strip())
-    if contained is None:
-        warnings.append(f"memory.{key} '{declared.strip()}' escapes the project root — ignored")
+    contained = _contain(memory.project_dir, declared.strip())
+    if isinstance(contained, str):
+        warnings.append(f"memory.{key} '{declared.strip()}' {contained} — ignored")
+        return None
+    if memory.tier < min_tier:
+        warnings.append(_below_gate(key, memory.tier, min_tier))
+        return None
     return contained
 
 
-def _tier_gated_endpoint(memory: _MemorySurface) -> str:
+def _below_gate(key: str, tier: int, min_tier: int) -> str:
+    """The warning for a retrieval surface declared below its memory-tier gate."""
+    return f"memory.{key} is declared at memory tier {tier} but needs tier {min_tier}+ — ignored"
+
+
+def _tier_gated_endpoint(memory: _MemorySurface, warnings: list[str]) -> str:
     """Resolve the tier-3 ``rag_endpoint`` string; empty below tier 3/undeclared.
 
     Unlike the vault/graph *paths*, the endpoint is an opaque address (a URL or
     ``host:port``), so it is kept as a plain string rather than a contained path.
+    A non-empty endpoint below tier 3 is dropped with a warning, as the paths
+    are (#236).
     """
-    if memory.tier < TIER_RAG:
-        return ""
     endpoint = memory.block.get("rag_endpoint")
-    return endpoint.strip() if isinstance(endpoint, str) else ""
+    value = endpoint.strip() if isinstance(endpoint, str) else ""
+    if value and memory.tier < TIER_RAG:
+        warnings.append(_below_gate("rag_endpoint", memory.tier, TIER_RAG))
+        return ""
+    return value
 
 
 def _memory_stack(raw: dict[str, Any], memory: dict[str, Any], contract_version: int) -> str:
@@ -626,6 +660,20 @@ def _extract_hooks_expected(raw: dict[str, Any]) -> tuple[str, ...]:
     return tuple(str(name) for name in expected if isinstance(name, str) and name.strip())
 
 
+def _printable(text: str) -> str:
+    """Escape the characters of ``text`` that a terminal cannot be handed.
+
+    A warning quotes the declared value, and a YAML escape can declare a NUL or
+    a lone surrogate. A surrogate makes ``print`` raise ``UnicodeEncodeError`` on
+    a UTF-8 stream, so the non-JSON ``doctor`` and ``audit`` paths would crash
+    while reporting the very descriptor fault they found (PR #262 review).
+    Printable text, non-ASCII included, is kept as written.
+    """
+    return "".join(
+        c if c.isprintable() else c.encode("unicode_escape").decode("ascii") for c in text
+    )
+
+
 def parse_config(text: str, project_dir: Path, config_root: str = ".claude") -> ProjectDescriptor:
     """Build a descriptor from raw config text (pure; never raises).
 
@@ -659,12 +707,11 @@ def parse_config(text: str, project_dir: Path, config_root: str = ".claude") -> 
     memory = _as_mapping(raw.get("memory"))
     memory_default = f"{config_root}/memory"
     memory_rel = str(memory.get("memory_path") or memory_default)
-    memory_path = _contained_path(project_dir, memory_rel)
-    if memory_path is None:
-        warnings.append(
-            f"memory_path '{memory_rel}' escapes the project root — using {memory_default}"
-        )
-        memory_path = project_dir / memory_default
+    contained = _contain(project_dir, memory_rel)
+    if isinstance(contained, str):
+        warnings.append(f"memory_path '{memory_rel}' {contained} — using {memory_default}")
+        contained = project_dir / memory_default
+    memory_path = contained
     malformed: list[str] = []
     contract_version = _as_int(
         project.get("project_init_contract_version"),
@@ -690,7 +737,7 @@ def parse_config(text: str, project_dir: Path, config_root: str = ".claude") -> 
         memory_path=memory_path,
         vault_path=_tier_gated_path(surface, "vault_path", TIER_VAULT, warnings),
         graph_path=_tier_gated_path(surface, "graph_path", TIER_GRAPH, warnings),
-        rag_endpoint=_tier_gated_endpoint(surface),
+        rag_endpoint=_tier_gated_endpoint(surface, warnings),
         tooling=_extract_tooling(raw),
         deploy=_extract_deploy(raw) if is_v2 else None,
         observability_path=(
@@ -706,7 +753,7 @@ def parse_config(text: str, project_dir: Path, config_root: str = ".claude") -> 
         ci=_extract_ci(raw),
         heal_mode=_extract_heal_mode(raw, warnings),
         context=_extract_context(raw, warnings),
-        warnings=tuple(warnings),
+        warnings=tuple(_printable(w) for w in warnings),
         malformed=tuple(malformed),
     )
 
