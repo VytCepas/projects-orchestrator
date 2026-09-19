@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import time
+import threading
 from pathlib import Path
 
 import pytest
@@ -34,10 +34,22 @@ def test_map_ordered_empty_input() -> None:
     assert map_ordered(lambda n: n, []) == []
 
 
+# CONCURRENCY IS ASSERTED BY RENDEZVOUS, NOT BY STOPWATCH (#280). The old
+# form ran four 0.3s sleeps and required the whole map to finish inside 1.0s.
+# That bound measures the machine as much as the pool: under load a correct
+# pool can take longer to schedule its threads, and the test went red on a
+# busy box while CI stayed green. A barrier asks the actual question: all
+# the calls are in flight at the same time. A serial loop can never fill it,
+# however fast the machine is, and a parallel pool always does, however slow.
+_RENDEZVOUS_TIMEOUT = 10
+
+
 def test_map_ordered_runs_concurrently() -> None:
-    start = time.monotonic()
-    map_ordered(lambda _: time.sleep(0.3), [1, 2, 3, 4], jobs=4)
-    assert time.monotonic() - start < 1.0
+    barrier = threading.Barrier(4)
+    results = map_ordered(
+        lambda n: (barrier.wait(timeout=_RENDEZVOUS_TIMEOUT), n)[1], [1, 2, 3, 4], jobs=4
+    )
+    assert results == [1, 2, 3, 4]
 
 
 def test_fleet_snapshots_parallel_matches_serial_rows(fleet_dir: Path, tmp_path: Path) -> None:
@@ -48,13 +60,34 @@ def test_fleet_snapshots_parallel_matches_serial_rows(fleet_dir: Path, tmp_path:
     assert [row["Project"] for row in rows] == ["alpha", "beta", "gamma"]
 
 
+# The same rendezvous for real gates run by `checks`: each project's gate marks
+# its arrival and passes only once every project has arrived. Run serially, the
+# first gate waits for peers that have not started, gives up and fails, so the
+# command exits 1. The give-up is an iteration count, never a clock reading.
+_GATE_RENDEZVOUS = """\
+touch "$1/$2"
+i=0
+while [ $(( $(ls "$1" | wc -l) )) -lt "$3" ] && [ "$i" -lt 200 ]; do
+  sleep 0.05
+  i=$((i + 1))
+done
+[ $(( $(ls "$1" | wc -l) )) -ge "$3" ]
+"""
+
+
 def test_checks_parallel_projects_do_not_serialize(fleet_dir: Path, tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
-    for name in ("alpha", "beta", "gamma"):
-        make_project(fleet_dir, name, tooling={"lint": "sleep 0.5"})
-    start = time.monotonic()
-    main(["checks", "--root", str(fleet_dir), "--task", "lint", "--jobs", "4"])
-    assert time.monotonic() - start < 1.3
+    script = tmp_path / "rendezvous.sh"
+    script.write_text(_GATE_RENDEZVOUS, encoding="utf-8")
+    arrived = tmp_path / "arrived"
+    arrived.mkdir()
+    names = ("alpha", "beta", "gamma")
+    for name in names:
+        make_project(
+            fleet_dir, name, tooling={"lint": f"sh {script} {arrived} {name} {len(names)}"}
+        )
+    assert main(["checks", "--root", str(fleet_dir), "--task", "lint", "--jobs", "4"]) == 0
+    assert sorted(p.name for p in arrived.iterdir()) == sorted(names)
 
 
 def test_checks_results_keep_fleet_order(fleet_dir: Path, tmp_path, monkeypatch, capsys) -> None:
