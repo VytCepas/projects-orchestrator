@@ -99,6 +99,7 @@ def _literal_host(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | 
     try:
         address = ipaddress.ip_address(host)
     except ValueError:
+        # expected: not an IP literal: None means a hostname
         return None
     if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
         return address.ipv4_mapped
@@ -132,6 +133,7 @@ def is_probe_safe(url: str) -> bool:
     except ValueError:
         # Malformed authority — an unbracketed IPv6 literal, a port that is not
         # a number or is out of range. Refuse rather than guess at the intent.
+        # expected: a malformed authority is refused, which is the guard's answer
         return False
     if scheme not in _ALLOWED_SCHEMES:
         return False

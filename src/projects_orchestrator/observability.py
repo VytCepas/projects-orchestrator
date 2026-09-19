@@ -17,10 +17,13 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from projects_orchestrator.descriptor import ProjectDescriptor
+
+_log = logging.getLogger(__name__)
 
 OBSERVABILITY_CONVENTION = Path(".claude/observability")
 
@@ -101,7 +104,8 @@ def parse_event(line: str, project: str) -> GuardEvent | None:
     """
     try:
         entry = json.loads(line)
-    except ValueError:
+    except ValueError as exc:
+        _log.debug("skipping a malformed usage-log line: %r", exc)
         return None
     if not isinstance(entry, dict):
         return None
@@ -132,7 +136,8 @@ def load_events(descriptor: ProjectDescriptor) -> ProjectEvents:
                 project=descriptor.name, path=path, warnings=("usage log too large to read",)
             )
         text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+    except OSError as exc:
+        _log.debug("cannot read usage log %s: %r", path, exc)
         return ProjectEvents(project=descriptor.name, path=path, warnings=("no observability log",))
 
     events: list[GuardEvent] = []
@@ -193,9 +198,11 @@ def _parse_instant(value: str) -> _dt.datetime | None:
     try:
         stamp = _dt.datetime.fromisoformat(text)
     except ValueError:
+        # expected: not ISO-8601, so try epoch seconds next
         try:
             return _dt.datetime.fromtimestamp(float(text), tz=_dt.UTC)
         except (ValueError, OverflowError, OSError):
+            # expected: neither ISO-8601 nor epoch seconds: None means no instant
             return None
     return stamp if stamp.tzinfo is not None else stamp.replace(tzinfo=_dt.UTC)
 

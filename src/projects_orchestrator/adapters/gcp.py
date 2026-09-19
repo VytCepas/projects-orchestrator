@@ -17,12 +17,15 @@ never an empty list, and every caller is built to keep that distinction.
 from __future__ import annotations
 
 import json
+import logging
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
 from projects_orchestrator.gcloud_identity import gcloud_env
 from projects_orchestrator.runner import run_command
+
+_log = logging.getLogger(__name__)
 
 #: The ONLY gcloud verb this module runs. `search-all-resources` is read-only — it
 #: reads the Cloud Asset inventory and mutates nothing. It is a module constant, so
@@ -117,6 +120,7 @@ def search_resources(scope: str, *, timeout: float = _SCAN_TIMEOUT) -> list[GcpR
         return None
     try:
         raw = json.loads(result.stdout)
-    except ValueError:
+    except ValueError as exc:
+        _log.debug("unparseable asset search output: %r", exc)
         return None
     return _parse(raw)

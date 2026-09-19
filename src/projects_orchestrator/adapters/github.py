@@ -15,12 +15,15 @@ network itself (only the explicit ``ci`` command makes the calls).
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any
 
 from projects_orchestrator.checks import CheckResult
 from projects_orchestrator.descriptor import ProjectDescriptor
 from projects_orchestrator.runner import run_command
+
+_log = logging.getLogger(__name__)
 
 CI_UNKNOWN = "unknown"
 CI_SUCCESS = "pass"
@@ -57,7 +60,8 @@ def _loads(stdout: str) -> Any:
     """Parse JSON stdout, returning ``None`` on any problem."""
     try:
         return json.loads(stdout)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as exc:
+        _log.debug("unparseable JSON on stdout: %r", exc)
         return None
 
 

@@ -16,6 +16,7 @@ completer; no live API is ever needed.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import urllib.error
 import urllib.request
@@ -23,6 +24,8 @@ from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 
 from projects_orchestrator.controller import Intent
+
+_log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     import os
@@ -111,7 +114,8 @@ def parse_intent_reply(text: str) -> Intent | None:
         return None
     try:
         raw = json.loads(match.group(0))
-    except ValueError:
+    except ValueError as exc:
+        _log.debug("model reply carried no parseable intent: %r", exc)
         return None
     if not isinstance(raw, dict):
         return None
@@ -157,7 +161,8 @@ def _api_complete(model: str, prompt: str, api_key: str) -> str:
     try:
         with urllib.request.urlopen(request, timeout=_API_TIMEOUT) as response:  # noqa: S310
             payload = json.loads(response.read().decode("utf-8"))
-    except (urllib.error.URLError, OSError, ValueError):
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        _log.debug("Messages API call failed: %r", exc)
         return ""
     return _extract_text(payload)
 

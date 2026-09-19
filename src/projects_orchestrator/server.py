@@ -154,6 +154,7 @@ def is_loopback(host: str) -> bool:
     try:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
+        # expected: a hostname, not an IP literal: not loopback
         return False
 
 
@@ -421,6 +422,7 @@ def _is_ipv6(host: str) -> bool:
     try:
         return ipaddress.ip_address(host).version == 6
     except ValueError:
+        # expected: not an IP literal: not IPv6
         return False
 
 
@@ -486,6 +488,7 @@ def serve(
     try:
         server.serve_forever()
     except KeyboardInterrupt:
+        # expected: Ctrl-C is how the operator stops the server
         print()
     finally:
         server.server_close()

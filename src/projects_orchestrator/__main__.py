@@ -9,10 +9,16 @@ interactively (``controller`` REPL / ``tui``). Every data command takes
 from __future__ import annotations
 
 import argparse
+import atexit
+import contextlib
 import datetime as _dt
 import json
+import logging
 import math
+import os
 import sys
+import traceback
+from collections.abc import Iterator
 from dataclasses import asdict, replace
 from pathlib import Path
 
@@ -114,6 +120,16 @@ from projects_orchestrator.supervisor import logs as run_logs
 from projects_orchestrator.supervisor import start as run_start
 from projects_orchestrator.supervisor import stop as run_stop
 from projects_orchestrator.upgrade import upgrade_plan
+
+_log = logging.getLogger(__name__)
+
+#: Truthy value turns on the diagnostic trail without the flag, for a scheduled
+#: run whose command line is harder to change than its environment.
+VERBOSE_ENV = "PROJECTS_ORCHESTRATOR_VERBOSE"
+#: sysexits EX_SOFTWARE: the orchestrator itself failed, which is not the
+#: "something in the fleet needs attention" that 1 means on every data command.
+EXIT_INTERNAL_ERROR = 70
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 
 def _fleet_config(args: argparse.Namespace) -> FleetConfig:
@@ -639,6 +655,8 @@ def _cmd_upgrade_plan(args: argparse.Namespace) -> int:
             f"{row.project}: {row.status} "
             f"(scaffold {row.scaffold_version}, drift {row.drift}, PRs {row.open_prs})"
         )
+        if row.reason:
+            line += f" — {row.reason}"
         if row.project in applied:
             line += f" — upgrade {applied[row.project]}"
         print(line)
@@ -690,7 +708,8 @@ def _read_text_or_none(path: str) -> str | None:
     """Read a file's text, or ``None`` when it is unreadable."""
     try:
         return Path(path).read_text(encoding="utf-8")
-    except OSError:
+    except OSError as exc:
+        _log.debug("cannot read %s: %r", path, exc)
         return None
 
 
@@ -1423,6 +1442,7 @@ def _cmd_controller(args: argparse.Namespace) -> int:
         try:
             line = input("orchestrator> ")
         except (EOFError, KeyboardInterrupt):
+            # expected: end of input or Ctrl-C is how an operator leaves the REPL
             print()
             return 0
         intent = parse_command(line)
@@ -1437,6 +1457,7 @@ def _cmd_tui(args: argparse.Namespace) -> int:
     try:
         from projects_orchestrator.tui import OrchestratorApp
     except ModuleNotFoundError:
+        # expected: the tui extra is not installed, and the message below says so
         print(
             "the TUI needs the optional dependency: uv sync --extra tui "
             "(or: pip install 'projects-orchestrator[tui]')",
@@ -1447,10 +1468,21 @@ def _cmd_tui(args: argparse.Namespace) -> int:
     return 0
 
 
+_VERBOSE_HELP = (
+    f"log why each degraded cell degraded, and show a traceback on an internal error "
+    f"(also: {VERBOSE_ENV}=1)"
+)
+
+
 def _add_common(parser: argparse.ArgumentParser, json_flag: bool = True) -> None:
     """Attach the shared --fleet/--root (and usually --json) options."""
     parser.add_argument("--fleet", help="path to a fleet.yaml describing the fleet")
     parser.add_argument("--root", help="directory scanned one level deep for projects")
+    # SUPPRESS, so `cmd --verbose` and `--verbose cmd` both work and neither
+    # position's absence overwrites the other's presence.
+    parser.add_argument(
+        "--verbose", action="store_true", default=argparse.SUPPRESS, help=_VERBOSE_HELP
+    )
     if json_flag:
         parser.add_argument("--json", action="store_true", help="emit JSON instead of text")
 
@@ -1564,13 +1596,20 @@ def _add_work_arguments(sub: argparse._SubParsersAction[argparse.ArgumentParser]
     sub.choices[work.RUNNER_SUBCOMMAND].add_argument("run_id")
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    """Build the CLI parser with all subcommands."""
+def _top_level_parser() -> argparse.ArgumentParser:
+    """The root parser and its global flags, before any subcommand is attached."""
     parser = argparse.ArgumentParser(
         prog="projects-orchestrator",
         description="Cross-project orchestration layer for agentic development.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument("--verbose", action="store_true", help=_VERBOSE_HELP)
+    return parser
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the CLI parser with all subcommands."""
+    parser = _top_level_parser()
     sub = parser.add_subparsers(dest="command")
 
     specs: list[tuple[str, str, object, bool]] = [
@@ -1825,8 +1864,119 @@ def _add_serve_arguments(sub: argparse._SubParsersAction[argparse.ArgumentParser
     )
 
 
+def _verbose(args: argparse.Namespace) -> bool:
+    """Whether the diagnostic trail is on: the flag, or the env toggle."""
+    if getattr(args, "verbose", False):
+        return True
+    return os.environ.get(VERBOSE_ENV, "").strip().lower() in _TRUTHY
+
+
+_PACKAGE_LOGGER = "projects_orchestrator"
+
+
+def _package_loggers() -> list[logging.Logger]:
+    """The package logger and every module logger under it that exists so far."""
+    prefix = f"{_PACKAGE_LOGGER}."
+    children = [
+        logger
+        for name, logger in list(logging.Logger.manager.loggerDict.items())
+        if name.startswith(prefix) and isinstance(logger, logging.Logger)
+    ]
+    return [logging.getLogger(_PACKAGE_LOGGER), *children]
+
+
+@contextlib.contextmanager
+def _diagnostic_trail(verbose: bool) -> Iterator[None]:
+    """Own the package's debug records for one command, then hand them back.
+
+    Degraded paths log at DEBUG. While a command runs, every logger in the
+    package, the module loggers included, sets aside the handlers a host
+    attached to it and defers to the package logger, which stops propagating.
+    A host that configured logging at DEBUG, on the root, the package or any one
+    module, then neither sees the trail on a quiet run nor prints each line twice
+    on a verbose one (Codex on #269). Quiet: no handler at all, so a default run
+    prints exactly what it did before the seam existed. Verbose: one stderr
+    handler. Everything is restored on the way out, so a repeated ``main()``
+    never stacks a second handler and an embedding caller gets its loggers back.
+    """
+    loggers = _package_loggers()
+    saved = [(lg, list(lg.handlers), lg.level, lg.propagate) for lg in loggers]
+    for lg in loggers:
+        for existing in list(lg.handlers):
+            lg.removeHandler(existing)
+        lg.setLevel(logging.NOTSET)
+        lg.propagate = True
+    package = loggers[0]
+    package.propagate = False
+    handler: logging.Handler | None = None
+    if verbose:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter("debug: %(name)s: %(message)s"))
+        package.addHandler(handler)
+        package.setLevel(logging.DEBUG)
+    try:
+        yield
+    finally:
+        if handler is not None:
+            package.removeHandler(handler)
+        for lg, handlers, level, propagate in saved:
+            for existing in handlers:
+                lg.addHandler(existing)
+            lg.setLevel(level)
+            lg.propagate = propagate
+
+
+def _internal_error(command: str, exc: Exception, verbose: bool) -> int:
+    """Report an exception that escaped a command: one line, traceback on request."""
+    if verbose:
+        traceback.print_exception(exc, file=sys.stderr)
+    hint = "" if verbose else "; rerun with --verbose for the traceback"
+    detail = f"{type(exc).__name__}: {exc}".splitlines()[0]
+    print(
+        f"projects-orchestrator: internal error in '{command}': {detail} — this is a bug{hint}",
+        file=sys.stderr,
+    )
+    return EXIT_INTERNAL_ERROR
+
+
+def _stdout_is_broken() -> bool:
+    """Whether the broken pipe is stdout's own, rather than some other pipe a command used.
+
+    After a failed write, flushing stdout raises again only when stdout itself lost
+    its reader. Any other ``BrokenPipeError`` (a subprocess's stdin, a socket) is a
+    real fault and must be reported, not waved through as ``… | head``.
+    """
+    try:
+        sys.stdout.flush()
+    except BrokenPipeError:
+        # expected: this IS the answer — stdout's reader went away
+        return True
+    except (OSError, ValueError) as exc:
+        _log.debug("cannot flush stdout: %r", exc)
+    return False
+
+
+def _silence_stdout() -> None:
+    """At process exit, point fd 1 at /dev/null so the final flush cannot raise again.
+
+    Registered with :mod:`atexit` rather than run in place, so a caller embedding
+    ``main()`` keeps its stdout for as long as its process lives (Codex on #269).
+    """
+    # expected: stdout is no real descriptor (captured, or closed), so nothing is left to flush
+    with contextlib.suppress(OSError, ValueError):
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        try:
+            os.dup2(devnull, sys.stdout.fileno())
+        finally:
+            os.close(devnull)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the projects-orchestrator CLI.
+
+    The engine degrades instead of raising (ADR-003), so an exception reaching
+    this boundary is a bug. It exits :data:`EXIT_INTERNAL_ERROR` with one line
+    rather than a traceback; ``--verbose`` adds the traceback back.
 
     Args:
         argv: Optional argument vector; defaults to ``sys.argv[1:]``.
@@ -1839,7 +1989,22 @@ def main(argv: list[str] | None = None) -> int:
     if args.command is None:
         parser.print_help()
         return 0
-    exit_code: int = args.handler(args)
+    verbose = _verbose(args)
+    with _diagnostic_trail(verbose):
+        try:
+            exit_code: int = args.handler(args)
+            # Flush HERE, not at interpreter exit: a reader that went away
+            # (`… | head`) otherwise surfaces after main() has returned, as
+            # "Exception ignored" and exit 120, where nothing can classify it.
+            sys.stdout.flush()
+        except BrokenPipeError as exc:
+            if not _stdout_is_broken():
+                return _internal_error(args.command, exc, verbose)
+            # The reader went away (`… | head`): nothing is wrong with the command.
+            atexit.register(_silence_stdout)
+            return 1
+        except Exception as exc:  # noqa: BLE001 — the CLI boundary is where never-raise ends
+            return _internal_error(args.command, exc, verbose)
     return exit_code
 
 

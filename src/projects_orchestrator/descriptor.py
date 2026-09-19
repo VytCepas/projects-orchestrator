@@ -11,11 +11,14 @@ through :attr:`ProjectDescriptor.warnings`.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+_log = logging.getLogger(__name__)
 
 # Scaffold layout roots, most-current first. project-init PI-627 relocated the
 # canonical tree from ``.claude/`` to ``.agents/`` and its ``.claude/`` projection
@@ -61,7 +64,7 @@ def resolve_config(project_dir: Path) -> tuple[Path, str] | None:
                 continue
             if candidate.is_file():
                 return candidate, root
-        except OSError:
+        except OSError as exc:
             # ADR-003: the engine never raises. These are stat calls, and a
             # stat raises for reasons that have nothing to do with this
             # project being malformed — a layout dir at mode 000, a dead
@@ -87,6 +90,7 @@ def resolve_config(project_dir: Path) -> tuple[Path, str] | None:
             # pins — they raise. The regression tests therefore inject the
             # error rather than relying on chmod, or they would pass on a
             # tree where the bug is live (#210).
+            _log.debug("cannot stat %s: %r", candidate, exc)
             continue
     return None
 
@@ -121,7 +125,8 @@ def layout_dir_present(project_dir: Path) -> str:
         try:
             if (project_dir / root).exists():
                 return root
-        except OSError:
+        except OSError as exc:
+            _log.debug("cannot stat %s: %r", project_dir / root, exc)
             continue
     return ""
 
@@ -385,6 +390,7 @@ def _as_int(
         try:
             return int(value)
         except (TypeError, ValueError):
+            # expected: reported below as a malformed field, with its value
             pass
     if field:
         if warnings is not None:
@@ -526,7 +532,8 @@ def _contain(project_dir: Path, relative: str) -> Path | str:
     """
     try:
         resolved = (project_dir / relative).resolve()
-    except (OSError, RuntimeError, ValueError):
+    except (OSError, RuntimeError, ValueError) as exc:
+        _log.debug("cannot resolve %r under %s: %r", relative, project_dir, exc)
         return UNRESOLVABLE
     if resolved == project_dir or project_dir in resolved.parents:
         return project_dir / relative
@@ -778,6 +785,7 @@ def parse_scaffold_version(value: str) -> tuple[int, int, int] | None:
     try:
         major, minor, patch = (int(part) for part in parts)
     except ValueError:
+        # expected: an unparseable version IS the answer: None means not comparable
         return None
     return (major, minor, patch)
 
@@ -802,6 +810,7 @@ def load_descriptor(project_dir: Path) -> ProjectDescriptor | None:
         # a slightly-garbled descriptor rather than dropping the project from
         # discovery entirely (the engine never raises — ADR-003).
         text = config_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+    except OSError as exc:
+        _log.debug("cannot read %s: %r", config_path, exc)
         return None
     return parse_config(text, project_dir, config_root)

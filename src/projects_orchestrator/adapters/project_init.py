@@ -14,6 +14,7 @@ the child's own reviewed-PR upgrade workflow, which stays the sole write path
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,6 +23,8 @@ from typing import Any
 from projects_orchestrator.adapters.gitlab import provider_is_gitlab
 from projects_orchestrator.descriptor import ProjectDescriptor, parse_scaffold_version
 from projects_orchestrator.runner import RunResult, run_command
+
+_log = logging.getLogger(__name__)
 
 UPSTREAM_REPO = "VytCepas/project-init"
 UPGRADE_WORKFLOW = "project-init-upgrade.yml"
@@ -53,7 +56,8 @@ def _loads(stdout: str) -> Any:
     """Parse JSON stdout, returning ``None`` on any problem."""
     try:
         return json.loads(stdout)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as exc:
+        _log.debug("unparseable JSON on stdout: %r", exc)
         return None
 
 
@@ -62,6 +66,7 @@ def _coerce_int(value: Any, default: int = 0) -> int:
     try:
         return int(value)
     except (TypeError, ValueError):
+        # expected: a non-numeric value takes the caller's default; that coercion is the contract
         return default
 
 
@@ -168,6 +173,12 @@ def latest_upstream_version(
     """
     result = run(_LATEST_COMMAND, cwd, timeout)
     if not result.ok:
+        _log.debug(
+            "upstream release lookup failed (rc=%s, timed out=%s): %s",
+            result.returncode,
+            result.timed_out,
+            (result.error or result.stderr).strip()[-200:],
+        )
         return None
     return parse_release_tag(result.stdout)
 

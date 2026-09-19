@@ -12,12 +12,15 @@ never runs. Both never raise.
 from __future__ import annotations
 
 import hashlib
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
 from projects_orchestrator.descriptor import ProjectDescriptor
+
+_log = logging.getLogger(__name__)
 
 HOOKS_SOURCE_DIR = Path(".github/hooks")
 
@@ -55,7 +58,8 @@ def _load_manifest(config_path: Path) -> dict[str, str]:
     """Read ``scaffold.manifest`` from the project config; empty on failure."""
     try:
         raw = yaml.safe_load(config_path.read_text(encoding="utf-8", errors="replace"))
-    except (OSError, yaml.YAMLError):
+    except (OSError, yaml.YAMLError) as exc:
+        _log.debug("cannot read the scaffold manifest in %s: %r", config_path, exc)
         return {}
     if not isinstance(raw, dict):
         return {}
@@ -72,7 +76,8 @@ def _sha256(path: Path) -> str | None:
         if path.stat().st_size > _MAX_HASH_BYTES:
             return None
         return hashlib.sha256(path.read_bytes()).hexdigest()
-    except OSError:
+    except OSError as exc:
+        _log.debug("cannot hash %s: %r", path, exc)
         return None
 
 
@@ -147,9 +152,10 @@ def _hooks_dir(project: Path) -> Path:
         return dot_git / "hooks"
     try:
         pointer = dot_git.read_text(encoding="utf-8").strip()
-    except OSError:
+    except OSError as exc:
         # Unreadable or absent: fall back to the ordinary layout so a
         # non-repo answers exactly as it did before.
+        _log.debug("cannot read %s: %r", dot_git, exc)
         return dot_git / "hooks"
     if not pointer.startswith("gitdir:"):
         return dot_git / "hooks"
@@ -158,9 +164,10 @@ def _hooks_dir(project: Path) -> Path:
         admin = project / admin
     try:
         common_rel = (admin / "commondir").read_text(encoding="utf-8").strip()
-    except OSError:
+    except OSError as exc:
         # A gitdir with no commondir is a plain relocated .git (``git init
         # --separate-git-dir``), not a worktree — its hooks live under it.
+        _log.debug("no readable commondir under %s: %r", admin, exc)
         return admin / "hooks"
     return (admin / common_rel) / "hooks"
 
@@ -194,7 +201,8 @@ def hook_health(descriptor: ProjectDescriptor) -> str:
     if not declared:
         try:
             declared = sorted(p.name for p in source_dir.iterdir() if p.is_file())
-        except OSError:
+        except OSError as exc:
+            _log.debug("cannot list %s: %r", source_dir, exc)
             declared = []
     if not declared:
         return "-"
@@ -215,5 +223,6 @@ def _differs(tracked: Path, installed: Path) -> bool:
     """
     try:
         return tracked.read_bytes() != installed.read_bytes()
-    except OSError:
+    except OSError as exc:
+        _log.debug("cannot compare %s with %s: %r", tracked, installed, exc)
         return False

@@ -31,6 +31,7 @@ to ``None``/``False``, and the caller renders that.
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import subprocess
@@ -40,6 +41,8 @@ from pathlib import Path
 from uuid import uuid4
 
 from projects_orchestrator.naming import safe_component
+
+_log = logging.getLogger(__name__)
 
 _STATE_DIRNAME = "projects-orchestrator"
 _WORKTREE_SUBDIR = "worktrees"
@@ -89,7 +92,8 @@ def _run_argv(args: list[str], cwd: Path, timeout: float = _GIT_TIMEOUT) -> bool
         proc = subprocess.run(  # noqa: S603 — argv list, no shell; never concatenated into a command string
             args, cwd=cwd, capture_output=True, text=True, timeout=timeout, check=False
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        _log.debug("%s did not run: %r", args[:3], exc)
         return False
     return proc.returncode == 0
 
@@ -141,7 +145,8 @@ def create(repo: Path, project: str, branch: str, slug: str) -> Worktree | None:
     path = worktree_root() / safe_component(project) / safe_component(slug)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-    except OSError:
+    except OSError as exc:
+        _log.debug("cannot create %s: %r", path.parent, exc)
         return None
     if path.exists():
         # Reusing a slug would silently hand the agent a stale checkout.
@@ -180,7 +185,8 @@ def origin_repo(worktree_path: Path) -> Path | None:
             timeout=_GIT_TIMEOUT,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        _log.debug("cannot resolve the origin of %s: %r", worktree_path, exc)
         return None
     if proc.returncode != 0 or not proc.stdout.strip():
         return None
@@ -215,14 +221,16 @@ def prune_expired(repo: Path, project: str, expiry_days: int = DEFAULT_EXPIRY_DA
     cutoff = time.time() - expiry_days * _SECONDS_PER_DAY
     try:
         entries = list((worktree_root() / safe_component(project)).iterdir())
-    except OSError:
+    except OSError as exc:
+        _log.debug("cannot list worktrees of %s: %r", project, exc)
         return 0
     pruned = 0
     for entry in entries:
         try:
             if not entry.is_dir() or entry.stat().st_mtime >= cutoff:
                 continue
-        except OSError:
+        except OSError as exc:
+            _log.debug("cannot stat %s: %r", entry, exc)
             continue
         shutil.rmtree(entry, ignore_errors=True)
         pruned += 1

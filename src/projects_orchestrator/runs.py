@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import logging
 import math
 import os
 from dataclasses import asdict, dataclass, replace
@@ -44,6 +45,8 @@ from projects_orchestrator import persist
 from projects_orchestrator.cost import RunCost, from_record
 from projects_orchestrator.naming import safe_component
 from projects_orchestrator.procs import is_our_process, proc_start_ticks
+
+_log = logging.getLogger(__name__)
 
 _STATE_DIRNAME = "projects-orchestrator"
 _RUNS_SUBDIR = "runs"
@@ -157,7 +160,8 @@ def save(run: AgentRun) -> bool:
         # was a FIXED name, so two concurrent writers raced on the same tmp path
         # and one could replace the other's half-written bytes.
         persist.locked_write(path, json.dumps(asdict(run), indent=2))
-    except OSError:
+    except OSError as exc:
+        _log.debug("cannot save run %s: %r", run.id, exc)
         return False
     return True
 
@@ -208,7 +212,8 @@ def _parse(raw: object) -> AgentRun | None:
             cost=from_record(raw.get("cost")),
             budget_usd=_as_budget(raw.get("budget_usd")),
         )
-    except (KeyError, TypeError, ValueError):
+    except (KeyError, TypeError, ValueError) as exc:
+        _log.debug("malformed run record: %r", exc)
         return None
 
 
@@ -249,7 +254,8 @@ def _read(run_id: str) -> AgentRun | None:
     """
     try:
         raw = json.loads(_run_file(run_id).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        _log.debug("run record %s unreadable: %r", run_id, exc)
         return None
     return _parse(raw)
 
@@ -269,13 +275,15 @@ def list_runs(project: str = "") -> list[AgentRun]:
     """
     try:
         files = sorted(state_dir().glob("*.json"))
-    except OSError:
+    except OSError as exc:
+        _log.debug("cannot list run records: %r", exc)
         return []
     runs: list[AgentRun] = []
     for path in files:
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except (OSError, ValueError) as exc:
+            _log.debug("skipping unreadable run record %s: %r", path, exc)
             continue  # a torn or corrupt record is not a reason to fail the list
         parsed = _parse(raw)
         if parsed is None or (project and parsed.project != project):
@@ -391,6 +399,7 @@ def forget(run_id: str) -> bool:
     path = _run_file(run_id)
     try:
         path.unlink(missing_ok=True)
-    except OSError:
+    except OSError as exc:
+        _log.debug("cannot delete %s: %r", path, exc)
         return False
     return not path.exists()

@@ -30,6 +30,7 @@ without it the lock degrades to a no-op and the atomic replace still holds.
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import tempfile
 from collections.abc import Iterator
@@ -38,7 +39,10 @@ from pathlib import Path
 try:  # pragma: no cover - POSIX-only, present on every supported platform
     import fcntl
 except ImportError:  # pragma: no cover
+    # expected: no fcntl off POSIX, so writes degrade to unlocked
     fcntl = None  # type: ignore[assignment]
+
+_log = logging.getLogger(__name__)
 
 #: Suffix for the sidecar lock file. A SEPARATE file, never the payload itself:
 #: locking the payload and then replacing it would drop the lock with the inode
@@ -61,16 +65,18 @@ def locked(path: Path) -> Iterator[None]:
         path: The payload path being guarded (the lock is a sidecar beside it).
     """
     handle = None
-    with contextlib.suppress(OSError, ValueError):
+    try:
         path.parent.mkdir(parents=True, exist_ok=True)
         handle = (path.parent / f"{path.name}{LOCK_SUFFIX}").open("w", encoding="utf-8")
         if fcntl is not None:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    except (OSError, ValueError) as exc:
+        _log.debug("cannot lock %s, so this write runs unlocked: %r", path, exc)
     try:
         yield
     finally:
         if handle is not None:
-            with contextlib.suppress(OSError):
+            with contextlib.suppress(OSError):  # expected: the flock is released either way
                 handle.close()  # closing the descriptor releases the flock
 
 
@@ -108,9 +114,10 @@ def atomic_write(path: Path, text: str) -> None:
             os.fsync(handle.fileno())
         tmp_path.replace(path)
     except OSError:
-        with contextlib.suppress(OSError):
+        with contextlib.suppress(OSError):  # expected: the original error is re-raised below
             tmp_path.unlink()
         raise
+    # expected: a directory fsync is best-effort, and some filesystems refuse it
     with contextlib.suppress(OSError):
         dir_fd = os.open(str(path.parent), os.O_RDONLY)
         try:
