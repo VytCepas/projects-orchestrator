@@ -51,6 +51,7 @@ dev = [
 asyncio_mode = "auto"
 markers = [
     "inspects_agent_launch: exercises _default_agent_run itself (must stub subprocess.run); exempt from the no-live-agent fixture",
+    "reads_the_checkout: reads files through git's top level, which under mutmut is the original checkout, not mutants/; exempt from the mutmut copy check",
 ]
 
 # The version lives in ONE place, __init__.py, and hatch reads it at build time
@@ -91,6 +92,7 @@ also_copy = [
     ".agents",
     ".github",
     "AGENTS.md",
+    "CHANGELOG.md",
     "README.md",
     "contrib",
     "docs",

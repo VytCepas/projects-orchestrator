@@ -483,5 +483,7 @@ def pytest_collection_finish() -> None:
 def _reads_survive_mutmuts_copy(request: pytest.FixtureRequest) -> Iterator[None]:
     _TOUCHED.clear()
     yield
+    if request.node.get_closest_marker("reads_the_checkout"):
+        return
     missing = uncopied(set(_TOUCHED))
     assert not missing, _copy_advice(request.node.nodeid, missing)
