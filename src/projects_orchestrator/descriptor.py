@@ -508,8 +508,16 @@ def _contained_path(project_dir: Path, relative: str) -> Path | None:
     the project root (``Path('/proj') / '/etc'`` is ``/etc``). Reject any value
     whose resolved location is not the project dir or beneath it; contained
     values keep their plain (unresolved) join so callers compare cleanly.
+
+    A path that cannot be resolved at all (a symlink loop raises ``RuntimeError``
+    on Python 3.11/3.12) cannot be shown to be contained, so it is rejected the
+    same way. Raising here would abort discovery of the whole fleet over one
+    project's descriptor (PR #262 review).
     """
-    resolved = (project_dir / relative).resolve()
+    try:
+        resolved = (project_dir / relative).resolve()
+    except (OSError, RuntimeError):
+        return None
     if resolved == project_dir or project_dir in resolved.parents:
         return project_dir / relative
     return None

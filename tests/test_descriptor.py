@@ -295,6 +295,15 @@ def test_an_escaping_path_below_its_gate_warns_as_an_escape(tmp_path: Path) -> N
     )
 
 
+def test_a_symlink_loop_below_the_gate_warns_instead_of_raising(tmp_path: Path) -> None:
+    # Containment now runs before the gate, so a below-gate path is resolved,
+    # and on Python 3.11/3.12 resolving a symlink loop raises RuntimeError.
+    (tmp_path / "loop").symlink_to(tmp_path / "loop")
+    descriptor = parse_config(_memory_config(0, "  vault_path: loop/vault\n"), tmp_path)
+    assert descriptor.vault_path is None
+    assert descriptor.warnings == ("memory.vault_path 'loop/vault' escapes the project root — ignored",)
+
+
 def test_every_surface_at_its_own_tier_is_silent(tmp_path: Path) -> None:
     # The control: a reader that warned on every declared surface would pass the
     # two tests above. Each rung declares exactly what the template renders for
