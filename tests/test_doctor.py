@@ -78,6 +78,19 @@ def test_diagnose_hooks_ok_when_none_shipped(fleet_dir: Path) -> None:
     assert _finding(_report(fleet_dir), "hooks").status == "ok"
 
 
+def test_diagnose_hooks_warns_on_a_stale_hook(fleet_dir: Path) -> None:
+    # #241: `ok` before, because both files existed.
+    project = make_project(fleet_dir, "alpha")
+    source = project / ".github" / "hooks"
+    source.mkdir(parents=True)
+    (source / "pre-commit").write_text("#!/bin/sh\n# fixed\n", encoding="utf-8")
+    installed = project / ".git" / "hooks"
+    installed.mkdir(parents=True)
+    (installed / "pre-commit").write_text("#!/bin/sh\n# unfixed\n", encoding="utf-8")
+    finding = _finding(_report(fleet_dir), "hooks")
+    assert (finding.status, finding.detail) == ("warn", "git hooks stale — run install_hooks.sh")
+
+
 def test_diagnose_tooling_ok_with_declared_command(fleet_dir: Path) -> None:
     make_project(fleet_dir, "alpha", tooling={"lint": "true"})
     assert _finding(_report(fleet_dir), "tooling").status == "ok"

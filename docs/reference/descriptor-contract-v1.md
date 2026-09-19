@@ -85,7 +85,9 @@ lets drift detection fall out of the existing contract for free.
 Read by `drift.py`. Hooks shipped in `.github/hooks/` are compared against
 `.git/hooks/` in the child's clone:
 
-- `ok` — every shipped hook is installed
+- `ok` — every shipped hook is installed and matches its tracked source
+- `stale` — every shipped hook is installed, but at least one differs from
+  `.github/hooks/`: a merged hook change that was never re-installed
 - `partial` / `missing` — some / none installed
 - `-` — the project ships no hooks
 

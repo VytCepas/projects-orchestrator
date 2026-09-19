@@ -55,6 +55,8 @@ version's only source. `tests/test_version.py` fails when they disagree.
   warning, and a descriptor path that could not be resolved aborted discovery
   of the whole fleet (#262).
 - `doctor` called an explicit contract version of `0` absent (#265).
+- An installed git hook older than its tracked source read `ok`. It reads
+  `stale` now, and `doctor`, the hardening checklist and `watch` report it (#272).
 
 ### Security
 

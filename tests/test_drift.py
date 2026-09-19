@@ -101,6 +101,37 @@ def test_hook_health_uninstalled_is_missing(fleet_dir: Path) -> None:
     assert hook_health(_with_hooks(fleet_dir, install=False)) == "missing"
 
 
+def test_hook_health_installed_but_older_than_tracked_is_stale(fleet_dir: Path) -> None:
+    # #241: a merge updated .github/hooks and nothing re-installed it. Every
+    # surface read green, and this read `ok`.
+    descriptor = _with_hooks(fleet_dir, install=True)
+    (descriptor.path / ".git" / "hooks" / "pre-commit").write_text(
+        "#!/bin/sh\n# the unfixed gate\n", encoding="utf-8"
+    )
+    assert hook_health(descriptor) == "stale"
+
+
+def test_hook_health_partial_outranks_stale(fleet_dir: Path) -> None:
+    # One hook absent and the other old: the absent one is the bigger gap, and
+    # both have the same remedy.
+    descriptor = _with_hooks(fleet_dir, install=True)
+    (descriptor.path / ".github" / "hooks" / "pre-push").write_text("#!/bin/sh\n", encoding="utf-8")
+    (descriptor.path / ".git" / "hooks" / "pre-commit").write_text("old\n", encoding="utf-8")
+    assert hook_health(load_descriptor(descriptor.path)) == "partial"
+
+
+def test_hook_health_with_no_tracked_source_is_not_stale(fleet_dir: Path) -> None:
+    # hooks.expected can name a hook that has no .github/hooks source; there is
+    # nothing to compare, and an unknown is not evidence of staleness.
+    project = make_project_v2(fleet_dir, "alpha")
+    installed = project / ".git" / "hooks"
+    installed.mkdir(parents=True)
+    for name in ("pre-commit", "commit-msg"):
+        (installed / name).write_text("anything\n", encoding="utf-8")
+    assert not (project / ".github" / "hooks").exists()
+    assert hook_health(load_descriptor(project)) == "ok"
+
+
 def test_hook_health_uses_v2_expected_list(fleet_dir: Path) -> None:
     project = make_project_v2(fleet_dir, "alpha")
     installed = project / ".git" / "hooks"
