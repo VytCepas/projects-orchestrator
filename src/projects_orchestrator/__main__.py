@@ -226,7 +226,13 @@ def _print_watch_state() -> None:
 
 
 def _emit_json(payload: object) -> int:
-    """Print a JSON document (paths become strings)."""
+    """Print a JSON document (paths become strings).
+
+    Returns 0, which is the exit code only for a command whose verdict is always
+    0. A command whose text mode can exit nonzero must return THAT code under
+    ``--json`` too (#278): a monitor can ignore an exit code, but it cannot
+    recover one it was never given.
+    """
     print(json.dumps(payload, indent=2, default=str))
     return 0
 
@@ -352,13 +358,15 @@ def _cmd_checks(args: argparse.Namespace) -> int:
     fresh = [result for result, reused in pairs if not reused]
     cache.save_results(fresh)
     history_record(fresh)
+    rc = 1 if any(result.status == "fail" for result, _ in pairs) else 0
     if args.json:
-        return _emit_json([{**asdict(r), "cached": reused} for r, reused in pairs])
+        _emit_json([{**asdict(r), "cached": reused} for r, reused in pairs])
+        return rc
     for result, reused in pairs:
         suffix = f" — {result.detail}" if result.detail else ""
         cached_mark = " (cached)" if reused else ""
         print(f"{result.project} {result.task}: {result.status}{cached_mark}{suffix}")
-    return 1 if any(result.status == "fail" for result, _ in pairs) else 0
+    return rc
 
 
 def _cmd_memory(args: argparse.Namespace) -> int:
@@ -428,16 +436,17 @@ def _cmd_drift(args: argparse.Namespace) -> int:
             return 2
         selected = [descriptor]
     reports = [compute_drift(d) for d in selected]
+    rc = 1 if any(r.status == "drift" for r in reports) else 0
     if args.json:
-        emitted = _emit_json([asdict(r) for r in reports])
-        return _unresolved_rc(fleet, emitted)
+        _emit_json([asdict(r) for r in reports])
+        return _unresolved_rc(fleet, rc)
     for report in reports:
         print(f"{report.project}: {report.summary}")
         for relpath in report.modified:
             print(f"  modified: {relpath}")
         for relpath in report.missing:
             print(f"  missing:  {relpath}")
-    return _unresolved_rc(fleet, 1 if any(r.status == "drift" for r in reports) else 0)
+    return _unresolved_rc(fleet, rc)
 
 
 def _cmd_doctor(args: argparse.Namespace) -> int:
@@ -451,14 +460,15 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             return 2
         selected = [descriptor]
     reports = [diagnose(d) for d in selected]
+    rc = 1 if any(r.status == "fail" for r in reports) else 0
     if args.json:
-        emitted = _emit_json([asdict(r) for r in reports])
-        return _unresolved_rc(fleet, emitted)
+        _emit_json([asdict(r) for r in reports])
+        return _unresolved_rc(fleet, rc)
     for report in reports:
         print(f"{report.project}: {report.status}")
         for finding in report.findings:
             print(f"  [{finding.status}] {finding.check}: {finding.detail}")
-    return _unresolved_rc(fleet, 1 if any(r.status == "fail" for r in reports) else 0)
+    return _unresolved_rc(fleet, rc)
 
 
 def _emit_digest(args: argparse.Namespace, reports: list[AuditReport]) -> int:
@@ -471,10 +481,12 @@ def _emit_digest(args: argparse.Namespace, reports: list[AuditReport]) -> int:
     if args.webhook and digest.changed:
         ok = post_payload(args.webhook, payload)
         print(f"webhook: {'delivered' if ok else 'delivery failed'}", file=sys.stderr)
+    rc = 1 if digest.new else 0
     if args.json:
-        return _emit_json(payload)
+        _emit_json(payload)
+        return rc
     print(render_digest(digest))
-    return 1 if digest.new else 0
+    return rc
 
 
 def _cmd_audit(args: argparse.Namespace) -> int:
@@ -504,9 +516,10 @@ def _cmd_audit(args: argparse.Namespace) -> int:
         if not fleet.descriptors:
             return NO_PROJECTS_RC
         return _emit_digest(args, reports)
+    rc = 1 if any(r.needs_attention for r in reports) else 0
     if args.json:
-        emitted = _emit_json([asdict(r) for r in reports])
-        return _unresolved_rc(fleet, emitted)
+        _emit_json([asdict(r) for r in reports])
+        return _unresolved_rc(fleet, rc)
     if args.markdown:
         print(render_markdown(reports))
     else:
@@ -514,7 +527,7 @@ def _cmd_audit(args: argparse.Namespace) -> int:
             print(f"{report.project}: {report.status}")
             for finding in report.findings:
                 print(f"  [{finding.severity}] {finding.category}: {finding.message}")
-    return _unresolved_rc(fleet, 1 if any(r.needs_attention for r in reports) else 0)
+    return _unresolved_rc(fleet, rc)
 
 
 def _cmd_hardening(args: argparse.Namespace) -> int:
@@ -528,11 +541,12 @@ def _cmd_hardening(args: argparse.Namespace) -> int:
             return 2
         selected = [descriptor]
     reports = hardening_checklist(selected, cache.load_results())
+    rc = 1 if any(report.needs_attention for report in reports) else 0
     if args.json:
-        emitted = _emit_json([asdict(report) for report in reports])
-        return _unresolved_rc(fleet, emitted)
+        _emit_json([asdict(report) for report in reports])
+        return _unresolved_rc(fleet, rc)
     print(render_hardening(reports))
-    return _unresolved_rc(fleet, 1 if any(report.needs_attention for report in reports) else 0)
+    return _unresolved_rc(fleet, rc)
 
 
 def _cmd_ci(args: argparse.Namespace) -> int:
@@ -551,12 +565,14 @@ def _cmd_ci(args: argparse.Namespace) -> int:
         selected = [descriptor]
     probes = map_ordered(probe_ci, selected)
     cache.save_results([r for _, results, _ in probes for r in results])
+    rc = 1 if any(failed for _, _, failed in probes) else 0
     if args.json:
-        return _emit_json([payload for payload, _, _ in probes])
+        _emit_json([payload for payload, _, _ in probes])
+        return rc
     for payload, _results, _failed in probes:
         count = "?" if payload["count"] is None else str(payload["count"])
         print(f"{payload['project']}: CI {payload['ci']}, {count} open {payload['unit']}(s)")
-    return 1 if any(failed for _, _, failed in probes) else 0
+    return rc
 
 
 def _cmd_cloud_status(args: argparse.Namespace) -> int:
@@ -576,8 +592,10 @@ def _cmd_cloud_status(args: argparse.Namespace) -> int:
     checked_at = _dt.datetime.now(tz=_dt.UTC).isoformat(timespec="seconds")
     statuses = map_ordered(collect_cloud, selected)
     cache.save_results([r for s in statuses for r in cloud_check_results(s, checked_at)])
+    rc = 1 if any(s.health == "unhealthy" or s.state == "stopped" for s in statuses) else 0
     if args.json:
-        return _emit_json([asdict(s) for s in statuses])
+        _emit_json([asdict(s) for s in statuses])
+        return rc
     for status in statuses:
         parts = [status.state]
         if status.revision:
@@ -585,7 +603,7 @@ def _cmd_cloud_status(args: argparse.Namespace) -> int:
         if status.health:
             parts.append(status.health)
         print(f"{status.project}: {status.target} — {' '.join(parts)}")
-    return 1 if any(s.health == "unhealthy" or s.state == "stopped" for s in statuses) else 0
+    return rc
 
 
 def _cmd_events(args: argparse.Namespace) -> int:
@@ -659,8 +677,10 @@ def _cmd_upgrade_plan(args: argparse.Namespace) -> int:
             for row in rows
             if row.status == "outdated"
         }
+    rc = 1 if any(r.status == "outdated" for r in rows) else 0
     if args.json:
-        return _emit_json([{**asdict(r), "applied": applied.get(r.project)} for r in rows])
+        _emit_json([{**asdict(r), "applied": applied.get(r.project)} for r in rows])
+        return rc
     for row in rows:
         line = (
             f"{row.project}: {row.status} "
@@ -672,7 +692,7 @@ def _cmd_upgrade_plan(args: argparse.Namespace) -> int:
         if row.project in applied:
             line += f" — upgrade {applied[row.project]}"
         print(line)
-    return 1 if any(r.status == "outdated" for r in rows) else 0
+    return rc
 
 
 def _cmd_register(args: argparse.Namespace) -> int:
@@ -694,8 +714,10 @@ def _cmd_register(args: argparse.Namespace) -> int:
     outcome = register_project(fleet_file, result.target)
     for warning in outcome.warnings:
         print(f"warning: {warning}", file=sys.stderr)
+    # A write failure surfaces as a warning with added=False; treat as an error.
+    rc = 0 if outcome.added or not outcome.warnings else 1
     if args.json:
-        return _emit_json(
+        _emit_json(
             {
                 "target": str(outcome.project),
                 "fleet_file": str(outcome.fleet_file),
@@ -705,6 +727,7 @@ def _cmd_register(args: argparse.Namespace) -> int:
                 "conflicts": list(result.conflicts),
             }
         )
+        return rc
     verb = "registered" if outcome.added else "already registered"
     print(
         f"{verb} {outcome.project} in {outcome.fleet_file} "
@@ -712,8 +735,7 @@ def _cmd_register(args: argparse.Namespace) -> int:
     )
     for conflict in result.conflicts:
         print(f"  scaffold conflict (left unwritten): {conflict}", file=sys.stderr)
-    # A write failure surfaces as a warning with added=False; treat as an error.
-    return 0 if outcome.added or not outcome.warnings else 1
+    return rc
 
 
 def _read_text_or_none(path: str) -> str | None:

@@ -67,7 +67,8 @@ Every data command accepts `--json` for external monitors, and exit codes
 are meaningful (`checks` exits 1 when any gate fails, `drift` when any
 project diverged from its scaffold, `doctor` when any project fails
 contract-v1 conformance, `audit` when anything needs attention, `upgrade-plan`
-when any project is behind upstream project-init). A degraded cell
+when any project is behind upstream project-init), and `--json` exits exactly
+as the text mode does. A degraded cell
 (`unknown`, `-`, `?`) never stops a command. `--verbose` (or
 `PROJECTS_ORCHESTRATOR_VERBOSE=1`) logs to stderr every error a degraded path
 swallowed: an unreadable file, a failed probe, unparseable output. A cell that
