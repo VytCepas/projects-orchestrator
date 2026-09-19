@@ -50,6 +50,9 @@ version's only source. `tests/test_version.py` fails when they disagree.
 
 ### Fixed
 
+- `--json` exits exactly as the text mode does. Ten commands (`checks`, `drift`,
+  `doctor`, `audit` and `audit --digest`, `hardening`, `ci`, `cloud-status`,
+  `upgrade-plan`, `register`) exited 0 under `--json` whatever they found (#278).
 - An unresolved fleet reported clean and exited 0 (#239).
 - One unreadable `.agents` directory blacked out the whole fleet (#234). A
   scanned project that stopped resolving dropped out silently (#235). A project
