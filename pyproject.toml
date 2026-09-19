@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "projects-orchestrator"
-version = "0.2.0"
+dynamic = ["version"]
 description = "Cross-project orchestration layer for agentic development"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -52,6 +52,12 @@ asyncio_mode = "auto"
 markers = [
     "inspects_agent_launch: exercises _default_agent_run itself (must stub subprocess.run); exempt from the no-live-agent fixture",
 ]
+
+# The version lives in ONE place, __init__.py, and hatch reads it at build time
+# (#191): a release bumps one literal, and the wheel cannot disagree with
+# `projects-orchestrator --version`.
+[tool.hatch.version]
+path = "src/projects_orchestrator/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/projects_orchestrator"]
