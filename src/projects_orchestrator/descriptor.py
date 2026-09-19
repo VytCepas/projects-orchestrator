@@ -532,7 +532,8 @@ def _contain(project_dir: Path, relative: str) -> Path | str:
     """
     try:
         resolved = (project_dir / relative).resolve()
-    except (OSError, RuntimeError, ValueError):
+    except (OSError, RuntimeError, ValueError) as exc:
+        _log.debug("cannot resolve %r under %s: %r", relative, project_dir, exc)
         return UNRESOLVABLE
     if resolved == project_dir or project_dir in resolved.parents:
         return project_dir / relative
