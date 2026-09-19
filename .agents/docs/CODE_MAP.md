@@ -204,6 +204,7 @@ Read a child project's machine-readable self-description.
 
 - `def resolve_config` — Locate a project's descriptor across scaffold layouts.
 - `def layout_dir_present` — Name the scaffold layout a directory carries, or ``""``; never raises.
+- `def refused_symlink` — Name the symlinked marker :func:`resolve_config` refused, or ``""``; never raises.
 - `class DeployConfig` — Contract-v2 ``deploy:`` block for ``delivery: service`` projects.
 - `class CiConfig` — Contract ``ci:`` block — a non-forge CI status endpoint (project-init #828).
 - `class ProjectDescriptor` — Everything the orchestrator knows about a project without running it.
