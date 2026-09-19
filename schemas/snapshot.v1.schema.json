@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/VytCepas/projects-orchestrator/schemas/snapshot.v1.schema.json",
   "title": "projects-orchestrator snapshot --json (v1)",
-  "description": "The fleet board. Consumed by harbor L0-5 (statusline), L0-6 (observability section) and E2 (Pulse tile) via an interval-written cache file. DERIVED FROM REAL EMITTED OUTPUT, not from the producing dataclasses -- see schemas/README.md for per-field provenance and for why `additionalProperties` is open.",
+  "description": "The fleet board. Consumed by the ambient layer's statusline, observability section and fleet tile via an interval-written cache file. DERIVED FROM REAL EMITTED OUTPUT, not from the producing dataclasses -- see schemas/README.md for per-field provenance and for why `additionalProperties` is open.",
   "x-schema-version": 1,
   "type": "array",
   "items": { "$ref": "#/$defs/snapshot" },

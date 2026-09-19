@@ -348,12 +348,12 @@ def test_unknown_heal_mode_is_ignored_with_a_warning(tmp_path: Path) -> None:
 
 
 class TestBoundaryMarkerValue:
-    """harbor#4 H1 — the detect-and-defer ``context:`` declaration.
+    """Marker contract case H1 — the detect-and-defer ``context:`` declaration.
 
-    project-init has emitted this key since PI-901 and harbor's floor has read
+    project-init has emitted this key since PI-901 and the ambient layer has read
     it since 2026-07-25; the fleet read it nowhere, so a value written by one
     layer and honoured by another was invisible to the layer that reports on
-    both. Case ids are harbor's shared fixtures (``fixtures/marker/cases.json``)
+    both. Case ids are the marker contract's shared fixtures (``cases.json``)
     so a divergence is traceable to one line of one contract.
 
     The fleet does not ACT on the value — an opted-out project is still a
@@ -475,7 +475,7 @@ class TestBoundaryMarkerValue:
 
 
 class TestSymlinkedMarkerIsRefused:
-    """harbor#4 M13/M24 — a symlinked marker is refused and the walk continues.
+    """Marker contract cases M13/M24 — a symlinked marker is refused and the walk continues.
 
     ``is_file()`` follows symlinks, so a planted ``.agents`` (or an
     ``.agents/config.yaml``) pointing outside the project handed the fleet a

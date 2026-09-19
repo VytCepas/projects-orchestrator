@@ -1,6 +1,6 @@
 """The `--json` seam (#219): schemas are frozen, and the producer is held to them.
 
-Three verbs are consumed by harbor (`CONTRACTS/orchestrator-json.md`), and until
+Three verbs are consumed by the ambient layer (its orchestrator-json contract), and until
 this file existed the seam had no schema, no fixture and no producer-side check:
 a field rename broke a different repo at runtime with nothing here going red.
 
@@ -15,7 +15,7 @@ TWO DISTINCT GUARANTEES, deliberately separate:
 The negative cases are what make the positives worth anything. `test_*_rejects_*`
 mutates a real payload into something plausible-but-wrong and asserts the schema
 refuses it — including the null-padded array from #218, which is legal to
-harbor's array-ness writer gate and renders a phantom healthy project.
+the consumer's array-ness writer gate and renders a phantom healthy project.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from projects_orchestrator.__main__ import main
 SCHEMA_DIR = Path(__file__).resolve().parents[1] / "schemas"
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "json_seam"
 
-# verb -> (schema file, golden fixture). The three harbor consumes; nothing else
+# verb -> (schema file, golden fixture). The three the consumer reads; nothing else
 # on the CLI is frozen, and this mapping is the list of what is.
 CONSUMED = {
     "snapshot": ("snapshot.v1.schema.json", "snapshot.v1.json"),
@@ -171,10 +171,10 @@ def _snapshot_is_valid(payload: Any) -> bool:
 
 
 def test_a_null_padded_array_is_refused(fleet_dir: Path, capsys) -> None:
-    """#218: legal to harbor's array-ness writer gate, phantom project downstream.
+    """#218: legal to the consumer's array-ness writer gate, phantom project downstream.
 
-    harbor's writer checks only that the top level is an array, so a null
-    element is admitted and `fleet-glyph.sh` renders an inflated anchor count
+    The consumer's writer checks only that the top level is an array, so a null
+    element is admitted and its statusline renders an inflated anchor count
     with no error. Rejecting it needs a schema, which is why #218 waits on this
     ticket rather than standing alone.
     """
@@ -199,7 +199,7 @@ def test_a_dropped_required_field_is_refused() -> None:
 
 def test_a_renamed_field_is_refused() -> None:
     # The exact failure this seam exists to prevent: a producer-side rename that
-    # breaks harbor at runtime, in another repo, with nothing here going red.
+    # breaks the consumer at runtime, in another repo, with nothing here going red.
     payload = copy.deepcopy(_fixture("snapshot.v1.json"))
     payload[0]["descriptor"]["contract"] = payload[0]["descriptor"].pop("contract_version")
     assert not _snapshot_is_valid(payload)

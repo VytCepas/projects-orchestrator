@@ -33,8 +33,8 @@ CONFIG_RELPATH = Path(".claude") / _CONFIG_BASENAME
 def resolve_config(project_dir: Path) -> tuple[Path, str] | None:
     """Locate a project's descriptor across scaffold layouts.
 
-    A SYMLINKED marker is refused and the next layout is tried (harbor#4 M13 and
-    M24, frozen in harbor's ``CONTRACTS/marker.md``). ``is_file()`` follows
+    A SYMLINKED marker is refused and the next layout is tried (marker contract
+    cases M13 and M24, frozen by the ambient layer). ``is_file()`` follows
     symlinks, so a planted ``.agents`` — or an ``.agents/config.yaml`` — pointing
     anywhere on disk used to hand the fleet a descriptor authored outside the
     project's own review, and everything downstream is read from it: the safety
@@ -257,7 +257,7 @@ class ProjectDescriptor:
             would un-declare the whole installed base at once. The fleet does
             not act on this — it manages a project either way — it reports it,
             so the value stops being a field three repos write and nobody reads
-            (harbor#4 H1, harbor ``CONTRACTS/marker.md``).
+            (marker contract case H1).
         warnings: Human-readable parse problems, empty when the config is clean.
     """
 
@@ -287,7 +287,7 @@ class ProjectDescriptor:
     #: can tell "absent" from "present and broken" — which the coerced value
     #: alone cannot (#216). Absent fields are NOT listed here; nothing was
     #: declared, so nothing is malformed. Additive, per the `--json` seam's
-    #: additive-only rule (harbor CONTRACTS/orchestrator-json.md).
+    #: additive-only rule (the consumer's orchestrator-json contract).
     malformed: tuple[str, ...] = ()
 
     def has_task(self, task: str) -> bool:
@@ -440,8 +440,8 @@ def _extract_ci(raw: dict[str, Any]) -> CiConfig | None:
 #: agent and lands a draft PR; ``notify`` reports the failure and spends nothing.
 HEAL_MODES = ("fix", "notify")
 
-# Detect-and-defer boundary values, frozen in harbor's CONTRACTS/marker.md and
-# mirrored by project-init's descriptor schema enum (harbor#4 H1).
+# Detect-and-defer boundary values, frozen in the marker contract and mirrored
+# by project-init's descriptor schema enum (marker contract case H1).
 CONTEXT_VALUES = ("repo", "ambient")
 
 

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/VytCepas/projects-orchestrator/schemas/events.v1.schema.json",
   "title": "projects-orchestrator events --json (v1)",
-  "description": "Guard/usage events per project, read from each child's observability log. Consumed by harbor L0-6. NOTE: the emitted item is built by hand in `_cmd_events`, NOT via asdict(ProjectEvents) -- `ProjectEvents.path` is deliberately absent from the payload. A schema generated from the dataclass would therefore be wrong; this one is derived from real emitted output.",
+  "description": "Guard/usage events per project, read from each child's observability log. Consumed by the ambient layer's observability section. NOTE: the emitted item is built by hand in `_cmd_events`, NOT via asdict(ProjectEvents) -- `ProjectEvents.path` is deliberately absent from the payload. A schema generated from the dataclass would therefore be wrong; this one is derived from real emitted output.",
   "x-schema-version": 1,
   "type": "array",
   "items": {
