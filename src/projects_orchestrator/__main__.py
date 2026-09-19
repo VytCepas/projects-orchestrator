@@ -93,8 +93,14 @@ from projects_orchestrator.heal_issues import heal_issue_sink
 from projects_orchestrator.history import DEFAULT_TREND_WIDTH as HISTORY_TREND_WIDTH
 from projects_orchestrator.history import load_history, project_history, sparkline, transitions
 from projects_orchestrator.history import record as history_record
+from projects_orchestrator.host import host_health
 from projects_orchestrator.html import render_html
-from projects_orchestrator.memory import load_memory, retrieval_mode, search_memory
+from projects_orchestrator.memory import (
+    load_memory,
+    load_memory_sources,
+    retrieval_mode,
+    search_memory,
+)
 from projects_orchestrator.notify import (
     alerts_payload,
     fleet_alerts,
@@ -283,6 +289,8 @@ def _cmd_status(args: argparse.Namespace) -> int:
     # Pass the FULL fleet as the version reference so a filtered row still shows
     # "behind" when a project the filter hid is newer — not a false "=".
     print(render_table(fleet_rows(selected, snapshots)))
+    # The host-health tile (#247), under the table so the header stays line 1.
+    print(host_health(fleet.config.host_health_command))
     return _unresolved_rc(fleet)
 
 
@@ -383,7 +391,14 @@ def _cmd_memory(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
     memories = [load_memory(d) for d in fleet.descriptors]
-    hits = search_memory(memories, " ".join(args.query))
+    # Extra sources from the fleet file (#247), searched and ranked alongside.
+    sources = load_memory_sources(
+        fleet.config.memory_sources, tuple(d.memory_path for d in fleet.descriptors)
+    )
+    for source in sources:
+        for warning in source.warnings:
+            print(f"warning: {warning}", file=sys.stderr)
+    hits = search_memory(memories + sources, " ".join(args.query))
     if args.json:
         return _emit_json([asdict(h) for h in hits])
     for hit in hits:
@@ -1307,7 +1322,9 @@ def _cmd_snapshot(args: argparse.Namespace) -> int:
     # request for the HTML document.
     if args.html or args.output:
         generated_at = _dt.datetime.now(tz=_dt.UTC).isoformat(timespec="seconds")
-        document = render_html(fleet_rows(snapshots), generated_at)
+        document = render_html(
+            fleet_rows(snapshots), generated_at, host_health(fleet.config.host_health_command)
+        )
         if args.output:
             try:
                 Path(args.output).write_text(document, encoding="utf-8")
@@ -1319,6 +1336,7 @@ def _cmd_snapshot(args: argparse.Namespace) -> int:
             print(document, end="")
         return 0
     print(render_table(fleet_rows(snapshots)))
+    print(host_health(fleet.config.host_health_command))
     return 0
 
 

@@ -50,6 +50,10 @@ class FleetConfig:
         include_plain_repos: Also govern git repos without a project-init
             descriptor, via conservative inference (off by default).
         source: The fleet file this config came from, if any.
+        memory_sources: Extra memory directories that ``memory`` search reads
+            beside the projects' own (#247), in the memory-file format.
+        host_health_command: The command whose first output line is the fleet
+            view's host-health tile (#247); ``""`` when not declared.
     """
 
     roots: tuple[Path, ...] = ()
@@ -58,6 +62,8 @@ class FleetConfig:
     include_plain_repos: bool = False
     source: Path | None = None
     warnings: tuple[str, ...] = ()
+    memory_sources: tuple[Path, ...] = ()
+    host_health_command: str = ""
 
 
 @dataclass(frozen=True)
@@ -123,6 +129,10 @@ def load_fleet_config(fleet_file: Path) -> FleetConfig:
         return tuple(_resolve(base, str(v)) for v in values if isinstance(v, (str, Path)))
 
     exclude = raw.get("exclude")
+    host_command = raw.get("host_health_command", "")
+    if not isinstance(host_command, str):
+        warnings = (*warnings, "host_health_command must be a string — ignored")
+        host_command = ""
     return FleetConfig(
         roots=paths("roots"),
         projects=paths("projects"),
@@ -130,6 +140,8 @@ def load_fleet_config(fleet_file: Path) -> FleetConfig:
         include_plain_repos=bool(raw.get("include_plain_repos", False)),
         source=fleet_file,
         warnings=warnings,
+        memory_sources=paths("memory_sources"),
+        host_health_command=host_command,
     )
 
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import re
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -182,6 +183,28 @@ def _is_dir(path: Path) -> bool:
         return False
 
 
+def _load_memory_dir(memory_path: Path, label: str) -> ProjectMemory:
+    """Read one memory directory's fact files under ``label``; never raises."""
+    files: list[MemoryFile] = []
+    warnings: list[str] = []
+    for path in sorted(memory_path.glob("*.md")):
+        if path.name in _INDEX_FILES:
+            continue
+        parsed = _read_memory_file(path, label)
+        if parsed is None:
+            warnings.append(f"unreadable memory file: {path.name}")
+        else:
+            files.append(parsed)
+
+    return ProjectMemory(
+        project=label,
+        memory_path=memory_path,
+        files=tuple(files),
+        index_present=(memory_path / "MEMORY.md").is_file(),
+        warnings=tuple(warnings),
+    )
+
+
 def load_project_memory(descriptor: ProjectDescriptor) -> ProjectMemory:
     """Read one project's memory directory; never raises.
 
@@ -199,25 +222,87 @@ def load_project_memory(descriptor: ProjectDescriptor) -> ProjectMemory:
             memory_path=memory_path,
             warnings=("no memory directory",),
         )
+    return _load_memory_dir(memory_path, descriptor.name)
 
-    files: list[MemoryFile] = []
-    warnings: list[str] = []
-    for path in sorted(memory_path.glob("*.md")):
-        if path.name in _INDEX_FILES:
+
+def memory_source_label(path: Path) -> str:
+    """How hits from an external memory source are labelled (pure).
+
+    The source's path, with the home directory written as ``~``. A path always
+    contains a ``/``, and a project name never can (it is one directory name or
+    a descriptor slug), so a source can never be mistaken for a project in the
+    ``<project>/<file>`` locations the search prints.
+    """
+    text = str(path)
+    home = str(Path.home())
+    if home not in ("", "/") and (text == home or text.startswith(home + "/")):
+        return "~" + text[len(home) :]
+    return text
+
+
+def load_memory_sources(
+    paths: tuple[Path, ...], taken: tuple[Path | None, ...] = ()
+) -> list[ProjectMemory]:
+    """Read the fleet file's extra memory directories (#247); never raises.
+
+    Each is read by the same loader as a project's memory, so it is searched,
+    and ranked, alongside the projects'. A source that is missing or not a
+    readable directory yields an empty memory carrying a warning that names it,
+    never a crash and never a silent drop. A source that IS one of the projects'
+    own memory directories (``taken``) is skipped, so no fact is counted twice.
+
+    Args:
+        paths: ``memory_sources`` from the fleet file, already ``~``-expanded.
+        taken: The memory directories the projects already contribute.
+
+    Returns:
+        One :class:`ProjectMemory` per source, in the order declared.
+    """
+    seen = {_resolved(path) for path in taken if path is not None}
+    memories: list[ProjectMemory] = []
+    for path in paths:
+        label = memory_source_label(path)
+        if _resolved(path) in seen:
+            _log.info("memory source %s is already a project's memory; read once", label)
             continue
-        parsed = _read_memory_file(path, descriptor.name)
-        if parsed is None:
-            warnings.append(f"unreadable memory file: {path.name}")
-        else:
-            files.append(parsed)
+        seen.add(_resolved(path))
+        if not _can_list(path):
+            memories.append(
+                ProjectMemory(
+                    project=label,
+                    memory_path=path,
+                    warnings=(f"memory source {label} is not a readable directory — skipped",),
+                )
+            )
+            continue
+        memories.append(_load_memory_dir(path, label))
+    return memories
 
-    return ProjectMemory(
-        project=descriptor.name,
-        memory_path=memory_path,
-        files=tuple(files),
-        index_present=(memory_path / "MEMORY.md").is_file(),
-        warnings=tuple(warnings),
-    )
+
+def _can_list(path: Path) -> bool:
+    """Whether ``path`` is a directory this process can list; never raises.
+
+    ``Path.glob`` swallows a permission error and yields nothing, so an
+    unreadable source would otherwise read as an empty one: a silent drop.
+    """
+    if not _is_dir(path):
+        return False
+    try:
+        with os.scandir(path) as entries:
+            next(entries, None)
+    except OSError as exc:
+        _log.debug("cannot list %s: %r", path, exc)
+        return False
+    return True
+
+
+def _resolved(path: Path) -> Path:
+    """``path`` resolved, or as given when it cannot be; never raises."""
+    try:
+        return path.resolve()
+    except (OSError, RuntimeError) as exc:
+        _log.debug("cannot resolve %s: %r", path, exc)
+        return path
 
 
 def retrieval_mode(descriptor: ProjectDescriptor) -> str:

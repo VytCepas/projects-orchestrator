@@ -103,3 +103,17 @@ async def test_run_task_binding_streams_result(fleet_dir: Path, tmp_path) -> Non
         await pilot.pause()
         detail_log = app.query_one("#detail-log", RichLog)
         assert any("alpha lint: PASS" in line.text for line in detail_log.lines)
+
+
+async def test_the_header_carries_the_host_tile(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")
+    app = OrchestratorApp(config=FleetConfig(roots=(fleet_dir,), host_health_command="echo ok"))
+    async with app.run_test():
+        assert app.sub_title == "host: ok"
+
+
+async def test_the_header_says_unknown_without_a_command(fleet_dir: Path) -> None:
+    make_project(fleet_dir, "alpha")
+    app = _app(fleet_dir)
+    async with app.run_test():
+        assert app.sub_title == "host: unknown"

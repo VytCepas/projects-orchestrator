@@ -34,6 +34,13 @@ version's only source. `tests/test_version.py` fails when they disagree.
   A clean pass posts nothing, and the healed PR stays a draft (#276).
 - The integration job runs real tests: the installed CLI over real git
   repositories (#274).
+- `fleet.yaml` can list `memory_sources`: extra memory directories that
+  `memory` search reads and ranks with the projects' own. A missing or
+  unreadable one is warned about (#247).
+- `fleet.yaml` can declare a `host_health_command`. Its first output line is
+  a host-health tile under the `status` and `snapshot` tables, on both
+  dashboards and in the TUI header. It reads `host: unknown` when absent,
+  failing, slow or silent (#247).
 - `heal --issues` (`PO_HEAL_ISSUES=1` on the timer) files one GitHub issue per
   failing gate of each notify-mode project, on that project's repository, and
   closes it once the gate passes. Issues are deduplicated by a marker in their

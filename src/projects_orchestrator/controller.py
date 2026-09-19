@@ -29,7 +29,11 @@ from projects_orchestrator.doctor import diagnose
 from projects_orchestrator.drift import compute_drift
 from projects_orchestrator.fleet import fleet_rows, fleet_snapshots, render_table
 from projects_orchestrator.heal import heal_project, render_heal_result
-from projects_orchestrator.memory import load_project_memory, search_memory
+from projects_orchestrator.memory import (
+    load_memory_sources,
+    load_project_memory,
+    search_memory,
+)
 from projects_orchestrator.observability import filter_since, load_events
 from projects_orchestrator.pool import map_ordered
 from projects_orchestrator.registry import Fleet, FleetConfig, discover
@@ -229,7 +233,13 @@ def _dispatch_memory(ctx: ControllerContext, intent: Intent) -> Iterator[str]:
         yield "usage: memory <query>"
         return
     memories = [load_project_memory(d) for d in ctx.fleet.descriptors]
-    hits = search_memory(memories, query)
+    sources = load_memory_sources(
+        ctx.fleet.config.memory_sources, tuple(d.memory_path for d in ctx.fleet.descriptors)
+    )
+    for source in sources:
+        for warning in source.warnings:
+            yield f"warning: {warning}"
+    hits = search_memory(memories + sources, query)
     if not hits:
         yield f"no memory matches for: {query}"
         return

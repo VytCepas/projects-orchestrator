@@ -22,3 +22,17 @@ exclude: []
 # inferred descriptor: language + lint/test/run from justfile / package.json
 # scripts / pyproject / Cargo.toml / go.mod conventions. Off by default.
 include_plain_repos: false
+
+# Extra memory directories that `memory` search reads beside every project's
+# own, in the same memory-file format, and ranks in the same corpus. Hits are
+# labelled with the directory's path. A missing or unreadable directory is
+# warned about, never silently skipped.
+memory_sources: []
+#  - ~/notes/memory
+
+# A command whose first output line is the fleet view's host-health tile: under
+# the `status` and `snapshot` tables, on the HTML and live dashboards, and in the
+# TUI header. Run as an argv, never through a shell, with a 5 s timeout. The
+# tile reads `host: unknown` when this is absent, fails, times out or prints
+# nothing, never blank and never "ok" by default.
+# host_health_command: ~/bin/host-health --one-line
