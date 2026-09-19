@@ -103,7 +103,9 @@ with the failing command, the tail of its output and the next step:
 - a skipped gate, or one this pass did not run, leaves its issue open.
 
 The issues find each other by a hidden marker in their body, read from the
-repository on every pass, so there is no state file to lose. Only an issue
+repository on every pass, so there is no state file to lose. Only issues opened
+by the account `gh` is signed in as are read, so an issue someone else opened
+with a copied marker is ignored. Only an issue
 carrying that marker is ever closed, and the marker is re-read just before
 closing. A read that fails files and closes nothing for that project, and the
 pass logs `issues: delivery failed`. The evidence has your home directory
