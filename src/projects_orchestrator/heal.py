@@ -409,15 +409,26 @@ def _commit_and_land(
 
 
 def _notify_result(descriptor: ProjectDescriptor, failing: tuple[CheckResult, ...]) -> HealResult:
-    """Render a notify-mode outcome: what failed, and what to do next (pure)."""
+    """Render a notify-mode outcome: what failed, and what to do next (pure).
+
+    The next step depends on WHERE notify came from. A run-wide ``--mode notify``
+    is lifted by running ``heal`` again in the default fix mode. A project's own
+    ``heal.mode: notify`` is not: the declaration wins over every run (ADR-008),
+    so suggesting ``heal <project>`` there sends the operator round a loop that
+    only ever notifies again.
+    """
     tasks = tuple(sorted({result.task for result in failing}))
+    if descriptor.heal_mode == MODE_NOTIFY:
+        next_step = (
+            f"Fix by hand. {descriptor.name} declares heal.mode: notify, which every heal "
+            "run obeys, so an agent fix needs that declaration changed first"
+        )
+    else:
+        next_step = f"Fix by hand, or run: projects-orchestrator heal {descriptor.name}"
     return HealResult(
         descriptor.name,
         NOTIFIED,
-        detail=(
-            f"{', '.join(tasks)} failing — policy is notify, no agent spawned. "
-            f"Fix by hand, or run: projects-orchestrator heal {descriptor.name}"
-        ),
+        detail=f"{', '.join(tasks)} failing — policy is notify, no agent spawned. {next_step}",
         tasks=tasks,
     )
 
