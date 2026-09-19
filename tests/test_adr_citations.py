@@ -14,11 +14,12 @@ So a citation takes one of two forms, and this test enforces it:
   which names the upstream file. Accepting any qualified number would let a typo
   point at nothing, so the qualifier alone is not enough.
 
-Files project-init renders (the scaffold-managed set in ``.upgrade-base.json``,
-and the descriptor) cite project-init's numbering in project-init's own words and
-are overwritten on upgrade, so they are fixed upstream, not here. That set is
-READ from the upgrade base rather than listed, because a hand-written list of
-managed files is a second copy of a fact the scaffold already records.
+Files project-init renders cite project-init's numbering in project-init's own
+words, so that text is fixed upstream, not here. For the scaffold-managed set,
+the upgrade base records what project-init rendered. Only lines absent from that
+base, the local edits a merge-managed file keeps, are scanned. Both the set and
+its base are READ from ``.upgrade-base.json``: a hand-written list of managed
+files would be a second copy of a fact the scaffold already records.
 """
 
 from __future__ import annotations
@@ -41,7 +42,7 @@ _INDEX_ROW = re.compile(
 )
 
 #: Tracked paths not scanned, each with the reason. Scaffold-managed files are
-#: derived from the upgrade base and never listed here.
+#: never listed: they are scanned for their local edits (see ``local_delta``).
 _EXEMPT: dict[str, str] = {
     ".agents/config.yaml": "the descriptor, rendered by project-init; its comments are project-init's",
     ".agents/.upgrade-base.json": "verbatim bodies of project-init's managed files",
@@ -98,11 +99,18 @@ def _local_adrs() -> set[str]:
     }
 
 
-def _managed() -> set[str]:
-    managed: set[str] = set()
+def _managed() -> dict[str, set[str]]:
+    """Scaffold-managed path -> every line project-init rendered for it."""
+    managed: dict[str, set[str]] = {}
     for base in _UPGRADE_BASES:
-        managed |= set(json.loads((_ROOT / base).read_text(encoding="utf-8")))
+        for path, body in json.loads((_ROOT / base).read_text(encoding="utf-8")).items():
+            managed.setdefault(path, set()).update(body.splitlines())
     return managed
+
+
+def local_delta(text: str, rendered: set[str]) -> str:
+    """``text`` with every line project-init rendered blanked; line numbers kept."""
+    return "\n".join("" if line in rendered else line for line in text.splitlines())
 
 
 @pytest.fixture(scope="module")
@@ -115,15 +123,16 @@ def scanned() -> dict[str, str]:
         pytest.skip("not a git checkout of this repo (e.g. mutmut's mutants/ copy)")
     stale = sorted(set(_EXEMPT) - set(files))
     assert not stale, f"exemptions for untracked paths: {stale}"
-    skip = _managed() | set(_EXEMPT)
+    managed = _managed()
     texts = {}
     for path in files:
-        if path in skip:
+        if path in _EXEMPT:
             continue
         try:
-            texts[path] = (_ROOT / path).read_text(encoding="utf-8")
+            text = (_ROOT / path).read_text(encoding="utf-8")
         except (UnicodeDecodeError, FileNotFoundError, IsADirectoryError):
             continue
+        texts[path] = local_delta(text, managed[path]) if path in managed else text
     assert len(texts) > 50, f"scanned only {len(texts)} files — the listing is broken, not clean"
     return texts
 
@@ -191,3 +200,9 @@ def test_an_index_row_must_name_its_own_file() -> None:
     row = "| project-init ADR-012 | `adr-017-per-surface-config-generator.md` | x |\n"
     with pytest.raises(AssertionError, match="another ADR's file"):
         upstream_index(row)
+
+
+def test_local_delta_keeps_only_lines_project_init_did_not_render() -> None:
+    text = "rendered ADR-012 line\nlocal edit citing ADR-099\nrendered tail"
+    delta = local_delta(text, {"rendered ADR-012 line", "rendered tail"})
+    assert phantoms(delta, {"003"}, set()) == [(2, "ADR-099")]
