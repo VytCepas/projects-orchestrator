@@ -154,9 +154,13 @@ def _tracked_top_level() -> set[str]:
 
 
 def _quoted_in_tests(names: set[str]) -> set[str]:
+    # This file is skipped: its own exemption table quotes every name it
+    # exempts, which would make any exemption look current.
+    here = Path(__file__).resolve()
     sources = [
         path.read_text(encoding="utf-8")
-        for path in Path(__file__).resolve().parent.rglob("*.py")
+        for path in here.parent.rglob("*.py")
+        if path != here
     ]
     return {name for name in names if any(f'"{name}"' in text for text in sources)}
 
