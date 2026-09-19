@@ -50,7 +50,9 @@ def _marked(comments: dict[int, str], first: int, last: int) -> bool:
     return any(MARKER in comments.get(line, "") for line in range(first, last + 1))
 
 
-_NEW_SCOPE = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+# A generator expression runs lazily, so like a nested def it may never run at all
+# (Codex on #269). A list/set/dict comprehension runs NOW and stays in scope.
+_NEW_SCOPE = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef, ast.GeneratorExp)
 
 
 def _same_scope(statements: list[ast.stmt]) -> list[ast.AST]:
@@ -134,6 +136,7 @@ SILENT = "try:\n    f()\nexcept OSError:\n    return None\n"
         # A raise or a read inside a nested scope may never run.
         ("try:\n    f()\nexcept OSError:\n    def later():\n        raise\n", [3]),
         ("try:\n    f()\nexcept OSError as exc:\n    cb = lambda: log(exc)\n", [3]),
+        ("try:\n    f()\nexcept OSError as exc:\n    g = (str(exc) for _ in r)\n", [3]),
         # A comprehension is the handler's own code, run now.
         ("try:\n    f()\nexcept OSError as exc:\n    w = [str(exc) for _ in r]\n", []),
         ("with contextlib.suppress(OSError):\n    f()\n", [1]),
