@@ -172,10 +172,12 @@ def hook_health(descriptor: ProjectDescriptor) -> str:
         descriptor: The project to inspect.
 
     Returns:
-        ``ok`` (all shipped hooks present in ``.git/hooks/`` and matching their
-        tracked source), ``stale`` (all present, but at least one differs from
-        ``.github/hooks/``), ``partial``, ``missing``, or ``-`` when the project
-        ships no hooks. The shipped set comes from the contract-v2
+        ``ok`` (all shipped hooks present in ``.git/hooks/``, and none that
+        has a readable tracked source differs from it), ``stale`` (all present,
+        but at least one differs from ``.github/hooks/``), ``partial``,
+        ``missing``, or ``-`` when the project ships no hooks. ``ok`` is
+        therefore "installed and not known to be old": a hook declared only in
+        ``hooks.expected``, with no tracked copy, is not compared. The shipped set comes from the contract-v2
         ``hooks.expected`` list when declared, else from globbing
         ``.github/hooks/``.
 

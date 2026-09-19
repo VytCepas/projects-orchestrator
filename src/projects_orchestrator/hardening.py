@@ -43,7 +43,7 @@ class HardeningReport:
 
 
 def _hook_item(descriptor: ProjectDescriptor) -> HardeningItem | None:
-    """Return a hook-installation item when enforcement is inactive."""
+    """Return a hook-installation item when enforcement is inactive or stale."""
     health = hook_health(descriptor)
     if health not in {"missing", "partial", "stale"}:
         return None
