@@ -9,7 +9,7 @@ of on a user's fleet.
 | File | What | Contract surface |
 |---|---|---|
 | `config.v1.yaml` | a legacy `.claude/config.yaml` (pre-PI-627) | the descriptor `descriptor.py` parses |
-| `capabilities.v1.md` | a scaffolded `.claude/CAPABILITIES.md` | the capability inventory `capabilities.py` parses (ADR-025 §3) |
+| `capabilities.v1.md` | a scaffolded `.claude/CAPABILITIES.md` | the capability inventory `capabilities.py` parses (project-init ADR-025 §3) |
 | `scaffold_result.v1.json` | `project-init … --json` stdout (target path sanitized) | the `--json` registration seam (#510) |
 | `config.v2.yaml` | a current `.agents/config.yaml` (PI-627, contract v2) | the descriptor + the `deploy`/`observability.path`/`hooks.expected` blocks |
 | `capabilities.v2.md` | a current `.agents/CAPABILITIES.md` | the capability inventory |

@@ -346,7 +346,7 @@ def _cmd_checks(args: argparse.Namespace) -> int:
 def _cmd_memory(args: argparse.Namespace) -> int:
     """Search every project's memory, using each project's tier retrieval surface."""
     fleet = _discover(args)
-    # Degrade-by-tier (ADR-025 §4): grep the memory_path baseline, and add the
+    # Degrade-by-tier (project-init ADR-025 §4): grep the memory_path baseline, and add the
     # graph's facts for tier>=2 children. RAG-tier children are noted so an
     # operator knows a surface exists that this local-only search does not query.
     for descriptor in fleet.descriptors:
@@ -708,7 +708,7 @@ def _cmd_deploy(args: argparse.Namespace) -> int:
 
     Dry-run by default: prints the plan and dispatches nothing. ``--apply``
     triggers the child's own ``workflow_dispatch`` pipeline, where production
-    credentials live — the orchestrator holds none (ADR-012). Exits 1 when an
+    credentials live — the orchestrator holds none (project-init ADR-012). Exits 1 when an
     applied dispatch fails.
 
     Fire-and-forget by default (ADR-005): dispatch confirms the run was *queued*,

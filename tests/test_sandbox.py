@@ -74,7 +74,7 @@ def test_the_harmless_variables_survive() -> None:
 
 
 def test_the_agents_own_key_survives() -> None:
-    # ANTHROPIC_API_KEY is the agent's OWN credential (ADR-012) — the model it is.
+    # ANTHROPIC_API_KEY is the agent's OWN credential (project-init ADR-012) — the model it is.
     # Without it the agent cannot run at all. It is not an operator cloud secret.
     assert agent_env({"ANTHROPIC_API_KEY": "sk-ant-xxx"})["ANTHROPIC_API_KEY"] == "sk-ant-xxx"
 

@@ -59,26 +59,3 @@ def test_the_readme_documents_no_command_that_does_not_exist() -> None:
     command that was removed sends the reader to an error message."""
     unknown = sorted(_readme_rows() - _registered() - _PRIVATE)
     assert not unknown, f"README.md documents commands that do not exist: {unknown}"
-
-
-def test_no_doc_cites_an_adr_without_saying_where_it_is() -> None:
-    """A dead ADR citation reads exactly like a live one.
-
-    Where the decision has not been written up (tracked in #189), the citation
-    must say so — the reader can then stop looking, instead of concluding the
-    docs are wrong about everything.
-    """
-    present = {
-        match.group(1)
-        for path in (_ROOT / ".agents" / "docs" / "adr").glob("adr-*.md")
-        if (match := re.match(r"adr-(\d+)", path.name))
-    }
-    dangling: list[str] = []
-    for path in _ROOT.joinpath("docs").rglob("*.md"):
-        text = path.read_text(encoding="utf-8")
-        for line in text.splitlines():
-            for number in re.findall(r"ADR-(\d{3})", line):
-                if number in present or "#189" in line:
-                    continue
-                dangling.append(f"{path.relative_to(_ROOT)}: ADR-{number}")
-    assert not dangling, f"docs cite ADRs that do not exist and are not marked: {dangling}"

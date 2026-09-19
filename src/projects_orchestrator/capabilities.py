@@ -1,8 +1,8 @@
 """Read each project's capability inventory — the "who exposes what" layer.
 
-Every project-init project ships ``.claude/CAPABILITIES.md`` (ADR-017): a
+Every project-init project ships ``.claude/CAPABILITIES.md`` (project-init ADR-017): a
 surface-independent, generated inventory of the skills, hooks, and MCP servers
-the scaffold gave the agent. Per ADR-025 §3 the root orchestrator aggregates
+the scaffold gave the agent. Per project-init ADR-025 §3 the root orchestrator aggregates
 that inventory across the fleet so "which projects expose which MCP/skill" is
 answerable centrally, without opening any project.
 
@@ -234,7 +234,7 @@ def aggregate(inventories: list[ProjectCapabilities], kind: str) -> dict[str, tu
     Returns:
         Each capability name of that kind mapped to the sorted, de-duplicated
         names of the projects that expose it — the "which projects expose which
-        MCP/skill" view of ADR-025 §3.
+        MCP/skill" view of project-init ADR-025 §3.
     """
     index: dict[str, set[str]] = {}
     for inventory in inventories:

@@ -8,7 +8,7 @@
 The orchestrator reads deploy/runtime state today (`cloud-status`,
 `adapters/cloud.py`) but cannot *act* on it — there is no way to deploy,
 roll back, or restart a `delivery: service` project from the one control
-surface. Adding cloud actions collides head-on with ADR-012: production
+surface. Adding cloud actions collides head-on with project-init ADR-012: production
 credentials belong to review-gated CI jobs, never to a shell an agent runs
 in. How do we give the fleet real cloud control without ever putting cloud
 credentials in the orchestrator's process?
@@ -18,7 +18,7 @@ credentials in the orchestrator's process?
 - **Direct execution.** The orchestrator runs `flyctl deploy` /
   `gcloud run deploy` / `kubectl rollout restart` itself (e.g. via a declared
   `tooling.deploy_command`). Simple, but the orchestrator's shell then needs
-  production cloud credentials — exactly what ADR-012 forbids.
+  production cloud credentials — exactly what project-init ADR-012 forbids.
 - **Dispatch.** The orchestrator triggers the child repo's own
   `workflow_dispatch` pipeline (`gh workflow run deploy.yml -f action=…`); the
   mutation runs in CI, where the credentials and environment protections live.
@@ -37,7 +37,7 @@ with an `action` input of `deploy` | `rollback` | `restart`. The orchestrator
 holds no cloud credentials and runs no platform mutation itself — it *decides
 and dispatches*, the child's CI *executes with the creds*. This keeps the
 orchestrator a **control plane, not a data plane**, and reuses the exact
-pattern ADR-003/ADR-012 already blessed for scaffold upgrades.
+pattern ADR-003 / project-init ADR-012 already blessed for scaffold upgrades.
 
 Two guardrails make it safe to expose from an interactive/agent surface:
 
@@ -73,7 +73,7 @@ the orchestrator CLI.
 ### Consequences
 
 - Good: real fleet-wide cloud control from one repo, with **zero** cloud
-  credentials in the orchestrator — ADR-012 credential separation is preserved
+  credentials in the orchestrator — project-init ADR-012 credential separation is preserved
   by construction, not by discipline.
 - Good: consistent with `upgrade-plan --apply`; `trigger_deploy` degrades to
   `failed` offline (always *with a reason* in `detail`) and to `skipped` for

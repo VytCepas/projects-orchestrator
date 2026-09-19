@@ -6,7 +6,7 @@ passes. This adapter fills that gap **read-only**: probes go through the
 owning platform CLI (``flyctl``, ``gcloud``) via the shared timeout-bounded
 runner, health is a bounded stdlib HTTP GET, and no code path here ever
 issues a mutating cloud command — mutations stay in review-gated CI
-(ADR-012 credential separation).
+(project-init ADR-012 credential separation).
 
 ``deploy: none`` (or no deploy block at all) short-circuits at zero cost:
 no subprocess, no network. Everything else degrades to ``unknown`` exactly
@@ -48,7 +48,7 @@ UNHEALTHY = "unhealthy"
 # Cloud control plane (ADR-005). Actions are *dispatched* to the child's own
 # workflow_dispatch pipeline — the orchestrator never holds cloud credentials
 # or runs a platform mutation itself. Credentials stay in review-gated CI
-# (ADR-012). The default workflow name is the convention a child unlocks by
+# (project-init ADR-012). The default workflow name is the convention a child unlocks by
 # shipping it; ``deploy.workflow`` overrides it.
 DEPLOY_ACTIONS = ("deploy", "rollback", "restart")
 DEFAULT_DEPLOY_WORKFLOW = "deploy.yml"
@@ -357,7 +357,7 @@ def trigger_deploy(
     child's own ``workflow_dispatch`` pipeline (``deploy.workflow``, default
     ``deploy.yml``) with an ``action`` input. The mutation runs in the child's
     CI, where production credentials live — the orchestrator holds none and
-    runs no platform command itself (ADR-005 / ADR-012).
+    runs no platform command itself (ADR-005 / project-init ADR-012).
 
     Args:
         descriptor: The service project to act on.
