@@ -35,7 +35,9 @@ _ROOT = Path(__file__).resolve().parents[1]
 _ADR_DIR = _ROOT / ".agents" / "docs" / "adr"
 _INDEX = ".agents/docs/adr/UPSTREAM.md"
 
-_CITATION = re.compile(r"ADR-(\d{3})\b")
+#: Any digit run, not exactly three: a dropped or doubled digit (``ADR-03``,
+#: ``ADR-0250``) must be reported, not silently unmatched.
+_CITATION = re.compile(r"ADR-(\d+)")
 _UPSTREAM = "project-init "
 _INDEX_ROW = re.compile(
     r"^\| project-init ADR-(\d{3}) \| `adr-(\d{3})-[a-z0-9-]+\.md` \|", flags=re.MULTILINE
@@ -190,6 +192,8 @@ def test_the_scan_sees_local_citations(scanned: dict[str, str]) -> None:
         ("ADR-003 / project-init ADR-012 boundary", []),
         ("the project-init\nADR-012 wrapped across a line", [(2, "ADR-012")]),
         ("project-init ADR-003 is not this repo's ADR-003", [(1, "project-init ADR-003")]),
+        ("per project-init ADR-0250, a doubled digit", [(1, "project-init ADR-0250")]),
+        ("see ADR-03, a dropped digit", [(1, "ADR-03")]),
     ],
 )
 def test_phantoms(text: str, expected: list[tuple[int, str]]) -> None:
