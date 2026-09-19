@@ -88,6 +88,7 @@ from projects_orchestrator.heal import (
     heal_fleet,
     render_fleet_heal_report,
 )
+from projects_orchestrator.heal_issues import heal_issue_sink
 from projects_orchestrator.history import DEFAULT_TREND_WIDTH as HISTORY_TREND_WIDTH
 from projects_orchestrator.history import load_history, project_history, sparkline, transitions
 from projects_orchestrator.history import record as history_record
@@ -1167,8 +1168,11 @@ def _cmd_heal(args: argparse.Namespace) -> int:
     ``--webhook`` hands the finished report to :func:`notify.heal_webhook_sink`,
     so an unattended pass tells the operator what it fixed (PR URL) or why it
     could not, while the PR itself stays a draft (#165). A clean pass posts
-    nothing. The delivery status goes to stderr and the exit code is unchanged:
-    a webhook that is down must not turn a successful heal into a failed unit.
+    nothing. ``--issues`` hands it to :func:`heal_issues.heal_issue_sink`, which
+    files one issue per failing gate of each notify-mode project and closes it
+    once the gate passes (#164). Each delivery status goes to stderr and the exit
+    code is unchanged: a sink that is down must not turn a successful heal into a
+    failed unit.
     """
     if bool(args.project) == args.all:
         print(
@@ -1192,18 +1196,25 @@ def _cmd_heal(args: argparse.Namespace) -> int:
 
     targets = _heal_targets(descriptors, cached=args.cached, jobs=args.jobs)
     report = heal_fleet(targets, limit=limit, mode=args.mode)
-    delivered = heal_webhook_sink(args.webhook)(report) if args.webhook else None
+    deliveries = {
+        "webhook": heal_webhook_sink(args.webhook)(report) if args.webhook else None,
+        "issues": heal_issue_sink(targets, args.mode)(report) if args.issues else None,
+    }
     if args.json:
         _emit_json(
             {
                 **_fleet_heal_json(report),
-                "webhook": None if delivered is None else ("delivered" if delivered else "failed"),
+                **{
+                    sink: None if ok is None else ("delivered" if ok else "failed")
+                    for sink, ok in deliveries.items()
+                },
             }
         )
     else:
         print(render_fleet_heal_report(report))
-    if delivered is not None:
-        print(f"webhook: {'delivered' if delivered else 'delivery failed'}", file=sys.stderr)
+    for sink, ok in deliveries.items():
+        if ok is not None:
+            print(f"{sink}: {'delivered' if ok else 'delivery failed'}", file=sys.stderr)
     return 1 if report.eventful else 0
 
 
@@ -1552,6 +1563,13 @@ def _add_heal_arguments(sub: argparse._SubParsersAction[argparse.ArgumentParser]
         "--webhook",
         help="POST what the pass did (PR URLs, or why a heal failed) as JSON to this URL "
         "(Slack-compatible); a pass with nothing failing posts nothing",
+    )
+    heal_sp.add_argument(
+        "--issues",
+        action="store_true",
+        help="for each notify-mode project, file one GitHub issue per failing gate on its "
+        "repository (deduplicated against its open issues), and close the issue once "
+        "the gate passes (ADR-008)",
     )
 
 
