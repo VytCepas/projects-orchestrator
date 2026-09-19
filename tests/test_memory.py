@@ -11,6 +11,8 @@ from projects_orchestrator.memory import (
     MODE_GRAPH,
     MODE_GREP,
     MODE_RAG,
+    MemoryHit,
+    ProjectMemory,
     load_graph_facts,
     load_memory,
     load_project_memory,
@@ -237,8 +239,10 @@ def test_a_description_nested_under_metadata_ranks_above_a_body_hit(fleet_dir: P
         "nd.md",
         "---\nname: n\nmetadata:\n  description: zorblax matters here\n---\nplain body\n",
     )
+    _raw_memory(project, "body.md", "---\nname: m\n---\nzorblax body\n")
     hits = search_memory([_memory(fleet_dir)], "zorblax")
-    assert hits[0].score == 2
+    assert (hits[0].file.path.name, hits[0].line_number) == ("nd.md", 0)
+    assert hits[0].score > hits[-1].score
 
 
 def test_a_nested_block_of_nothing_useful_is_still_unknown_type(fleet_dir: Path) -> None:
@@ -246,3 +250,61 @@ def test_a_nested_block_of_nothing_useful_is_still_unknown_type(fleet_dir: Path)
     project = make_project(fleet_dir, "alpha")
     _raw_memory(project, "empty.md", "---\nname: n\nmetadata:\n  tags: [a]\n---\nbody\n")
     assert _memory(fleet_dir).files[0].type == "unknown"
+
+
+# --- Relevance ranking (#247) ---
+
+
+def _corpus(fleet_dir: Path, bodies: dict[str, str]) -> list[ProjectMemory]:
+    project = make_project(fleet_dir, "alpha")
+    for filename, body in bodies.items():
+        add_memory(project, filename, body=body)
+    return [_memory(fleet_dir)]
+
+
+def _order(hits: list[MemoryHit]) -> list[str]:
+    return list(dict.fromkeys(h.file.path.name for h in hits))
+
+
+def test_a_rare_term_outranks_a_common_one(fleet_dir: Path) -> None:
+    # Same length, one occurrence each: only the corpus can tell them apart.
+    bodies = {f"c{i}.md": "common filler words here" for i in range(4)}
+    bodies["r.md"] = "rare filler words here"
+    hits = search_memory(_corpus(fleet_dir, bodies), "common rare")
+    assert _order(hits)[0] == "r.md"
+    assert len(_order(hits)) == 5
+
+
+def test_a_multi_word_query_matches_terms_used_apart(fleet_dir: Path) -> None:
+    memories = _corpus(
+        fleet_dir,
+        {
+            "both.md": "the descriptor changed\nand then drift followed",
+            "one.md": "drift only, nothing else",
+            "none.md": "unrelated note",
+        },
+    )
+    hits = search_memory(memories, "descriptor drift")
+    assert _order(hits) == ["both.md", "one.md"]
+
+
+def test_a_short_note_outranks_a_long_one_with_the_same_count(fleet_dir: Path) -> None:
+    # b > 0: one mention in a short note is stronger evidence than in a long one.
+    memories = _corpus(
+        fleet_dir,
+        {"long.md": "zorblax " + "padding " * 40, "short.md": "zorblax here"},
+    )
+    assert _order(search_memory(memories, "zorblax")) == ["short.md", "long.md"]
+
+
+def test_no_body_hit_carries_a_constant_score(fleet_dir: Path) -> None:
+    memories = _corpus(fleet_dir, {"a.md": "zorblax zorblax zorblax", "b.md": "zorblax once"})
+    scores = {h.score for h in search_memory(memories, "zorblax")}
+    assert len(scores) == 2
+    assert 1 not in scores
+
+
+def test_substring_recall_is_kept(fleet_dir: Path) -> None:
+    # Ranking changed; what is found did not. The old scan matched substrings.
+    memories = _corpus(fleet_dir, {"a.md": "Uses PostgreSQL 16."})
+    assert len(search_memory(memories, "postgres")) == 1

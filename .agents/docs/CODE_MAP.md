@@ -349,7 +349,7 @@ Read and search the fleet's memory — the "all-knowing" layer.
 - `def retrieval_mode` — Pick a project's memory retrieval surface from its tier (pure).
 - `def load_graph_facts` — Read a graphify graph's nodes as memory facts; never raises.
 - `def load_memory` — Load one project's memory via its tier's retrieval surface; never raises.
-- `def search_memory` — Search all loaded memories for a case-insensitive substring.
+- `def search_memory` — Search all loaded memories, ranked by BM25 relevance (pure).
 
 ### `projects_orchestrator/naming.py`
 
