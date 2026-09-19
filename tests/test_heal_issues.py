@@ -604,6 +604,6 @@ def test_only_the_remote_head_line_names_the_tip(monkeypatch: pytest.MonkeyPatch
     # called feature/HEAD. Only the bare HEAD line is the default branch.
     listing = f"{'a' * 40}\trefs/heads/feature/HEAD\n{'b' * 40}\tHEAD"
     monkeypatch.setattr(status, "_git", lambda _path, *_args: listing)
-    assert _REAL_TIP(Path(".")) == "b" * 40
+    assert _REAL_TIP(Path()) == "b" * 40
     monkeypatch.setattr(status, "_git", lambda _path, *_args: None)
-    assert _REAL_TIP(Path(".")) == ""
+    assert _REAL_TIP(Path()) == ""
