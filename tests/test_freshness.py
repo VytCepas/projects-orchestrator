@@ -6,16 +6,25 @@ The comparison is pure, so these run offline. The one network path
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import urllib.error
 from pathlib import Path
 
+import pytest
+
 from projects_orchestrator.freshness import (
+    FRESH,
+    STALE,
+    UNKNOWN,
+    ContractProbe,
     compare,
     compare_fixture_version,
     compare_schema,
+    fetch_upstream_contract_source,
     fetch_upstream_schema,
     load_vendored_schema,
+    parse_contract_version,
     render,
 )
 
@@ -254,3 +263,107 @@ def test_drift_from_the_half_that_did_arrive_still_wins() -> None:
         _schema(deploy=["target", "health_url"]), _schema(deploy=["target"]), "1.1.7", ""
     )
     assert report.status == "stale"
+
+
+# --- The upstream contract version (#221) -----------------------------------
+
+_V2_SOURCE = 'from x import y\n\nCONTRACT_VERSION = "2"\nOTHER = 1\n'
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ('CONTRACT_VERSION = "2"\n', 2),
+        ("CONTRACT_VERSION = 3\n", 3),
+        ("x = 1\n    CONTRACT_VERSION_MAX = 5\nMY_CONTRACT_VERSION = '9'\n", None),
+        ("", None),
+    ],
+)
+def test_parse_contract_version_reads_only_the_top_level_declaration(
+    source: str, expected: int | None
+) -> None:
+    assert parse_contract_version(source) == expected
+
+
+def _fresh_halves() -> tuple[dict, dict, str, str]:
+    schema = _schema(ci=["status_url"])
+    return schema, schema, "1.2.2", "1.2.2"
+
+
+def test_an_upstream_contract_equal_to_the_understood_one_is_fresh() -> None:
+    report = compare(*_fresh_halves(), contract=ContractProbe(_V2_SOURCE, 2))
+    assert report.status == FRESH
+
+
+def test_an_upstream_contract_newer_than_understood_is_stale_and_names_both() -> None:
+    report = compare(*_fresh_halves(), contract=ContractProbe('CONTRACT_VERSION = "3"\n', 2))
+    assert report.status == STALE
+    [drift] = report.drifts
+    assert drift.surface == "contract-version"
+    assert "v3" in drift.detail and "up to v2" in drift.detail
+    assert "raise CONTRACT_VERSION_MAX" in drift.detail
+
+
+def test_an_older_upstream_contract_is_fresh() -> None:
+    assert compare(*_fresh_halves(), contract=ContractProbe(_V2_SOURCE, 3)).status == FRESH
+
+
+def test_an_unreachable_contract_source_is_unknown_not_fresh() -> None:
+    assert compare(*_fresh_halves(), contract=ContractProbe(None, 2)).status == UNKNOWN
+
+
+def test_a_source_that_stopped_declaring_the_version_is_stale() -> None:
+    # A check that silently stopped finding its subject would read fresh for ever.
+    report = compare(*_fresh_halves(), contract=ContractProbe("nothing here\n", 2))
+    assert report.status == STALE
+    assert "no longer declares CONTRACT_VERSION" in report.drifts[0].detail
+
+
+def test_a_contract_drift_alone_does_not_point_at_re_vendoring() -> None:
+    report = compare(*_fresh_halves(), contract=ContractProbe('CONTRACT_VERSION = "3"\n', 2))
+    assert "Re-vendor" not in render(report)
+    assert "understands up to v2" in render(report)
+
+
+def test_fetch_contract_source_returns_the_text_and_degrades_to_none() -> None:
+    assert fetch_upstream_contract_source(fetch=lambda _url: _V2_SOURCE) == _V2_SOURCE
+
+    def boom(_url: str) -> str:
+        raise urllib.error.URLError("no route to host")
+
+    assert fetch_upstream_contract_source(fetch=boom) is None
+
+
+# --- The scheduled job's script wires the contract check in -----------------
+
+_SCRIPT = Path(__file__).resolve().parents[1] / ".agents/scripts/check_contract_freshness.py"
+
+
+def _load_script():
+    if not _SCRIPT.is_file():
+        pytest.skip("no .agents/scripts beside the tests (e.g. mutmut's mutants/ copy)")
+    spec = importlib.util.spec_from_file_location("check_contract_freshness", _SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize(("declared", "exit_code"), [("2", 0), ("3", 1)])
+def test_the_script_fails_only_on_a_contract_above_the_understood_max(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    declared: str,
+    exit_code: int,
+) -> None:
+    script = _load_script()
+    vendored = load_vendored_schema(_VENDORED)
+    pinned = script.pinned_version(script._GOLDEN_FIXTURE)
+    monkeypatch.setattr(script, "fetch_upstream_schema", lambda: vendored)
+    monkeypatch.setattr(script, "upstream_version", lambda: pinned)
+    monkeypatch.setattr(
+        script, "fetch_upstream_contract_source", lambda: f'CONTRACT_VERSION = "{declared}"\n'
+    )
+    monkeypatch.setattr(script, "CONTRACT_VERSION_MAX", 2)
+    assert script.main() == exit_code
+    assert ("understands up to v2" in capsys.readouterr().out) is bool(exit_code)

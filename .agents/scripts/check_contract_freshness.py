@@ -6,11 +6,16 @@ the copy vendored *here*. If project-init changes the contract and nobody
 re-vendors, those tests keep passing on a stale copy and the drift ships
 silently. This closes that loop (epic #68 / #106).
 
+It also fails when project-init declares a descriptor contract version newer
+than `doctor.CONTRACT_VERSION_MAX` (#221). `doctor` only WARNs on such a child;
+this job is where the lock-step rule goes red, once, before any child upgrades.
+
 Exit codes are chosen for a scheduled job:
   0  fresh, or unknown (upstream unreachable — a flaky network is not a
      contract change, and a job that cried wolf on every blip gets muted)
   1  stale — the vendored schema or the golden fixture's pinned project-init
-     version has diverged; re-vendor per tests/fixtures/project_init/README.md
+     version has diverged (re-vendor per tests/fixtures/project_init/README.md),
+     or upstream emits a contract version this orchestrator does not understand
 
 Run it locally with `just contract-freshness`.
 """
@@ -25,9 +30,12 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 
+from projects_orchestrator.doctor import CONTRACT_VERSION_MAX  # noqa: E402
 from projects_orchestrator.freshness import (  # noqa: E402
     STALE,
+    ContractProbe,
     compare,
+    fetch_upstream_contract_source,
     fetch_upstream_schema,
     load_vendored_schema,
     render,
@@ -80,6 +88,7 @@ def main() -> int:
         upstream_schema=fetch_upstream_schema(),
         pinned_version=pinned_version(_GOLDEN_FIXTURE),
         upstream_version=upstream_version(),
+        contract=ContractProbe(fetch_upstream_contract_source(), CONTRACT_VERSION_MAX),
     )
     print(render(report))
     return 1 if report.status == STALE else 0
