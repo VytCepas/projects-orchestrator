@@ -24,6 +24,9 @@ WorkingDirectory=%h
 #   PO_HEAL_MODE=fix                        (fix | notify — run-wide default;
 #                                            a project's declared heal.mode
 #                                            overrides it, ADR-008)
+#   PO_HEAL_WEBHOOK=https://…               (optional: tell someone what the
+#                                            pass did — PR URLs, or why a heal
+#                                            failed; a clean pass posts nothing)
 # The leading `-` makes the file optional: with no override the unit heals
 # ~/projects and attempts at most PO_HEAL_LIMIT (default 3) projects per firing.
 EnvironmentFile=-%h/.config/projects-orchestrator/heal.env
@@ -33,7 +36,7 @@ EnvironmentFile=-%h/.config/projects-orchestrator/heal.env
 # a coding agent on (each agent is itself capped at a small per-run budget), so a
 # fleet that goes red overnight cannot fan out unbounded spend. Start LOW and
 # raise it once you trust the PRs it opens.
-ExecStart=/bin/sh -c 'exec %h/.local/bin/projects-orchestrator heal --all --root "${PO_FLEET_ROOT:-%h/projects}" --limit "${PO_HEAL_LIMIT:-3}" --mode "${PO_HEAL_MODE:-fix}"'
+ExecStart=/bin/sh -c 'exec %h/.local/bin/projects-orchestrator heal --all --root "${PO_FLEET_ROOT:-%h/projects}" --limit "${PO_HEAL_LIMIT:-3}" --mode "${PO_HEAL_MODE:-fix}" ${PO_HEAL_WEBHOOK:+--webhook "$PO_HEAL_WEBHOOK"}'
 
 # `heal --all` exits 1 when the pass was EVENTFUL — it opened a PR, a heal failed
 # to verify, or projects were deferred past the limit. That is a run that worked

@@ -90,6 +90,7 @@ from projects_orchestrator.memory import load_memory, retrieval_mode, search_mem
 from projects_orchestrator.notify import (
     alerts_payload,
     fleet_alerts,
+    heal_webhook_sink,
     post_payload,
     post_webhook,
     render_alerts,
@@ -1143,6 +1144,12 @@ def _cmd_heal(args: argparse.Namespace) -> int:
     heal or deferred a project), **0** when the fleet had nothing to heal, **2**
     on a usage error. The systemd unit maps 1 to success, so an eventful nightly
     run is not flagged as failed.
+
+    ``--webhook`` hands the finished report to :func:`notify.heal_webhook_sink`,
+    so an unattended pass tells the operator what it fixed (PR URL) or why it
+    could not, while the PR itself stays a draft (#165). A clean pass posts
+    nothing. The delivery status goes to stderr and the exit code is unchanged:
+    a webhook that is down must not turn a successful heal into a failed unit.
     """
     if bool(args.project) == args.all:
         print(
@@ -1166,10 +1173,18 @@ def _cmd_heal(args: argparse.Namespace) -> int:
 
     targets = _heal_targets(descriptors, cached=args.cached, jobs=args.jobs)
     report = heal_fleet(targets, limit=limit, mode=args.mode)
+    delivered = heal_webhook_sink(args.webhook)(report) if args.webhook else None
     if args.json:
-        _emit_json(_fleet_heal_json(report))
+        _emit_json(
+            {
+                **_fleet_heal_json(report),
+                "webhook": None if delivered is None else ("delivered" if delivered else "failed"),
+            }
+        )
     else:
         print(render_fleet_heal_report(report))
+    if delivered is not None:
+        print(f"webhook: {'delivered' if delivered else 'delivery failed'}", file=sys.stderr)
     return 1 if report.eventful else 0
 
 
@@ -1500,6 +1515,11 @@ def _add_heal_arguments(sub: argparse._SubParsersAction[argparse.ArgumentParser]
         help="run-wide heal mode: fix spawns the scoped agent and opens a draft PR "
         "(default); notify only reports what failed and what to do next. A project's "
         "declared heal.mode overrides this (ADR-008)",
+    )
+    heal_sp.add_argument(
+        "--webhook",
+        help="POST what the pass did (PR URLs, or why a heal failed) as JSON to this URL "
+        "(Slack-compatible); a pass with nothing failing posts nothing",
     )
 
 

@@ -150,6 +150,8 @@ class HealResult:
             unmetered or when no agent ran (a no-op or a worktree that could not
             be cut). Carried on every outcome that reached the agent — including
             the failures, which can still have spent money before giving up.
+        tasks: The failing gates this heal addressed, sorted; empty when nothing
+            was failing. What a notification names as "repaired" (#165).
     """
 
     project: str
@@ -159,6 +161,7 @@ class HealResult:
     detail: str = ""
     worktree: str = ""
     cost: cost_mod.RunCost | None = None
+    tasks: tuple[str, ...] = ()
 
 
 AgentRun = Callable[[ProjectDescriptor, str], AgentOutcome]
@@ -403,14 +406,15 @@ def _commit_and_land(
 
 def _notify_result(descriptor: ProjectDescriptor, failing: tuple[CheckResult, ...]) -> HealResult:
     """Render a notify-mode outcome: what failed, and what to do next (pure)."""
-    tasks = ", ".join(sorted({result.task for result in failing}))
+    tasks = tuple(sorted({result.task for result in failing}))
     return HealResult(
         descriptor.name,
         NOTIFIED,
         detail=(
-            f"{tasks} failing — policy is notify, no agent spawned. "
+            f"{', '.join(tasks)} failing — policy is notify, no agent spawned. "
             f"Fix by hand, or run: projects-orchestrator heal {descriptor.name}"
         ),
+        tasks=tasks,
     )
 
 
@@ -473,6 +477,7 @@ def heal_project(
             WORKTREE_FAILED,
             branch=branch,
             detail="could not cut an isolated worktree (branch may be held by a kept failed run)",
+            tasks=tasks,
         )
 
     # Everything downstream — the agent, the re-verify, the commit, the push, the
@@ -490,6 +495,7 @@ def heal_project(
                 detail=outcome.summary,
                 worktree=str(tree.path),
                 cost=outcome.cost,
+                tasks=tasks,
             )
 
         verify = collect_checks(work, tasks)
@@ -502,6 +508,7 @@ def heal_project(
                 detail=f"still failing after the agent's fix: {', '.join(still_failing)}",
                 worktree=str(tree.path),
                 cost=outcome.cost,
+                tasks=tasks,
             )
 
         # The agent's spend is banked onto whatever the landing step produced —
@@ -510,6 +517,7 @@ def heal_project(
         landed = replace(
             _commit_and_land(work, branch, tasks, open_pr or _default_open_pr),
             cost=outcome.cost,
+            tasks=tasks,
         )
         keep = landed.status != FIXED
         if keep:
@@ -686,14 +694,16 @@ def render_fleet_heal_report(report: FleetHealReport) -> str:
         f"spend {cost_mod.format_total(report.spend)}"
     )
     return "\n".join(lines)
-    lines = [render_heal_result(result) for result in report.results]
-    if report.deferred:
-        lines.append(
-            f"deferred {len(report.deferred)} more (limit {report.limit}): "
-            f"{', '.join(report.deferred)}"
-        )
-    lines.append(
-        f"healed {len(report.fixed)}/{len(report.results)} attempted — "
-        f"spend {cost_mod.format_total(report.spend)}"
-    )
-    return "\n".join(lines)
+
+
+#: Where a pass's outcome goes once it is known (#165). Heal PRODUCES the outcome
+#: and never delivers it: :func:`heal_fleet` returns a report, and the caller hands
+#: it to each sink it chose. A sink returns ``True`` when its delivery was
+#: accepted, ``False`` when it failed, and ``None`` when the report held nothing
+#: it delivers — a clean pass must reach nobody, or the one alert that matters
+#: arrives looking like every quiet night's. The webhook is the first sink
+#: (``notify.heal_webhook_sink``); filing a deduplicated issue on the failing
+#: project (#164) is the second, and plugs in here rather than into
+#: :func:`heal_project`, so the draft-PR write boundary stays the only write heal
+#: itself makes.
+HealSink = Callable[[FleetHealReport], bool | None]

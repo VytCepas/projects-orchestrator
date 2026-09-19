@@ -1,6 +1,6 @@
 # ADR-008: Heal-mode policy, with GitHub as the notification and approval plane
 
-- Status: accepted
+- Status: accepted; amended 2026-09-19 (#165) — see Amendment
 - Date: 2026-07-17
 
 ## Context and Problem Statement
@@ -63,3 +63,33 @@ GitHub, which they already watch from Gmail and their phone:
 - Bad: `heal.mode` rides in the child descriptor ahead of the frozen contract
   v2 surface — it is feature-detected like `ci.status_url`, and must be
   raised upstream with project-init before the next contract revision.
+
+## Amendment 2026-09-19 (#165): the PR stays a draft, and a webhook may carry the news
+
+The fix-mode bullet above did not survive implementation. Promotion to
+ready-for-review is **refused** in code (`heal._default_open_pr`): a ready PR is
+one click, or one auto-merge-on-green rule, away from landing an agent's work
+with no human in the loop. A draft emails nobody, so under this ADR as written a
+successful heal notified no one, and a failed heal was just as silent.
+
+What changes:
+
+- **Fix mode does not promote.** The PR is always a draft; the first plane
+  bullet is superseded.
+- **Fix mode may notify through an outbound webhook**: `heal --webhook` /
+  `PO_HEAL_WEBHOOK`, the same transport `watch --webhook` and `audit --digest
+  --webhook` already use. Each eventful pass posts one message: a fix with its
+  PR URL and gates, a failed heal with its diagnosis, and the deferred projects.
+  A clean pass posts nothing, and no webhook configured means no post.
+
+What does not change, and is the part this ADR exists for:
+
+- **Approval is a merge**, on GitHub. The webhook is outbound only: it carries
+  no approval, accepts nothing, and adds no inbound surface.
+- Notify mode still reports through deduplicated GitHub issues (#164), which
+  will plug in as a second sink on the same seam (`heal.HealSink`).
+
+Consequence: "one inbox" no longer holds for fix-mode news when a webhook is
+configured. That is the trade: a notification channel outside GitHub, in
+exchange for keeping the agent's work un-mergeable by any rule.
+
