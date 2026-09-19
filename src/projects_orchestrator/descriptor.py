@@ -131,6 +131,37 @@ def layout_dir_present(project_dir: Path) -> str:
     return ""
 
 
+def refused_symlink(project_dir: Path) -> str:
+    """Name the symlinked marker :func:`resolve_config` refused, or ``""``; never raises.
+
+    A refused symlink used to be reported exactly like an ordinary folder: "not a
+    project-init project" when listed, "no readable config.yaml" when scanned
+    (#220). Both read as absence, and the operator's fix for an absence (put a
+    descriptor there) is already done — the descriptor IS there, one link away.
+    Naming the refusal says which rule fired, so the fix is to replace the link
+    with the file, not to go looking for a missing scaffold.
+
+    Args:
+        project_dir: Candidate project root.
+
+    Returns:
+        ``.agents``, ``.agents/config.yaml`` (or the ``.claude`` equivalents) for
+        the first symlinked marker found, or ``""`` when there is none.
+    """
+    for root in _LAYOUT_DIRS:
+        layout = project_dir / root
+        for path, name in (
+            (layout, root),
+            (layout / _CONFIG_BASENAME, f"{root}/{_CONFIG_BASENAME}"),
+        ):
+            try:
+                if path.is_symlink():
+                    return name
+            except OSError as exc:
+                _log.debug("cannot stat %s: %r", path, exc)
+    return ""
+
+
 _TOOLING_SUFFIX = "_command"
 
 CONTRACT_V1 = 1

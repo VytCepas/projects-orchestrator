@@ -114,6 +114,47 @@ def test_discover_warns_on_bad_explicit_project(tmp_path: Path) -> None:
     assert "not a project-init project" in fleet.warnings[0]
 
 
+def _symlinked_descriptor(base: Path, name: str, *, link_layout: bool = False) -> Path:
+    """A project whose marker is a symlink to a descriptor outside the repo."""
+    outside = make_project(base / "outside", name, layout=".agents")
+    project = base / "repo" / name
+    project.mkdir(parents=True)
+    if link_layout:
+        (project / ".agents").symlink_to(outside / ".agents")
+    else:
+        (project / ".agents").mkdir()
+        (project / ".agents" / "config.yaml").symlink_to(outside / ".agents" / "config.yaml")
+    return project
+
+
+def test_a_listed_project_with_a_symlinked_descriptor_is_named_as_refused(tmp_path: Path) -> None:
+    """#220: the refusal used to read "not a project-init project", i.e. absent."""
+    project = _symlinked_descriptor(tmp_path, "linked")
+    fleet = discover(FleetConfig(projects=(project,)))
+    assert fleet.names == ()
+    assert fleet.warnings == (
+        f"{project.resolve()}: .agents/config.yaml is a symlink, so the descriptor is refused"
+        " — replace the link with the file itself",
+    )
+
+
+def test_a_scanned_project_with_a_symlinked_layout_dir_is_named_as_refused(tmp_path: Path) -> None:
+    project = _symlinked_descriptor(tmp_path, "linked", link_layout=True)
+    fleet = discover(FleetConfig(roots=(project.parent,)))
+    assert fleet.names == ()
+    assert any(".agents is a symlink" in w and str(project.resolve()) in w for w in fleet.warnings)
+    assert not any("no readable config.yaml" in w for w in fleet.warnings)
+
+
+def test_a_regular_descriptor_names_no_refusal(tmp_path: Path) -> None:
+    from projects_orchestrator.descriptor import refused_symlink
+
+    project = make_project(tmp_path, "plain", layout=".agents")
+    assert refused_symlink(project) == ""
+    assert refused_symlink(tmp_path / "missing") == ""
+    assert discover(FleetConfig(projects=(project,))).warnings == ()
+
+
 def test_discover_dedupes_by_resolved_path(fleet_dir: Path) -> None:
     project = make_project(fleet_dir, "alpha")
     fleet = discover(FleetConfig(roots=(fleet_dir,), projects=(project,)))
