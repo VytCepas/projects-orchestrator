@@ -8,11 +8,13 @@ notifies a real person.
 from __future__ import annotations
 
 import json
+import re
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from conftest import make_project
+from conftest import git_init, make_project
 
 from projects_orchestrator import landing
 from projects_orchestrator.__main__ import main
@@ -110,15 +112,23 @@ def _alpha(fleet_dir: Path) -> ProjectDescriptor:
     )
 
 
-def _check(task: str, status: str, detail: str = "") -> CheckResult:
+def _check(task: str, status: str, detail: str = "", head: str = "0123456789abcdef") -> CheckResult:
+    """A result taken at a clean HEAD by default, as `heal` stamps it (#164 review)."""
     return CheckResult(
         project="alpha",
         task=task,
         status=status,
         detail=detail,
         checked_at="2026-09-19T03:00:00+00:00",
-        head="0123456789abcdef",
+        head=head,
     )
+
+
+def _committed_project(fleet_dir: Path, lint: str = "false") -> Path:
+    """A real, clean git checkout whose lint gate runs ``lint``."""
+    project = make_project(fleet_dir, "alpha", tooling={"lint": lint})
+    git_init(project)
+    return project
 
 
 def _pass(descriptor: ProjectDescriptor, cached: dict[str, CheckResult]) -> bool | None:
@@ -349,7 +359,7 @@ def test_an_unsafe_key_has_no_marker(key: str) -> None:
 def test_the_cli_files_on_a_notify_pass_and_reports_the_delivery(
     fleet_dir: Path, github: _FakeGitHub, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    make_project(fleet_dir, "alpha", tooling={"lint": "false"})
+    project = _committed_project(fleet_dir)
     argv = ["heal", "--all", "--mode", "notify", "--root", str(fleet_dir), "--issues", "--json"]
     assert main(argv) == 1
     out = capsys.readouterr()
@@ -357,6 +367,10 @@ def test_the_cli_files_on_a_notify_pass_and_reports_the_delivery(
     assert "issues: delivered" in out.err
     [issue] = github.open_issues().values()
     assert issue["title"] == "heal: lint is failing in alpha"
+    head = subprocess.run(
+        ["git", "-C", str(project), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    assert f"at `{head[:12]}`" in issue["body"]
 
 
 def test_the_cli_without_the_flag_files_nothing(fleet_dir: Path, github: _FakeGitHub) -> None:
@@ -369,7 +383,111 @@ def test_a_broken_gh_does_not_change_the_exit_code(
     fleet_dir: Path, github: _FakeGitHub, capsys: pytest.CaptureFixture[str]
 ) -> None:
     github.broken.add("list")
-    make_project(fleet_dir, "alpha", tooling={"lint": "false"})
+    _committed_project(fleet_dir)
     argv = ["heal", "--all", "--mode", "notify", "--root", str(fleet_dir), "--issues"]
     assert main(argv) == 1
     assert "issues: delivery failed" in capsys.readouterr().err
+
+
+# --- the #164 review -------------------------------------------------------------------
+
+
+def test_a_nul_byte_in_the_evidence_is_quoted_not_a_crash(
+    fleet_dir: Path, github: _FakeGitHub
+) -> None:
+    assert _pass(_alpha(fleet_dir), {"lint": _check("lint", "fail", "E1 bad\x00byte")}) is True
+    [issue] = github.open_issues().values()
+    assert "\x00" not in issue["body"]
+    assert "E1 bad\\0byte" in issue["body"]
+
+
+def test_an_argv_holding_a_nul_degrades_instead_of_raising(tmp_path: Path) -> None:
+    # Refused by subprocess before exec, so nothing runs.
+    result = landing._run_argv(["printf", "a\x00b"], cwd=tmp_path)
+    assert result.returncode is None
+    assert "null" in result.error
+
+
+def test_a_gate_printing_a_nul_still_prints_the_heal_report(
+    fleet_dir: Path, github: _FakeGitHub, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project = make_project(fleet_dir, "alpha", tooling={"lint": "sh lint.sh"})
+    (project / "lint.sh").write_text("printf 'E1 bad\\000byte\\n' >&2\nexit 1\n", encoding="utf-8")
+    git_init(project)
+    argv = ["heal", "--all", "--mode", "notify", "--root", str(fleet_dir), "--issues"]
+    assert main(argv) == 1
+    out = capsys.readouterr()
+    assert "lint failing" in out.out
+    assert "issues: delivered" in out.err
+    [issue] = github.open_issues().values()
+    assert "\x00" not in issue["body"]
+
+
+def test_uncommitted_changes_file_nothing(fleet_dir: Path, github: _FakeGitHub) -> None:
+    alpha = _alpha(fleet_dir)
+    assert _pass(alpha, {"lint": _check("lint", "fail", "wip", head="")}) is None
+    assert github.calls == []
+
+
+def test_uncommitted_changes_close_nothing(fleet_dir: Path, github: _FakeGitHub) -> None:
+    alpha = _alpha(fleet_dir)
+    _pass(alpha, {"lint": _check("lint", "fail", "boom")})
+    assert _pass(alpha, {"lint": _check("lint", "pass", head="")}) is None
+    assert len(github.open_issues()) == 1
+
+
+def test_the_cli_files_nothing_for_a_dirty_tree(
+    fleet_dir: Path, github: _FakeGitHub, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project = _committed_project(fleet_dir)
+    (project / "wip.txt").write_text("uncommitted\n", encoding="utf-8")
+    argv = ["heal", "--all", "--mode", "notify", "--root", str(fleet_dir), "--issues"]
+    assert main(argv) == 1
+    assert "lint failing" in capsys.readouterr().out
+    assert github.calls == []
+
+
+def test_an_unreadable_list_on_a_clean_pass_is_not_a_failed_delivery(
+    fleet_dir: Path, github: _FakeGitHub
+) -> None:
+    # A clean pass reaches nobody (the HealSink contract): with nothing failing
+    # there was nothing to deliver, so an unreadable list is not "delivery failed".
+    github.broken.add("list")
+    assert _pass(_alpha(fleet_dir), {"lint": _check("lint", "pass")}) is None
+
+
+def test_a_refused_close_is_a_failed_delivery(fleet_dir: Path, github: _FakeGitHub) -> None:
+    alpha = _alpha(fleet_dir)
+    _pass(alpha, {"lint": _check("lint", "fail", "boom")})
+    github.broken.add("close")
+    assert _pass(alpha, {"lint": _check("lint", "pass")}) is False
+
+
+_UNIT = Path(__file__).resolve().parents[1] / "contrib/systemd/projects-orchestrator-heal.service"
+
+
+@pytest.mark.parametrize(
+    ("value", "enabled"), [("1", True), ("0", False), ("false", False), ("", False), (None, False)]
+)
+def test_only_po_heal_issues_1_enables_filing_on_the_timer(
+    tmp_path: Path, value: str | None, enabled: bool
+) -> None:
+    if not _UNIT.is_file():
+        pytest.skip("no contrib/ beside the tests (e.g. mutmut's mutants/ copy)")
+    exec_start = next(
+        line
+        for line in _UNIT.read_text(encoding="utf-8").splitlines()
+        if line.startswith("ExecStart=")
+    )
+    script = re.search(r"-c '(.*)'$", exec_start).group(1).replace("%h", str(tmp_path))
+    stub = tmp_path / ".local/bin/projects-orchestrator"
+    stub.parent.mkdir(parents=True)
+    stub.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n', encoding="utf-8")
+    stub.chmod(0o755)
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}
+    if value is not None:
+        env["PO_HEAL_ISSUES"] = value
+    argv = subprocess.run(
+        ["/bin/sh", "-c", script], env=env, capture_output=True, text=True, check=True
+    ).stdout.splitlines()
+    assert ("--issues" in argv) is enabled

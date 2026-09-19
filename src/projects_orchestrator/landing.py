@@ -103,7 +103,11 @@ def _run_argv(args: list[str], cwd: Path, timeout: float = _GIT_TIMEOUT) -> RunR
         proc = subprocess.run(  # noqa: S603 — argv list, no shell; never concatenated
             args, cwd=cwd, capture_output=True, text=True, timeout=timeout, check=False
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        # ValueError: an argv element holding a NUL byte is refused before exec.
+        # Gate output reaches argv through an issue body, so it degrades here
+        # like any other failed launch rather than escaping the never-raise
+        # engine (ADR-003).
         return RunResult(
             command=" ".join(args),
             returncode=None,
