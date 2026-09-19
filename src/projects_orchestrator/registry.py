@@ -30,6 +30,7 @@ from projects_orchestrator.descriptor import (
     ProjectDescriptor,
     layout_dir_present,
     load_descriptor,
+    refused_symlink,
     resolve_config,
 )
 
@@ -390,6 +391,45 @@ def _git_dirs(path: Path) -> tuple[Path, Path] | None:
         return None
 
 
+def _unresolved_warning(resolved: Path, *, listed: bool) -> str | None:
+    """Why a candidate with no descriptor is not in the fleet, or ``None`` to stay silent.
+
+    Args:
+        resolved: The candidate's resolved path.
+        listed: Whether the operator listed it under ``projects:``.
+
+    Returns:
+        One warning line, or ``None`` for an ordinary directory beside the fleet.
+    """
+    if refused := refused_symlink(resolved):
+        # A refused marker is not an absent one (#220): name the rule that
+        # fired, or the operator goes looking for a scaffold that is already
+        # there, one link away.
+        return f"{resolved}: {refused} is a symlink, so the descriptor is refused — replace the link with the file itself"
+    if listed:
+        return f"not a project-init project: {resolved}"
+    if layout := layout_dir_present(resolved):
+        # A SCANNED project that stops resolving used to drop out in silence
+        # (#211). The warning existed but sat inside the `config.projects` arm,
+        # so it could only ever fire for a path someone had listed by hand — the
+        # one case where the operator already knows the path exists. Proved by
+        # running the same broken directory both ways: listed explicitly it
+        # warned, scanned it said nothing.
+        #
+        # Silence here is not a missing nicety. With a healthy project beside
+        # it the fleet is non-empty, so the "no projects discovered" hint cannot
+        # fire either, and every verb — `--json` included — returns success
+        # with the project simply absent. Absent and healthy are byte-identical
+        # to a reader.
+        #
+        # Gated on a layout directory rather than reported for every
+        # descriptor-less candidate: see `layout_dir_present`.
+        return (
+            f"{resolved} carries {layout}/ but no readable config.yaml — it is NOT being governed"
+        )
+    return None
+
+
 def discover(config: FleetConfig) -> Fleet:
     """Discover every project the config points at; never raises.
 
@@ -450,29 +490,8 @@ def discover(config: FleetConfig) -> Fleet:
         descriptor = admitted[resolved]
         _hold_repo(dirs.get(resolved), descriptor, mains)
         if descriptor is None:
-            if candidate in config.projects:
-                warnings.append(f"not a project-init project: {resolved}")
-            elif layout := layout_dir_present(resolved):
-                # A SCANNED project that stops resolving used to drop out in
-                # silence (#211). The warning existed but sat inside the
-                # `config.projects` arm, so it could only ever fire for a path
-                # someone had listed by hand — the one case where the operator
-                # already knows the path exists. Proved by running the same
-                # broken directory both ways: listed explicitly it warned,
-                # scanned it said nothing.
-                #
-                # Silence here is not a missing nicety. With a healthy project
-                # beside it the fleet is non-empty, so the "no projects
-                # discovered" hint cannot fire either, and every verb —
-                # `--json` included — returns success with the project simply
-                # absent. Absent and healthy are byte-identical to a reader.
-                #
-                # Gated on a layout directory rather than reported for every
-                # descriptor-less candidate: see `layout_dir_present`.
-                warnings.append(
-                    f"{resolved} carries {layout}/ but no readable config.yaml"
-                    " — it is NOT being governed"
-                )
+            if warning := _unresolved_warning(resolved, listed=candidate in config.projects):
+                warnings.append(warning)
             continue
         found.append(descriptor)
 
