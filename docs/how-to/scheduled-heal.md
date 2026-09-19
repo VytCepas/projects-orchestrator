@@ -91,6 +91,37 @@ A pass with nothing failing posts nothing. The PR stays a draft either way:
 the notification replaces promoting it, which is what would put an agent's work
 one auto-merge rule away from landing unreviewed.
 
+A notify-mode project can report through its own repository instead. Add
+`PO_HEAL_ISSUES=1` (the `--issues` flag) and each pass files **one GitHub issue
+per failing gate** of every notify-mode project, on that project's repository,
+with the failing command, the tail of its output and the next step:
+- a gate that is already reported files nothing new, however many passes it
+  stays red;
+- a second gate failing on the same project gets its own issue;
+- once the pass runs the gate and it passes, the issue gets a closing comment
+  and is closed;
+- a skipped gate, or one this pass did not run, leaves its issue open.
+
+The issues find each other by a hidden marker in their body, read from the
+repository on every pass, so there is no state file to lose. Only issues opened
+by the account `gh` is signed in as are read, so an issue someone else opened
+with a copied marker is ignored. Only an issue
+carrying that marker is ever closed, and the marker is re-read just before
+closing. A read that fails files and closes nothing for that project, and the
+pass logs `issues: delivery failed`. The evidence has your home directory
+replaced with `~`, but it is still your gate's output: read it with the
+repository's visibility in mind. Fix-mode projects never get an issue, and
+their issues are never read: their report is the draft PR. So a project moved
+from notify to fix keeps any issue it already has open until it returns to
+notify mode or you close it.
+
+`gh` must be authenticated for every repository in the fleet. Try it once by
+hand on one notify-mode project before enabling it on the timer:
+
+```bash
+projects-orchestrator heal <project> --mode notify --issues
+```
+
 ```bash
 mkdir -p ~/.config/systemd/user
 cp contrib/systemd/projects-orchestrator-heal.* ~/.config/systemd/user/

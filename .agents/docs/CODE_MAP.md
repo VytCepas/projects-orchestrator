@@ -309,6 +309,15 @@ Autonomous fix dispatch — spawn a scoped coding agent to repair a failing gate
 - `def heal_fleet` — Heal every project with a pending lint/test failure, up to ``limit``; never raises.
 - `def render_fleet_heal_report` — Render a fleet heal pass as human-readable lines (pure).
 
+### `projects_orchestrator/heal_issues.py`
+
+Notify-mode heal files one GitHub issue per failing gate, and closes it when the gate passes.
+
+- `def finding_key` — The identity of one failing gate, ``<project>/<gate>`` (pure).
+- `def issue_title` — The issue title for one failing gate (pure).
+- `def issue_body` — The issue body: what failed, the evidence, what to do next, and the marker (pure).
+- `def heal_issue_sink` — A :data:`~projects_orchestrator.heal.HealSink` that files and closes notify-mode issues.
+
 ### `projects_orchestrator/history.py`
 
 Append-only check history — trends the last-known cache can't show.
@@ -338,6 +347,12 @@ The write boundary — an agent run's work leaves here as a draft PR, or not at 
 - `def push_branch` — Push one agent branch to ``origin``; refuse anything else.
 - `def open_draft_pr` — Open a **draft** PR from ``branch``; never a ready-for-review one.
 - `def commit_all` — Stage and commit everything the agent changed; report the outcome.
+- `class OwnIssue` — An open issue this module filed, recognised by its marker.
+- `def issue_marker` — The hidden marker that identifies a finding's issue; ``""`` for an unsafe key (pure).
+- `def marker_key` — The finding key an issue body carries, or ``""`` when it carries none (pure).
+- `def own_open_issues` — The open issues in ``repo``'s GitHub repository that carry a finding marker.
+- `def open_issue` — File one issue in ``repo``'s GitHub repository; refuse a body without a marker.
+- `def close_own_issue` — Comment on and close issue ``number``, only if it is still open and still ours.
 
 ### `projects_orchestrator/memory.py`
 

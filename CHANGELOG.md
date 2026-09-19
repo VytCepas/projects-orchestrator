@@ -26,6 +26,10 @@ version's only source. `tests/test_version.py` fails when they disagree.
   A clean pass posts nothing, and the healed PR stays a draft (#276).
 - The integration job runs real tests: the installed CLI over real git
   repositories (#274).
+- `heal --issues` (`PO_HEAL_ISSUES=1` on the timer) files one GitHub issue per
+  failing gate of each notify-mode project, on that project's repository, and
+  closes it once the gate passes. Issues are deduplicated by a marker in their
+  body, not a state file (#164).
 
 ### Changed
 

@@ -9,6 +9,14 @@ There are exactly two sanctioned writes:
 Nothing else. No push to the default branch, no force-push, no merge, no tag —
 not because the caller happens not to ask, but because this module refuses.
 
+**Notification writes.** Notify-mode heal (ADR-008, #164) reports a failing gate
+as a GitHub issue on the failing project, and closes it once the gate passes.
+Those writes live here too, so every write heal can cause stays in one module,
+and they are refused on the same principle: this module opens only an issue
+whose body carries its own marker, and closes only an issue whose body, re-read
+from GitHub at close time, still carries that marker. It never edits, reopens
+or closes an issue a person filed.
+
 **Why it is enforced here and not by the child.** A project-init'd repo ships a
 ``pre-push`` hook that blocks pushes to main, and leaning on it is tempting. But
 the first campaign this system exists to run — rolling project-init across an
@@ -27,6 +35,8 @@ degrades to a typed failure the caller renders.
 
 from __future__ import annotations
 
+import json
+import logging
 import re
 import subprocess
 import time
@@ -34,6 +44,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from projects_orchestrator.runner import RunResult
+
+_log = logging.getLogger(__name__)
 
 _GIT_TIMEOUT = 30.0
 
@@ -57,6 +69,7 @@ COMMIT_FAILED = "commit_failed"
 NOTHING_TO_COMMIT = "nothing_to_commit"
 PUSH_FAILED = "push_failed"
 PR_FAILED = "pr_failed"
+ISSUE_FAILED = "issue_failed"
 LANDED = "landed"
 
 
@@ -65,9 +78,10 @@ class Landing:
     """The outcome of trying to land a run's work.
 
     Attributes:
-        status: :data:`LANDED`, :data:`REFUSED`, :data:`PUSH_FAILED`, or
-            :data:`PR_FAILED`.
-        pr_url: The draft PR, when one was opened.
+        status: :data:`LANDED`, :data:`REFUSED`, :data:`PUSH_FAILED`,
+            :data:`PR_FAILED`, or (for an issue write) :data:`ISSUE_FAILED`.
+        pr_url: The draft PR, when one was opened; for an issue write, the
+            issue's URL.
         detail: Why it did not land. Always populated on failure — a refusal with
             no reason is indistinguishable from a bug.
     """
@@ -103,6 +117,11 @@ def _run_argv(args: list[str], cwd: Path, timeout: float = _GIT_TIMEOUT) -> RunR
         stderr=proc.stderr,
         duration=time.monotonic() - start,
     )
+
+
+def _why(result: RunResult, fallback: str) -> str:
+    """The tail of what a failed command said, or ``fallback`` when it said nothing."""
+    return (result.stderr or result.error or "").strip()[-300:] or fallback
 
 
 def default_branch(repo: Path) -> str:
@@ -247,4 +266,146 @@ def commit_all(worktree: Path, message: str) -> Landing:
     committed = _run_argv(["git", "commit", "-m", message], cwd=worktree)
     if not committed.ok:
         return Landing(COMMIT_FAILED, detail=committed.stderr.strip()[-300:] or "git commit failed")
+    return Landing(LANDED)
+
+
+# --- Notification writes: issues this module filed, and only those (#164) -------
+
+#: The identity of a notify-mode finding, as it is written into the issue body.
+#: A key is ``<project>/<gate>``, both parts restricted to characters that cannot
+#: close the HTML comment or smuggle a second marker into it.
+_KEY_PART = r"[A-Za-z0-9._-]+"
+_MARKER = re.compile(rf"<!-- projects-orchestrator:heal-notify key=({_KEY_PART}/{_KEY_PART}) -->")
+_VALID_KEY = re.compile(rf"{_KEY_PART}/{_KEY_PART}\Z")
+
+#: How many open issues one read may return. A repo with more open issues than
+#: this cannot be deduplicated from one page, so the read reports "unknown"
+#: rather than a partial list that would let a duplicate through.
+ISSUE_LIST_LIMIT = 500
+
+
+@dataclass(frozen=True)
+class OwnIssue:
+    """An open issue this module filed, recognised by its marker.
+
+    Attributes:
+        number: The issue number in its repository.
+        key: The finding it reports, ``<project>/<gate>``.
+        url: The issue's web URL.
+    """
+
+    number: int
+    key: str
+    url: str = ""
+
+
+def issue_marker(key: str) -> str:
+    """The hidden marker that identifies a finding's issue; ``""`` for an unsafe key (pure)."""
+    if not _VALID_KEY.match(key):
+        return ""
+    return f"<!-- projects-orchestrator:heal-notify key={key} -->"
+
+
+def marker_key(body: str) -> str:
+    """The finding key an issue body carries, or ``""`` when it carries none (pure)."""
+    match = _MARKER.search(body or "")
+    return match.group(1) if match else ""
+
+
+def own_open_issues(repo: Path, limit: int = ISSUE_LIST_LIMIT) -> tuple[OwnIssue, ...] | None:
+    """The open issues in ``repo``'s GitHub repository that carry a finding marker.
+
+    Only issues opened by the account ``gh`` is signed in as are read. On a public
+    repository anyone can open an issue, and one that pasted a marker would
+    otherwise suppress the real report and later be closed as if it were ours.
+
+    Returns ``None`` when the answer is unknown: ``gh`` failed, its output did not
+    parse, or the page was full, so an issue beyond it could be missed. Unknown
+    is not "none": a caller that read ``None`` as "no open issues" would file a
+    duplicate every pass.
+    """
+    listed = _run_argv(
+        [
+            "gh",
+            "issue",
+            "list",
+            "--state",
+            "open",
+            "--author",
+            "@me",
+            "--limit",
+            str(limit),
+            "--json",
+            "number,url,body",
+        ],
+        cwd=repo,
+    )
+    if not listed.ok:
+        _log.warning("gh issue list failed in %s: %s", repo, _why(listed, "no output"))
+        return None
+    try:
+        rows = json.loads(listed.stdout or "[]")
+    except ValueError as exc:
+        _log.warning("gh issue list returned unparseable JSON in %s: %r", repo, exc)
+        return None
+    if not isinstance(rows, list):
+        _log.warning("gh issue list returned %s, not a list, in %s", type(rows).__name__, repo)
+        return None
+    if len(rows) >= limit:
+        _log.warning(
+            "%s has at least %d open issues; one page cannot rule out a duplicate", repo, limit
+        )
+        return None
+    issues: list[OwnIssue] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue  # expected: a row gh did not shape as an object carries no marker
+        key = marker_key(str(row.get("body") or ""))
+        number = row.get("number")
+        if key and isinstance(number, int):
+            issues.append(OwnIssue(number=number, key=key, url=str(row.get("url") or "")))
+    return tuple(issues)
+
+
+def open_issue(repo: Path, title: str, body: str) -> Landing:
+    """File one issue in ``repo``'s GitHub repository; refuse a body without a marker.
+
+    The marker is what lets a later pass find this issue again, deduplicate
+    against it, and close it. An issue filed without one could never be closed by
+    the pass that opened it, so it is refused rather than orphaned.
+    """
+    if not marker_key(body):
+        return Landing(REFUSED, detail="refusing to file an issue that carries no finding marker")
+    result = _run_argv(["gh", "issue", "create", "--title", title, "--body", body], cwd=repo)
+    if not result.ok:
+        return Landing(ISSUE_FAILED, detail=_why(result, "gh issue create failed"))
+    url = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
+    return Landing(LANDED, pr_url=url)
+
+
+def close_own_issue(repo: Path, number: int, key: str, comment: str) -> Landing:
+    """Comment on and close issue ``number``, only if it is still open and still ours.
+
+    The body is re-read at close time rather than trusted from the earlier list:
+    between the two, a person may have edited the issue into their own report, and
+    closing that would be closing someone else's issue.
+    """
+    viewed = _run_argv(["gh", "issue", "view", str(number), "--json", "state,body"], cwd=repo)
+    if not viewed.ok:
+        return Landing(ISSUE_FAILED, detail=_why(viewed, "gh issue view failed"))
+    try:
+        issue = json.loads(viewed.stdout or "{}")
+    except ValueError as exc:
+        _log.warning("gh issue view #%d returned unparseable JSON in %s: %r", number, repo, exc)
+        return Landing(ISSUE_FAILED, detail=f"gh issue view #{number} returned unparseable JSON")
+    if not isinstance(issue, dict) or str(issue.get("state", "")).upper() != "OPEN":
+        return Landing(REFUSED, detail=f"issue #{number} is no longer open")
+    if marker_key(str(issue.get("body") or "")) != key:
+        return Landing(REFUSED, detail=f"issue #{number} no longer carries the marker for {key}")
+    closed = _run_argv(
+        ["gh", "issue", "close", str(number), "--reason", "completed", "--comment", comment],
+        cwd=repo,
+    )
+    if not closed.ok:
+        return Landing(ISSUE_FAILED, detail=_why(closed, "gh issue close failed"))
     return Landing(LANDED)
