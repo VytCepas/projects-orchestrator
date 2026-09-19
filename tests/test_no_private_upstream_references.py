@@ -14,9 +14,10 @@ force-included into the wheel, picked up a private citation, and would have been
 published with that test green (PI-989). A list of shipped paths that disagrees
 with the build config is a second copy of a fact.
 
-The scan is deliberately WIDER than the wheel. `schemas/`, `tests/` and `docs/`
-are not shipped, but this repo is public, so they are read by anyone who opens
-it. They were cleaned in the same change, and are held here so they stay clean.
+The scan is deliberately WIDER than the wheel: every file git tracks, because
+the repository is public and read by anyone who opens it. The shipped set is
+scanned on top of that from the working tree, so a packaged file git does not
+track (a generated module, say) is still covered.
 
 Rewording is the remedy, not deletion: the seam is real and its description
 must survive. The layer is named by role ("the ambient layer", "the consumer"),
@@ -27,6 +28,7 @@ readers assert the same fixtures by those ids.
 from __future__ import annotations
 
 import re
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -38,16 +40,15 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 # can be added without reshaping the test.
 _PRIVATE_NAMES = ["harbor"]
 
-# Public but not shipped: scanned because anyone reading the repo sees them.
-_ALSO_SCANNED = ["schemas", "tests", "docs"]
-
 # Paths the BUILD CONFIG ships that the scan deliberately does not read, each
 # with its reason. Held explicitly rather than by omission, so an exemption is a
 # visible decision; one naming a path the build no longer ships fails below.
 _SCAN_EXEMPT: dict[str, str] = {}
 
 # The only file allowed to carry the name: it has to spell it to search for it.
-_SELF = Path(__file__).resolve()
+# Held as a path relative to the tree, because under mutmut the suite runs from
+# a `mutants/` copy while git lists the original, so there are two of it.
+_SELF = Path(__file__).resolve().relative_to(_REPO_ROOT)
 
 _SKIP_SUFFIXES = {".pyc", ".png", ".svg", ".ico", ".lock"}
 
@@ -67,22 +68,46 @@ def _shipped() -> set[str]:
     return ships
 
 
-def _scan_roots() -> list[str]:
-    return sorted((_shipped() - set(_SCAN_EXEMPT)) | set(_ALSO_SCANNED))
+def _git(*args: str, cwd: Path) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=cwd, capture_output=True, text=True, check=True
+    ).stdout
+
+
+def _top() -> Path:
+    """The work tree's top level, asked of git rather than assumed: the suite
+    also runs inside mutmut's untracked `mutants/` copy, where `git ls-files`
+    lists nothing."""
+    return Path(_git("rev-parse", "--show-toplevel", cwd=_REPO_ROOT).strip())
+
+
+def _tracked() -> list[Path]:
+    top = _top()
+    return [top / line for line in _git("ls-files", cwd=top).splitlines() if line]
+
+
+def _shipped_roots() -> list[Path]:
+    return [_REPO_ROOT / root for root in sorted(_shipped() - set(_SCAN_EXEMPT))]
+
+
+def _is_exempt(path: Path) -> bool:
+    return any(path.is_relative_to(_REPO_ROOT / root) for root in _SCAN_EXEMPT)
 
 
 def _scanned_files() -> list[Path]:
-    out: list[Path] = []
-    for root in _scan_roots():
-        path = _REPO_ROOT / root
-        candidates = [path] if path.is_file() else sorted(path.rglob("*"))
-        for p in candidates:
-            if not p.is_file() or p.suffix in _SKIP_SUFFIXES or "__pycache__" in p.parts:
-                continue
-            if p.resolve() == _SELF:
-                continue
-            out.append(p)
-    return out
+    selves = {_REPO_ROOT / _SELF, _top() / _SELF}
+    candidates = set(_tracked())
+    for root in _shipped_roots():
+        candidates.update([root] if root.is_file() else root.rglob("*"))
+    return sorted(
+        p
+        for p in candidates
+        if p.is_file()
+        and p.suffix not in _SKIP_SUFFIXES
+        and "__pycache__" not in p.parts
+        and p not in selves
+        and not _is_exempt(p)
+    )
 
 
 @pytest.mark.parametrize("name", _PRIVATE_NAMES)
@@ -96,7 +121,7 @@ def test_nothing_shipped_or_public_names_the_private_upstream(name: str) -> None
             continue
         for lineno, line in enumerate(text.splitlines(), 1):
             if pattern.search(line):
-                hits.append(f"{path.relative_to(_REPO_ROOT)}:{lineno}: {line.strip()[:90]}")
+                hits.append(f"{path}:{lineno}: {line.strip()[:90]}")
     assert not hits, (
         f"{len(hits)} reference(s) to the private upstream; name the layer by role instead:\n"
         + "\n".join(hits)
@@ -107,7 +132,8 @@ def test_the_scan_reaches_the_files_it_claims_to() -> None:
     """A negative assertion needs a positive control, or a walk that silently
     skips everything reports green for ever. Pinned to the files the references
     actually lived in when this was filed."""
-    scanned = {p.relative_to(_REPO_ROOT).as_posix() for p in _scanned_files()}
+    top = _top()
+    scanned = {p.relative_to(top).as_posix() for p in _scanned_files() if p.is_relative_to(top)}
     for required in (
         "src/projects_orchestrator/descriptor.py",
         "src/projects_orchestrator/digest.py",
@@ -115,25 +141,26 @@ def test_the_scan_reaches_the_files_it_claims_to() -> None:
         "schemas/README.md",
         "schemas/snapshot.v1.schema.json",
         "tests/test_json_seam.py",
+        "AGENTS.md",
+        ".github/hooks/pre-push",
     ):
         assert required in scanned, f"the scan does not reach {required}"
     assert len(scanned) > 100, f"only {len(scanned)} files scanned — the walk is not working"
 
 
-def test_every_scan_root_exists() -> None:
-    """A root that is not there is scanned as nothing: `rglob` over a missing
-    directory yields no files rather than raising."""
-    for root in _scan_roots():
-        path = _REPO_ROOT / root
-        assert path.exists(), f"scan root {root} does not exist"
-        assert path.is_file() or any(path.rglob("*")), f"scan root {root} is empty"
+def test_every_shipped_root_exists() -> None:
+    """A shipped root that is not there is scanned as nothing: `rglob` over a
+    missing directory yields no files rather than raising."""
+    for root in _shipped_roots():
+        assert root.exists(), f"shipped root {root} does not exist"
+        assert root.is_file() or any(root.rglob("*")), f"shipped root {root} is empty"
 
 
 def test_the_shipped_set_is_read_and_every_exemption_is_still_shipped() -> None:
     """The shipped set comes from the build config, never from this file.
 
     An empty parse means the reader is wrong, not the config — without this the
-    scan would quietly narrow to `_ALSO_SCANNED`. An exemption for a path the
+    scan would quietly narrow to what git tracks. An exemption for a path the
     build no longer ships is a stale excuse that would widen the next one.
     """
     ships = _shipped()
