@@ -325,9 +325,18 @@ def render(report: FreshnessReport) -> str:
     lines = [f"contract freshness: STALE — {len(report.drifts)} divergence(s) from upstream"]
     lines.extend(f"  [{d.surface}] {d.detail}" for d in report.drifts)
     # A contract-version drift carries its own remedy; re-vendoring does not fix it.
+    # Said IN the report because the scheduled job's issue footer always adds a
+    # generic "re-vendor" line, and this report is the only part of it that
+    # knows which remedy applies (Codex on #291).
     if any(d.surface != "contract-version" for d in report.drifts):
         lines.append("")
         lines.append("Re-vendor: see tests/fixtures/project_init/README.md")
+    if any(d.surface == "contract-version" for d in report.drifts):
+        lines.append("")
+        lines.append(
+            "Contract version: re-vendoring does NOT clear this. Teach the descriptor reader"
+            " the new version and raise doctor.CONTRACT_VERSION_MAX."
+        )
     return "\n".join(lines)
 
 

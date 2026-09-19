@@ -321,8 +321,15 @@ def test_a_source_that_stopped_declaring_the_version_is_stale() -> None:
 
 def test_a_contract_drift_alone_does_not_point_at_re_vendoring() -> None:
     report = compare(*_fresh_halves(), contract=ContractProbe('CONTRACT_VERSION = "3"\n', 2))
-    assert "Re-vendor" not in render(report)
+    assert "Re-vendor:" not in render(report)
     assert "understands up to v2" in render(report)
+    assert "re-vendoring does NOT clear this" in render(report)
+
+
+def test_a_schema_drift_alone_does_not_claim_a_contract_remedy() -> None:
+    report = compare(_schema(deploy=["a"]), _schema(deploy=[]), "1.0.0", "1.0.0")
+    assert "Re-vendor:" in render(report)
+    assert "re-vendoring does NOT clear" not in render(report)
 
 
 def test_fetch_contract_source_returns_the_text_and_degrades_to_none() -> None:
