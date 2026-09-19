@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import functools
 import json
+import os
 import subprocess
+import sys
+import tomllib
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -354,3 +359,124 @@ def _isolate_xdg_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 def fleet_dir(tmp_path: Path) -> Path:
     """A directory to build fleets under."""
     return tmp_path / "fleet"
+
+
+# --- mutmut's test tree must carry every repo path a test reads (#253) --------
+#
+# mutmut runs this suite from a copy of the tree, `mutants/`, holding only the
+# source, tests/, a few files of its own and `[tool.mutmut] also_copy`. A test
+# that reads anything else fails only there, in the nightly, and pytest's -x
+# stops the whole mutation run at the first one. It happened twice: the gate
+# script under .agents/scripts/, then the README read by test_docs.py, which
+# kept the nightly red for eleven nights while every PR stayed green.
+#
+# So this watches what tests actually touch rather than what their source text
+# mentions: an audit hook records every path under the repo that is opened,
+# listed, or handed to a subprocess, and a test that touched a tracked
+# top-level name mutmut will not copy errors in its own PR, naming the path.
+# Reads made while collecting (module-level loads) are checked the same way.
+
+_REPO = Path(__file__).resolve().parents[1]
+
+#: mutmut's own additions to ``also_copy`` (``mutmut/configuration.py``) plus the
+#: source tree it copies. A literal because mutmut is not installed in a PR run.
+MUTMUT_COPIES = frozenset({"src", "tests", "test", "setup.cfg", "pyproject.toml", "uv.lock"})
+
+_AUDITED = frozenset({"open", "os.listdir", "os.scandir", "subprocess.Popen"})
+_TOUCHED: set[str] = set()
+
+
+def _absolute(candidate: object) -> bool:
+    try:
+        return (
+            isinstance(candidate, (str, bytes, os.PathLike))
+            and Path(os.fsdecode(candidate)).is_absolute()
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def touched_by(event: str, args: tuple[object, ...]) -> set[str]:
+    """The repo top-level names one audit event reads (pure; never raises)."""
+    if event not in _AUDITED or not args:
+        return set()
+    if event == "subprocess.Popen":
+        # (executable, args, cwd, env): a script run by path is a read too.
+        argv = args[1] if len(args) > 1 else None
+        candidates = list(argv) if isinstance(argv, (list, tuple)) else [argv]
+        candidates.append(args[2] if len(args) > 2 else None)
+    elif event == "open" and len(args) > 1 and args[1] is None and not _absolute(args[0]):
+        # (path, mode, flags) with no mode is `os.open`, and a relative path
+        # there may be relative to a directory fd rather than the working
+        # directory: `shutil.rmtree` walks a tree that way. It cannot be placed.
+        return set()
+    else:
+        candidates = [args[0]]
+    names: set[str] = set()
+    for candidate in candidates:
+        if not isinstance(candidate, (str, bytes, os.PathLike)):
+            continue
+        try:
+            path = Path(os.fsdecode(candidate))
+            parts = (path if path.is_absolute() else Path.cwd() / path).relative_to(_REPO).parts
+        except (TypeError, ValueError, OSError):
+            continue
+        if parts:
+            names.add(parts[0])
+    return names
+
+
+def _record(event: str, args: tuple[object, ...]) -> None:
+    if event in _AUDITED:
+        _TOUCHED.update(touched_by(event, args))
+
+
+sys.addaudithook(_record)
+
+
+@functools.cache
+def _tracked_top_level() -> frozenset[str]:
+    def git(*argv: str, cwd: Path) -> str:
+        return subprocess.run(
+            ["git", *argv], cwd=cwd, capture_output=True, text=True, check=True
+        ).stdout
+
+    # Asked of git, not assumed: under mutmut this file lives in `mutants/`, an
+    # untracked copy where `git ls-files` lists nothing.
+    top = Path(git("rev-parse", "--show-toplevel", cwd=_REPO).strip())
+    return frozenset(line.split("/", 1)[0] for line in git("ls-files", cwd=top).splitlines())
+
+
+@functools.cache
+def mutmut_copy_set() -> frozenset[str]:
+    config = tomllib.loads((_REPO / "pyproject.toml").read_text(encoding="utf-8"))
+    also_copy = config["tool"]["mutmut"].get("also_copy", [])
+    return frozenset(entry.rstrip("/") for entry in also_copy) | MUTMUT_COPIES
+
+
+def uncopied(names: set[str]) -> list[str]:
+    """Tracked top-level names in ``names`` that mutmut's copy would not carry."""
+    return sorted((names & _tracked_top_level()) - mutmut_copy_set())
+
+
+def _copy_advice(where: str, missing: list[str]) -> str:
+    return (
+        f"{where} reads {missing} from the repo, which mutmut does not copy into "
+        "mutants/, so the nightly mutation run would die there. Add each to "
+        "[tool.mutmut] also_copy in pyproject.toml (top-level names only)."
+    )
+
+
+def pytest_collection_finish() -> None:
+    missing = uncopied(set(_TOUCHED))
+    _TOUCHED.clear()
+    if missing:
+        raise pytest.UsageError(_copy_advice("collecting the suite", missing))
+
+
+@pytest.fixture(autouse=True)
+def _reads_survive_mutmuts_copy(request: pytest.FixtureRequest) -> Iterator[None]:
+    _TOUCHED.clear()
+    yield
+    missing = uncopied(set(_TOUCHED))
+    assert not missing, _copy_advice(request.node.nodeid, missing)
