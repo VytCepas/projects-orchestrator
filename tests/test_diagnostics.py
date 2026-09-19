@@ -55,20 +55,29 @@ def _marked(comments: dict[int, str], first: int, last: int) -> bool:
 _NEW_SCOPE = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef, ast.GeneratorExp)
 
 
-def _same_scope(statements: list[ast.stmt]) -> list[ast.AST]:
+def _same_scope(statements: list[ast.stmt], stop: tuple[type, ...] = ()) -> list[ast.AST]:
     """Every node under ``statements`` that runs in the handler's own scope.
 
-    A nested def, lambda or class is code that may never run, so a ``raise`` or a
-    read inside one says nothing about what the handler does with the exception
-    it caught (Codex on #269).
+    A nested def, lambda, class or generator expression is code that may never
+    run, so a ``raise`` or a read inside one says nothing about what the handler
+    does with the exception it caught (Codex on #269). ``stop`` names further
+    node types not to descend into.
     """
+    fence = _NEW_SCOPE + stop
     found: list[ast.AST] = []
-    stack: list[ast.AST] = [s for s in statements if not isinstance(s, _NEW_SCOPE)]
+    stack: list[ast.AST] = [s for s in statements if not isinstance(s, fence)]
     while stack:
         node = stack.pop()
         found.append(node)
-        stack.extend(c for c in ast.iter_child_nodes(node) if not isinstance(c, _NEW_SCOPE))
+        stack.extend(c for c in ast.iter_child_nodes(node) if not isinstance(c, fence))
     return found
+
+
+# A raise inside a nested `try` either re-raises the INNER exception (a bare
+# `raise` in an inner handler) or may be caught before it escapes, so it is no
+# evidence about the outer one (Codex on #269). `raise exc` / `raise X from exc`
+# still count, as reads of the outer name.
+_NESTED_TRY = (ast.Try, ast.TryStar)
 
 
 def silent_sites(source: str) -> list[int]:
@@ -87,11 +96,10 @@ def silent_sites(source: str) -> list[int]:
     silent: list[int] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.ExceptHandler):
-            body = _same_scope(node.body)
-            raises = any(isinstance(n, ast.Raise) for n in body)
+            raises = any(isinstance(n, ast.Raise) for n in _same_scope(node.body, _NESTED_TRY))
             reads = node.name is not None and any(
                 isinstance(n, ast.Name) and n.id == node.name and isinstance(n.ctx, ast.Load)
-                for n in body
+                for n in _same_scope(node.body)
             )
             if not (raises or reads or _marked(comments, node.lineno, node.body[0].lineno)):
                 silent.append(node.lineno)
@@ -137,6 +145,18 @@ SILENT = "try:\n    f()\nexcept OSError:\n    return None\n"
         ("try:\n    f()\nexcept OSError:\n    def later():\n        raise\n", [3]),
         ("try:\n    f()\nexcept OSError as exc:\n    cb = lambda: log(exc)\n", [3]),
         ("try:\n    f()\nexcept OSError as exc:\n    g = (str(exc) for _ in r)\n", [3]),
+        # An inner handler's bare raise re-raises the INNER exception, not this one.
+        (
+            "try:\n    f()\nexcept OSError:\n    try:\n        g()\n"
+            "    except ValueError:\n        raise\n    x = 1\n",
+            [3],
+        ),
+        # Re-raising the outer exception by name from inside an inner handler counts.
+        (
+            "try:\n    f()\nexcept OSError as exc:\n    try:\n        g()\n"
+            "    except ValueError:\n        raise exc from None\n",
+            [],
+        ),
         # A comprehension is the handler's own code, run now.
         ("try:\n    f()\nexcept OSError as exc:\n    w = [str(exc) for _ in r]\n", []),
         ("with contextlib.suppress(OSError):\n    f()\n", [1]),
@@ -284,6 +304,25 @@ def test_a_host_root_logger_at_debug_neither_leaks_nor_doubles_the_trail(
         root.setLevel(saved_level)
     ours = [r for r in collect.records if r.name.startswith("projects_orchestrator")]
     assert (ours, "debug:" in quiet, "debug:" in loud) == ([], False, True)
+
+
+def test_a_handler_the_host_attached_to_the_package_logger_is_set_aside(
+    fleet_dir: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fleet = _plain_repo_fleet(fleet_dir)
+    logger, collect = logging.getLogger("projects_orchestrator"), _Collect()
+    saved_level = logger.level
+    logger.addHandler(collect)
+    logger.setLevel(logging.DEBUG)
+    try:
+        main(["snapshot", "--fleet", str(fleet)])
+        main(["snapshot", "--fleet", str(fleet), "--verbose"])
+        attached_after = collect in logger.handlers
+    finally:
+        logger.removeHandler(collect)
+        logger.setLevel(saved_level)
+    loud = capsys.readouterr().err
+    assert (collect.records, attached_after, "debug:" in loud) == ([], True, True)
 
 
 def test_main_hands_the_package_logger_back_as_it_found_it(

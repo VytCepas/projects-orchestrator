@@ -1874,9 +1874,10 @@ def _verbose(args: argparse.Namespace) -> bool:
 def _diagnostic_trail(verbose: bool) -> Iterator[None]:
     """Own the package's debug records for one command, then hand them back.
 
-    Degraded paths log at DEBUG. The package logger stops propagating while a
-    command runs, so a host process whose ROOT logger is configured at DEBUG
-    neither prints the trail on a quiet run nor prints each line twice on a
+    Degraded paths log at DEBUG. While a command runs, the package logger stops
+    propagating and sets aside any handler already attached to it. A host
+    process that configured the root logger, or this logger directly, at DEBUG
+    then neither sees the trail on a quiet run nor prints each line twice on a
     verbose one (Codex on #269). Quiet: no handler at all, so a default run
     prints exactly what it did before the seam existed. Verbose: one stderr
     handler. Everything is restored on the way out, so a repeated ``main()``
@@ -1884,6 +1885,9 @@ def _diagnostic_trail(verbose: bool) -> Iterator[None]:
     """
     logger = logging.getLogger("projects_orchestrator")
     saved_level, saved_propagate = logger.level, logger.propagate
+    saved_handlers = list(logger.handlers)
+    for existing in saved_handlers:
+        logger.removeHandler(existing)
     handler: logging.Handler | None = None
     logger.propagate = False
     if verbose:
@@ -1896,6 +1900,8 @@ def _diagnostic_trail(verbose: bool) -> Iterator[None]:
     finally:
         if handler is not None:
             logger.removeHandler(handler)
+        for existing in saved_handlers:
+            logger.addHandler(existing)
         logger.setLevel(saved_level)
         logger.propagate = saved_propagate
 
