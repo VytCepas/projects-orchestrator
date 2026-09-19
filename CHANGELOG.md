@@ -100,7 +100,12 @@ version's only source. `tests/test_version.py` fails when they disagree.
   - `PO_HEAL_ISSUES=0` turned filing on;
   - an unreadable issue list on a clean pass reported `delivery failed`;
   - issues were filed and closed on uncommitted working-copy state.
-  It now files and closes only on results taken at a clean, committed HEAD.
+  It now files and closes only on results taken at a clean checkout of the
+  commit `origin`'s default branch points at, so a fix on an unpushed local
+  branch no longer closes the issue.
+- `upgrade-plan` showed a repo's frozen visible plugin version (0.1.0 on one
+  repo) rather than the one its last upgrade recorded (0.9.16). The recorded
+  version now wins when present.
 
 ### Security
 

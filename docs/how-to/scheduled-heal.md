@@ -103,8 +103,12 @@ and the next step. Only the value `1` enables it; `0` or `false` leave it off.
 - once the pass runs the gate and it passes, the issue gets a closing comment
   and is closed;
 - a skipped gate, or one this pass did not run, leaves its issue open.
-- a gate run on uncommitted changes files and closes nothing: the issue
-  reports on commits, not on work in progress. The heal report still shows it.
+- a gate that did not run at the commit `origin`'s default branch points at
+  files and closes nothing: uncommitted or untracked changes, a local branch,
+  or unpushed or unpulled commits describe your work, not the project. The heal
+  report still shows the failure. The tip is asked of `origin` on every pass,
+  so a checkout that has not pulled a newer push is skipped too, and an
+  unreachable `origin` files and closes nothing.
 
 The issues find each other by a hidden marker in their body, read from the
 repository on every pass, so there is no state file to lose. Only issues opened

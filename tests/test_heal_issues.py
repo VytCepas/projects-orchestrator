@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 from conftest import git_init, make_project
 
-from projects_orchestrator import landing
+from projects_orchestrator import landing, status
 from projects_orchestrator.__main__ import main
 from projects_orchestrator.checks import CheckResult
 from projects_orchestrator.descriptor import ProjectDescriptor, load_descriptor
@@ -43,6 +43,26 @@ def _isolate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         raise AssertionError(message)
 
     monkeypatch.setattr("projects_orchestrator.heal._default_agent_run", _explode)
+
+
+_FAKE_TIP = "0123456789abcdef"
+_REAL_TIP = status.published_default_head
+
+
+@pytest.fixture(autouse=True)
+def _published_tip(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A project that is not a git checkout reads as published at the fixtures' HEAD.
+
+    The sink files only at origin's default-branch tip. The unit tests below build
+    plain directories and hand the sink results stamped ``_FAKE_TIP``; real git
+    checkouts (the CLI tests) keep the real lookup, so the published-tip rule is
+    exercised end to end there.
+    """
+
+    def tip(path: Path) -> str:
+        return _REAL_TIP(path) if (path / ".git").exists() else _FAKE_TIP
+
+    monkeypatch.setattr(status, "published_default_head", tip)
 
 
 class _FakeGitHub:
@@ -112,22 +132,39 @@ def _alpha(fleet_dir: Path) -> ProjectDescriptor:
     )
 
 
-def _check(task: str, status: str, detail: str = "", head: str = "0123456789abcdef") -> CheckResult:
-    """A result taken at a clean HEAD by default, as `heal` stamps it (#164 review)."""
+def _check(task: str, state: str, detail: str = "", head: str = _FAKE_TIP) -> CheckResult:
+    """A result taken at the published tip by default, as `heal` stamps it (#164 review)."""
     return CheckResult(
         project="alpha",
         task=task,
-        status=status,
+        status=state,
         detail=detail,
         checked_at="2026-09-19T03:00:00+00:00",
         head=head,
     )
 
 
+def _git(project: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(project), *args], capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+def _publish(project: Path) -> None:
+    """Give ``project`` a bare ``origin`` holding its ``main``, with ``origin/HEAD`` set."""
+    bare = project.parent.parent / "remotes" / f"{project.name}.git"
+    bare.parent.mkdir(exist_ok=True)
+    subprocess.run(["git", "clone", "-q", "--bare", str(project), str(bare)], check=True)
+    _git(project, "remote", "add", "origin", str(bare))
+    _git(project, "fetch", "-q", "origin")
+    _git(project, "remote", "set-head", "origin", "main")
+
+
 def _committed_project(fleet_dir: Path, lint: str = "false") -> Path:
-    """A real, clean git checkout whose lint gate runs ``lint``."""
+    """A real, clean git checkout on the published ``main``, whose lint gate runs ``lint``."""
     project = make_project(fleet_dir, "alpha", tooling={"lint": lint})
     git_init(project)
+    _publish(project)
     return project
 
 
@@ -367,10 +404,7 @@ def test_the_cli_files_on_a_notify_pass_and_reports_the_delivery(
     assert "issues: delivered" in out.err
     [issue] = github.open_issues().values()
     assert issue["title"] == "heal: lint is failing in alpha"
-    head = subprocess.run(
-        ["git", "-C", str(project), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
-    ).stdout.strip()
-    assert f"at `{head[:12]}`" in issue["body"]
+    assert f"at `{_git(project, 'rev-parse', 'HEAD')[:12]}`" in issue["body"]
 
 
 def test_the_cli_without_the_flag_files_nothing(fleet_dir: Path, github: _FakeGitHub) -> None:
@@ -414,6 +448,7 @@ def test_a_gate_printing_a_nul_still_prints_the_heal_report(
     project = make_project(fleet_dir, "alpha", tooling={"lint": "sh lint.sh"})
     (project / "lint.sh").write_text("printf 'E1 bad\\000byte\\n' >&2\nexit 1\n", encoding="utf-8")
     git_init(project)
+    _publish(project)
     argv = ["heal", "--all", "--mode", "notify", "--root", str(fleet_dir), "--issues"]
     assert main(argv) == 1
     out = capsys.readouterr()
@@ -491,3 +526,84 @@ def test_only_po_heal_issues_1_enables_filing_on_the_timer(
         ["/bin/sh", "-c", script], env=env, capture_output=True, text=True, check=True
     ).stdout.splitlines()
     assert ("--issues" in argv) is enabled
+
+
+# --- the published default branch (review of #287) ------------------------------------
+
+
+def test_a_result_not_at_the_published_tip_files_and_closes_nothing(
+    fleet_dir: Path, github: _FakeGitHub
+) -> None:
+    alpha = _alpha(fleet_dir)
+    assert _pass(alpha, {"lint": _check("lint", "fail", "x", head="feedface")}) is None
+    assert github.calls == []
+    _pass(alpha, {"lint": _check("lint", "fail", "boom")})
+    assert _pass(alpha, {"lint": _check("lint", "pass", head="feedface")}) is None
+    assert len(github.open_issues()) == 1
+
+
+def test_a_fix_on_an_unpushed_branch_does_not_close_the_issue(
+    fleet_dir: Path, github: _FakeGitHub
+) -> None:
+    # The review's reproduction: the issue is filed from main, then a fix is
+    # committed on a local branch that was never pushed. main is still red.
+    project = make_project(fleet_dir, "alpha", tooling={"lint": "sh lint.sh"})
+    (project / "lint.sh").write_text("echo E1 >&2\nexit 1\n", encoding="utf-8")
+    git_init(project)
+    _publish(project)
+    argv = ["heal", "--all", "--mode", "notify", "--root", str(fleet_dir), "--issues"]
+    assert main(argv) == 1
+    assert len(github.open_issues()) == 1
+
+    _git(project, "checkout", "-q", "-b", "local-fix")
+    (project / "lint.sh").write_text("exit 0\n", encoding="utf-8")
+    _git(project, "commit", "-qam", "fix lint")
+    main(argv)
+    assert len(github.open_issues()) == 1, "an unpushed fix closed the issue"
+
+    # Control: the same fix published on main does close it.
+    _git(project, "checkout", "-q", "main")
+    _git(project, "merge", "-q", "--ff-only", "local-fix")
+    _git(project, "push", "-q", "origin", "main")
+    _git(project, "fetch", "-q", "origin")
+    main(argv)
+    assert github.open_issues() == {}
+
+
+def test_a_checkout_with_no_origin_files_nothing(fleet_dir: Path, github: _FakeGitHub) -> None:
+    project = make_project(fleet_dir, "alpha", tooling={"lint": "false"})
+    git_init(project)
+    argv = ["heal", "--all", "--mode", "notify", "--root", str(fleet_dir), "--issues"]
+    assert main(argv) == 1
+    assert github.calls == []
+
+
+def test_a_stale_clone_is_not_the_published_tip(
+    fleet_dir: Path, tmp_path: Path, github: _FakeGitHub
+) -> None:
+    # Codex on #293: after another checkout pushes, this clone's HEAD and its
+    # remote-tracking ref still agree with each other. Only the remote knows.
+    project = _committed_project(fleet_dir)
+    other = tmp_path / "other"
+    subprocess.run(
+        ["git", "clone", "-q", _git(project, "remote", "get-url", "origin"), str(other)], check=True
+    )
+    _git(other, "config", "user.email", "test@example.com")
+    _git(other, "config", "user.name", "Test")
+    (other / "later.txt").write_text("pushed from another checkout\n", encoding="utf-8")
+    _git(other, "add", "later.txt")
+    _git(other, "commit", "-qm", "later")
+    _git(other, "push", "-q", "origin", "main")
+    argv = ["heal", "--all", "--mode", "notify", "--root", str(fleet_dir), "--issues"]
+    assert main(argv) == 1
+    assert github.calls == []
+
+
+def test_only_the_remote_head_line_names_the_tip(monkeypatch: pytest.MonkeyPatch) -> None:
+    # `ls-remote origin HEAD` also matches any ref ENDING in HEAD, e.g. a branch
+    # called feature/HEAD. Only the bare HEAD line is the default branch.
+    listing = f"{'a' * 40}\trefs/heads/feature/HEAD\n{'b' * 40}\tHEAD"
+    monkeypatch.setattr(status, "_git", lambda _path, *_args: listing)
+    assert _REAL_TIP(Path()) == "b" * 40
+    monkeypatch.setattr(status, "_git", lambda _path, *_args: None)
+    assert _REAL_TIP(Path()) == ""

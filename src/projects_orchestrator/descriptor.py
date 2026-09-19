@@ -253,7 +253,8 @@ class ProjectDescriptor:
         contract_version: Descriptor-contract schema version (0 when absent).
         project_init_version: Scaffold version the project was rendered with.
         project_init_plugin_version: The project-init plugin payload version
-            the visible ``project:`` block records (#212); ``unknown`` when absent.
+            the last upgrade installed (#212): the scaffold record's copy when
+            present, else the visible ``project:`` field; ``unknown`` when absent.
         memory_tier: Memory tier (0 auto … 3 obsidian-graphify-rag), derived
             from ``memory_stack`` when the stack is on the ladder — a declared
             tier that disagrees is reported in ``warnings``, never obeyed (#257).
@@ -484,6 +485,24 @@ HEAL_MODES = ("fix", "notify")
 # Detect-and-defer boundary values, frozen in the marker contract and mirrored
 # by project-init's descriptor schema enum (marker contract case H1).
 CONTEXT_VALUES = ("repo", "ambient")
+
+
+def _plugin_version(raw: dict[str, Any], project: dict[str, Any]) -> str:
+    """The plugin version the last ``project-init upgrade`` installed (#212).
+
+    Two copies exist. ``scaffold.variables`` is the record ``upgrade`` has always
+    rewritten. The visible ``project:`` field was frozen at render time until
+    project-init#1019, so a repo not upgraded since then shows a stale value:
+    measured 2026-09-19, 6 of 7 governed repos disagreed, one reading 0.1.0
+    against a recorded 0.9.16. The record wins when present, so ``upgrade-plan``
+    compares what is actually installed. Since #1019 one value writes both.
+    """
+    scaffold = raw.get("scaffold")
+    variables = scaffold.get("variables") if isinstance(scaffold, dict) else None
+    recorded = variables.get("project_init_plugin_version") if isinstance(variables, dict) else None
+    if isinstance(recorded, str) and recorded.strip():
+        return recorded.strip()
+    return str(project.get("project_init_plugin_version") or "unknown")
 
 
 def _extract_heal_mode(raw: dict[str, Any], warnings: list[str]) -> str:
@@ -774,7 +793,7 @@ def parse_config(text: str, project_dir: Path, config_root: str = ".claude") -> 
         delivery=str(raw.get("delivery") or "unknown"),
         contract_version=contract_version,
         project_init_version=str(project.get("project_init_version") or "unknown"),
-        project_init_plugin_version=str(project.get("project_init_plugin_version") or "unknown"),
+        project_init_plugin_version=_plugin_version(raw, project),
         memory_tier=memory_tier,
         memory_stack=memory_stack,
         memory_path=memory_path,

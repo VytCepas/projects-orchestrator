@@ -64,6 +64,30 @@ def _git(path: Path, *args: str) -> str | None:
     return result.stdout.strip() if result.ok else None
 
 
+def published_default_head(path: Path) -> str:
+    """The commit ``origin``'s default branch points at NOW; ``""`` when unknown.
+
+    Asked of the remote (``git ls-remote origin HEAD``), not read from the local
+    ``refs/remotes/origin/HEAD``. That ref is only as fresh as the last fetch, so
+    after another checkout pushes, a stale clone's HEAD would still match it and
+    a gate result for superseded code would pass as current (Codex on #293). The
+    arguments are constants, so no remote-supplied name reaches the shell string
+    :func:`_git` runs. Offline, unreachable or no ``origin``: ``""``.
+
+    Args:
+        path: The repository to ask.
+
+    Returns:
+        The full SHA, or ``""``.
+    """
+    listing = _git(path, "ls-remote", "origin", "HEAD")
+    for line in (listing or "").splitlines():
+        sha, _, ref = line.partition("\t")
+        if ref == "HEAD" and len(sha) == 40:
+            return sha
+    return ""
+
+
 def _ahead_behind(path: Path) -> tuple[int | None, int | None]:
     """Return (ahead, behind) relative to upstream, or (None, None)."""
     counts = _git(path, "rev-list", "--left-right", "--count", "@{upstream}...HEAD")
