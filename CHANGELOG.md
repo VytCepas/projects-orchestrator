@@ -18,6 +18,14 @@ version's only source. `tests/test_version.py` fails when they disagree.
 - The never-raise contract is tested module by module (#243). The nightly fuzz
   gate now explores inputs rather than passing on none (#245).
 - `tech-debt` and `spike` are first-class issue types (#250).
+- `--verbose` (or `PROJECTS_ORCHESTRATOR_VERBOSE=1`) logs every error a
+  degraded path swallowed, and `upgrade-plan` names the reason for each
+  `unknown` row. An unexpected internal error exits 70 with one line instead of
+  a traceback (#269).
+- A scheduled heal posts what it did, or why it failed, to `PO_HEAL_WEBHOOK`.
+  A clean pass posts nothing, and the healed PR stays a draft (#276).
+- The integration job runs real tests: the installed CLI over real git
+  repositories (#274).
 
 ### Changed
 
@@ -57,6 +65,9 @@ version's only source. `tests/test_version.py` fails when they disagree.
 - `doctor` called an explicit contract version of `0` absent (#265).
 - An installed git hook older than its tracked source read `ok`. It reads
   `stale` now, and `doctor`, the hardening checklist and `watch` report it (#272).
+- The URL guard let the IPv4-mapped cloud metadata address through on CPython
+  3.12.3. It now unwraps the mapped address itself. The nightly mutation job
+  copies every file the tests read (#273).
 
 ### Security
 
@@ -64,6 +75,8 @@ version's only source. `tests/test_version.py` fails when they disagree.
 - A symlinked descriptor is refused (#200). A redirection bypass is closed, and
   the projection no longer deletes unmanaged files (#203).
 - The Read-deny rules cover what the Bash guard already covers (#224).
+- A test fails when the shipped or tracked tree names a private upstream
+  repository; the shipped set is read from `pyproject.toml` (#267).
 
 ### Documentation
 
@@ -74,6 +87,9 @@ version's only source. `tests/test_version.py` fails when they disagree.
 - Installing and upgrading the tool itself:
   [docs/how-to/install-and-upgrade.md](docs/how-to/install-and-upgrade.md)
   (#191).
+- ADR citations say which repository owns the ADR, and a test fails on a
+  citation that resolves to no ADR (#266).
+- The descriptor contract no longer claims `config.yaml` is hash-covered (#275).
 
 ## [0.2.0] - 2026-07-13
 
