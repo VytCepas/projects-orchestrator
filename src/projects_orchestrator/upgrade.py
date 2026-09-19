@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from projects_orchestrator.adapters.generic import NO_DESCRIPTOR_WARNING
 from projects_orchestrator.checks import CheckResult
 from projects_orchestrator.descriptor import ProjectDescriptor, parse_scaffold_version
 from projects_orchestrator.drift import compute_drift
@@ -30,6 +31,9 @@ class UpgradeRow:
         status: ``ok`` (>= upstream) | ``outdated`` (behind) | ``unknown``.
         drift: Local scaffold-drift summary (``none`` / ``n files`` / ``-``).
         open_prs: Last-known open-PR count from the cache (``?`` when unprobed).
+        reason: Why ``status`` is ``unknown``; empty for every other status. The
+            cause was already known in-process and dropped at the row, so an
+            operator could not tell a plain repo from an offline ``gh`` (#185).
     """
 
     project: str
@@ -37,6 +41,7 @@ class UpgradeRow:
     status: str
     drift: str
     open_prs: str
+    reason: str = ""
 
 
 def plan_status(current: tuple[int, ...] | None, latest: tuple[int, ...] | None) -> str:
@@ -53,6 +58,29 @@ def plan_status(current: tuple[int, ...] | None, latest: tuple[int, ...] | None)
     if current is None or latest is None:
         return UNKNOWN
     return OK if current >= latest else OUTDATED
+
+
+def unknown_reason(
+    descriptor: ProjectDescriptor,
+    current: tuple[int, ...] | None,
+    latest: tuple[int, ...] | None,
+) -> str:
+    """Say why a row cannot be classified (pure); empty when it can.
+
+    The row's own cause wins over the fleet-wide one: an offline ``gh`` blanks
+    every row at once and clears on the next run, while a repo with no
+    descriptor stays unknown whatever upstream says.
+    """
+    if current is None:
+        if NO_DESCRIPTOR_WARNING in descriptor.warnings:
+            return "no project-init descriptor"
+        version = descriptor.project_init_version
+        if version == "unknown":
+            return "descriptor records no project_init_version"
+        return f"project_init_version {version!r} is not a comparable version"
+    if latest is None:
+        return "latest project-init release unknown (gh unavailable, unauthenticated or offline)"
+    return ""
 
 
 def _prs_cell(cached: dict[str, CheckResult] | None) -> str:
@@ -86,6 +114,7 @@ def build_row(
         status=plan_status(current, latest),
         drift=compute_drift(descriptor).summary,
         open_prs=_prs_cell(cached),
+        reason=unknown_reason(descriptor, current, latest),
     )
 
 

@@ -21,6 +21,7 @@ only the explicit ``cloud-status`` command makes the calls.
 from __future__ import annotations
 
 import json
+import logging
 import shlex
 import time
 import urllib.error
@@ -36,6 +37,8 @@ from projects_orchestrator.descriptor import DEPLOY_NONE, ProjectDescriptor
 from projects_orchestrator.gcloud_identity import gcloud_env
 from projects_orchestrator.runner import RunResult, run_command
 from projects_orchestrator.urlguard import guarded_opener, is_probe_safe
+
+_log = logging.getLogger(__name__)
 
 STATE_NONE = "none"
 STATE_DEPLOYED = "deployed"
@@ -130,7 +133,8 @@ def _loads(stdout: str) -> Any:
     """Parse JSON stdout, returning ``None`` on any problem."""
     try:
         return json.loads(stdout)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as exc:
+        _log.debug("unparseable JSON on stdout: %r", exc)
         return None
 
 
@@ -212,7 +216,8 @@ def probe_health(url: str, timeout: float = _HEALTH_TIMEOUT) -> str:
         if 300 <= exc.code < 400:
             return STATE_UNKNOWN
         return UNHEALTHY
-    except (urllib.error.URLError, OSError, ValueError):
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        _log.debug("health probe failed: %r", exc)
         return STATE_UNKNOWN
 
 
@@ -481,7 +486,8 @@ def _run_records(stdout: str) -> list[dict[str, Any]]:
     """Decode ``gh run list --json`` output to a list of run dicts (pure)."""
     try:
         data = json.loads(stdout)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as exc:
+        _log.debug("unparseable run list: %r", exc)
         return []
     if not isinstance(data, list):
         return []

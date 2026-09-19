@@ -21,6 +21,7 @@ from __future__ import annotations
 import contextlib
 import datetime as _dt
 import json
+import logging
 import os
 import subprocess
 from dataclasses import dataclass
@@ -33,6 +34,8 @@ from projects_orchestrator.naming import safe_component
 from projects_orchestrator.procs import pid_alive as _pid_alive
 from projects_orchestrator.procs import proc_start_ticks as _proc_start_ticks
 from projects_orchestrator.procs import terminate_group as _terminate_group
+
+_log = logging.getLogger(__name__)
 
 _STATE_DIRNAME = "projects-orchestrator"
 _RUN_SUBDIR = "run"
@@ -102,6 +105,7 @@ def _mem_available_bytes(meminfo: Path = Path("/proc/meminfo")) -> int | None:
     try:
         text = meminfo.read_text(encoding="utf-8")
     except OSError:
+        # expected: no /proc/meminfo off Linux: None means the floor is not enforced
         return None
     for line in text.splitlines():
         if line.startswith("MemAvailable:"):
@@ -125,7 +129,8 @@ def _read_record(project: str, path: Path) -> RunState | None:
     """Parse one recorded run state from ``path``; ``None`` on any problem."""
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        _log.debug("run state %s unreadable: %r", path, exc)
         return None
     if not isinstance(raw, dict):
         return None
@@ -140,13 +145,14 @@ def _read_record(project: str, path: Path) -> RunState | None:
             log_path=Path(str(raw.get("log_path", ""))),
             start_ticks=start_ticks,
         )
-    except (KeyError, TypeError, ValueError):
+    except (KeyError, TypeError, ValueError) as exc:
+        _log.debug("malformed run state %s: %r", path, exc)
         return None
 
 
 def _clear_state(project: str) -> None:
     """Remove one project's state file, ignoring failures."""
-    with contextlib.suppress(OSError):
+    with contextlib.suppress(OSError):  # expected: already gone, or never written
         _state_file(project).unlink(missing_ok=True)
 
 
@@ -174,10 +180,12 @@ def _record_death(state: RunState) -> None:
     seen" durable until :func:`liveness_check` reports it (exactly once), or
     until a restart supersedes it.
     """
-    with contextlib.suppress(OSError):
+    try:
         # Was a plain write_text — not atomic at all, so an interrupt left
         # partial JSON in the file that says whether a process is alive (#181).
         persist.locked_write(_died_file(state.project), _serialize(state))
+    except OSError as exc:
+        _log.debug("cannot record the death of %s: %r", state.project, exc)
     _clear_state(state.project)
 
 
@@ -185,7 +193,7 @@ def _consume_death(project: str) -> RunState | None:
     """Read and remove one project's death tombstone; ``None`` when there is none."""
     path = _died_file(project)
     record = _read_record(project, path)
-    with contextlib.suppress(OSError):
+    with contextlib.suppress(OSError):  # expected: already consumed, or never written
         path.unlink(missing_ok=True)
     return record
 
@@ -324,7 +332,7 @@ def start(descriptor: ProjectDescriptor) -> str:
     # A successful restart supersedes an unreported death: the operator who
     # relaunched the service does not need next hour's watch to tell them the
     # previous incarnation died.
-    with contextlib.suppress(OSError):
+    with contextlib.suppress(OSError):  # expected: there was no tombstone to supersede
         _died_file(descriptor.name).unlink(missing_ok=True)
     return f"{descriptor.name}: started (pid {state.pid}, log {log_path})"
 
@@ -362,7 +370,8 @@ def logs(descriptor: ProjectDescriptor, lines: int = DEFAULT_LOG_LINES) -> list[
     log_path = state.log_path if state is not None else _log_file(descriptor.name)
     try:
         text = log_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+    except OSError as exc:
+        _log.debug("cannot read run log %s: %r", log_path, exc)
         return [f"{descriptor.name}: no run log (never started?)"]
     tail = text.splitlines()[-max(1, lines) :]
     return tail or [f"{descriptor.name}: log is empty"]

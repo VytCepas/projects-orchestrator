@@ -30,6 +30,7 @@ the caller renders.
 from __future__ import annotations
 
 import functools
+import logging
 import subprocess
 import sys
 import tempfile
@@ -42,6 +43,8 @@ from projects_orchestrator import worktree as wt
 from projects_orchestrator.descriptor import ProjectDescriptor
 from projects_orchestrator.naming import safe_component
 from projects_orchestrator.procs import terminate_group
+
+_log = logging.getLogger(__name__)
 
 AGENT_TIMEOUT = 1800.0  # a real task may take many tool calls
 
@@ -143,7 +146,8 @@ def _default_agent(worktree: Path, prompt: str, log_path: Path, *, budget_usd: f
                 check=False,
                 env=sandbox.agent_env(home=home),
             )
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        _log.debug("agent CLI did not run: %r", exc)
         return False
     return proc.returncode == 0
 
@@ -304,14 +308,16 @@ def _read_marker(worktree: Path) -> str | None:
     """The NEEDS_HUMAN marker's stripped content, or ``None`` when it is absent."""
     try:
         return (worktree / briefing.NEEDS_HUMAN_MARKER).read_text(encoding="utf-8").strip()
-    except OSError:
+    except OSError as exc:
+        _log.debug("cannot read the marker in %s: %r", worktree, exc)
         return None
 
 
 def _read_prompt(run_id: str) -> str | None:
     try:
         return _prompt_path(run_id).read_text(encoding="utf-8")
-    except OSError:
+    except OSError as exc:
+        _log.debug("cannot read the prompt for run %s: %r", run_id, exc)
         return None
 
 
@@ -339,7 +345,8 @@ def logs(run_id: str, lines: int = DEFAULT_LOG_LINES) -> list[str]:
         return []
     try:
         text = Path(run.log_path).read_text(encoding="utf-8")
-    except OSError:
+    except OSError as exc:
+        _log.debug("cannot read run log %s: %r", run.log_path, exc)
         return []
     return text.splitlines()[-lines:]
 
@@ -416,10 +423,11 @@ def attach(project: str, *, session: AttachSession | None = None) -> runs.AgentR
     prompt = _read_prompt(run.id) or ""
     try:
         session(Path(run.worktree), prompt, run.detail)
-    except OSError:
+    except OSError as exc:
         # `claude` is not on PATH, or the worktree was pruned. Never raise (ADR-003):
         # return None so the CLI reports a clean error instead of a traceback. The
         # caller distinguishes this from "no run" by having checked needs_human_run.
+        _log.debug("cannot attach to run %s: %r", run.id, exc)
         return None
     return run
 

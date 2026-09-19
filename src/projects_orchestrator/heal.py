@@ -28,6 +28,7 @@ that can't fix the gate, or a push/PR failure all degrade to a
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 import tempfile
 import time
@@ -42,6 +43,8 @@ from projects_orchestrator.briefing import build_briefing, evidence_from_checks
 from projects_orchestrator.checks import CheckResult, collect_checks
 from projects_orchestrator.descriptor import ProjectDescriptor
 from projects_orchestrator.runner import RunResult
+
+_log = logging.getLogger(__name__)
 
 # Gates the heal loop can attempt: both are declared, locally-runnable
 # commands. ci/cloud are deliberately excluded — they probe remote state a
@@ -279,7 +282,8 @@ def _decode_agent_output(stdout: str) -> tuple[str, cost_mod.RunCost | None]:
     """
     try:
         payload = json.loads(stdout)
-    except ValueError:
+    except ValueError as exc:
+        _log.debug("agent output is not the JSON result object: %r", exc)
         return stdout.strip()[-500:], None
     if not isinstance(payload, dict):
         return stdout.strip()[-500:], None

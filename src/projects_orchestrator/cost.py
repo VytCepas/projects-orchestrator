@@ -30,9 +30,12 @@ log degrades to ``None``.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+
+_log = logging.getLogger(__name__)
 
 #: What an unknown cost looks like in any rendered surface. Deliberately not
 #: ``$0.00`` — see the module docstring.
@@ -191,6 +194,7 @@ def _scan(text: str) -> RunCost | None:
         try:
             payload, _ = decoder.raw_decode(text, index)
         except ValueError:
+            # expected: a brace that starts no JSON object only moves the backward search on
             payload = None
         found = from_payload(payload)
         if found is not None:
@@ -231,7 +235,8 @@ def parse_log(path: Path | str) -> RunCost | None:
         if found is None and size > _TAIL_BYTES:
             text, _ = _tail(target, _MAX_BYTES)
             found = _scan(text)
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        _log.debug("cannot read usage log %s: %r", target, exc)
         return None
     return found
 

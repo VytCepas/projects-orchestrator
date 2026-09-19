@@ -16,6 +16,7 @@ tell", which is honest; guessing ``pass`` would be a governance lie.
 from __future__ import annotations
 
 import json
+import logging
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -25,6 +26,8 @@ from projects_orchestrator.adapters.github import CI_FAIL, CI_RUNNING, CI_SUCCES
 from projects_orchestrator.checks import CheckResult
 from projects_orchestrator.descriptor import ProjectDescriptor
 from projects_orchestrator.urlguard import guarded_opener, is_probe_safe
+
+_log = logging.getLogger(__name__)
 
 _TIMEOUT = 15.0
 
@@ -149,11 +152,13 @@ def probe_status_url(descriptor: ProjectDescriptor, fetch: Fetcher | None = None
     fetcher = fetch or _urllib_fetch
     try:
         body = fetcher(descriptor.ci.status_url)
-    except (urllib.error.URLError, OSError, ValueError, TimeoutError):
+    except (urllib.error.URLError, OSError, ValueError, TimeoutError) as exc:
+        _log.debug("%s: status_url fetch failed: %r", descriptor.name, exc)
         return CI_UNKNOWN
     try:
         payload = json.loads(body)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as exc:
+        _log.debug("%s: status_url returned non-JSON: %r", descriptor.name, exc)
         return CI_UNKNOWN
     raw = _raw_status(payload, descriptor.ci.status_field)
     if raw is _MISSING:

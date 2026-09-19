@@ -14,11 +14,14 @@ rows it could parse.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
 from projects_orchestrator.descriptor import ProjectDescriptor
+
+_log = logging.getLogger(__name__)
 
 CAPABILITIES_RELPATH = Path(".claude/CAPABILITIES.md")
 
@@ -217,7 +220,8 @@ def load_capabilities(descriptor: ProjectDescriptor) -> ProjectCapabilities:
                 project=descriptor.name, path=path, warnings=("CAPABILITIES.md too large to read",)
             )
         text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+    except OSError as exc:
+        _log.debug("cannot read %s: %r", path, exc)
         return ProjectCapabilities(
             project=descriptor.name, path=path, warnings=("no CAPABILITIES.md",)
         )

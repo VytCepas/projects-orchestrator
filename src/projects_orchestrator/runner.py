@@ -115,6 +115,7 @@ def run_command(
     try:
         stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
+        # expected: the timeout is recorded on the result as timed_out=True
         _kill_tree(proc)
         stdout, stderr = _drain(proc)
         return RunResult(
@@ -136,9 +137,9 @@ def run_command(
 
 def _kill_tree(proc: subprocess.Popen[str]) -> None:
     """SIGKILL the timed-out command's whole process group, then the process."""
-    with contextlib.suppress(OSError):
+    with contextlib.suppress(OSError):  # expected: the group already exited
         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-    with contextlib.suppress(OSError):
+    with contextlib.suppress(OSError):  # expected: the process already exited
         proc.kill()
 
 
@@ -160,9 +161,10 @@ def _drain(proc: subprocess.Popen[str]) -> tuple[str, str]:
     try:
         stdout, stderr = proc.communicate(timeout=_DRAIN_TIMEOUT)
     except subprocess.TimeoutExpired:
+        # expected: the loss is reported in the returned stderr
         for pipe in (proc.stdout, proc.stderr):
             if pipe is not None:
-                with contextlib.suppress(OSError):
+                with contextlib.suppress(OSError):  # expected: the pipe is abandoned anyway
                     pipe.close()
         return "", "(output lost: a child survived the kill and held the pipe open)"
     return _decode(stdout), _decode(stderr)

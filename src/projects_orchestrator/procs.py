@@ -23,10 +23,13 @@ probe.
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import signal
 import time
 from pathlib import Path
+
+_log = logging.getLogger(__name__)
 
 
 def proc_start_ticks(pid: int) -> int | None:
@@ -40,13 +43,15 @@ def proc_start_ticks(pid: int) -> int | None:
     try:
         stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
     except OSError:
+        # expected: no /proc off Linux, or the process is gone: None means start time unknown
         return None
     try:
         # Field 22 (1-indexed) is starttime. comm (field 2) is parenthesized and
         # may contain spaces/parens, so parse the fields after the final ')'.
         after_comm = stat.rsplit(")", 1)[1].split()
         return int(after_comm[19])
-    except (IndexError, ValueError):
+    except (IndexError, ValueError) as exc:
+        _log.debug("unparseable /proc/%s/stat: %r", pid, exc)
         return None
 
 
@@ -68,17 +73,20 @@ def pid_alive(pid: int) -> bool:
     """
     if pid <= 0:
         return False
-    with contextlib.suppress(ChildProcessError, OSError):
+    with contextlib.suppress(ChildProcessError, OSError):  # expected: not our child to reap
         reaped, _ = os.waitpid(pid, os.WNOHANG)
         if reaped == pid:
             return False
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
+        # expected: no such process IS the answer: not alive
         return False
     except PermissionError:
+        # expected: the process exists under another owner IS the answer: alive
         return True
-    except OSError:
+    except OSError as exc:
+        _log.debug("kill(%s, 0) failed: %r", pid, exc)
         return False
     return True
 
@@ -120,6 +128,7 @@ def terminate_group(pid: int, grace: float) -> None:
     try:
         group = os.getpgid(pid)
     except OSError:
+        # expected: the process is gone or its group unreadable: signal the pid alone
         group = None
     if group is not None and group != pid:
         group = None
@@ -129,13 +138,14 @@ def terminate_group(pid: int, grace: float) -> None:
         else:
             os.kill(pid, signal.SIGTERM)
     except OSError:
+        # expected: already exited, so there is nothing left to terminate
         return
     deadline = time.monotonic() + grace
     while time.monotonic() < deadline:
         if not pid_alive(pid):
             return
         time.sleep(0.05)
-    with contextlib.suppress(OSError):
+    with contextlib.suppress(OSError):  # expected: it exited during the grace period
         if group is not None:
             os.killpg(group, signal.SIGKILL)
         else:

@@ -11,15 +11,18 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
+from conftest import _REPO, _tracked_top_level, touched_by, uncopied
 
 # The gate lives under .agents/scripts/ (it is CI tooling, not library code), so
 # it is loaded by path. It must be registered in sys.modules BEFORE exec_module:
 # it uses `from __future__ import annotations`, and @dataclass resolves those
 # string annotations by looking its own module up in sys.modules.
 _GATE = Path(__file__).parent.parent / ".agents" / "scripts" / "mutation_gate.py"
+_PYPROJECT = Path(__file__).resolve().parents[1] / "pyproject.toml"
 _spec = importlib.util.spec_from_file_location("mutation_gate", _GATE)
 assert _spec and _spec.loader
 mutation_gate = importlib.util.module_from_spec(_spec)
@@ -131,22 +134,44 @@ def test_main_exits_nonzero_on_a_real_failing_run(tmp_path: Path) -> None:
 # --- The coupling that only breaks at 3am --------------------------------------
 
 
-def test_the_gate_script_is_copied_into_mutmuts_test_tree() -> None:
-    """mutmut runs pytest from a COPY of the tree (`mutants/`), so this test file
-    can only find the gate script if `[tool.mutmut] also_copy` brings it along.
+def test_also_copy_names_only_tracked_top_level_paths() -> None:
+    """The runtime guard in conftest.py checks what each test reads against
+    `[tool.mutmut] also_copy`; this checks the list itself.
 
-    Without it, collection dies with FileNotFoundError and the whole nightly run
-    fails — the fix that made the gate honest would have been the thing that
-    stopped it running at all. That failure would surface only at 3am, in a
-    non-blocking job, which is to say: never. So it is pinned here, where it
-    breaks in the PR that breaks it.
-
-    Note it must be the DIRECTORY, not the file: mutmut's `copy_also_copy_files`
-    does `shutil.copy2` for a file entry and never creates the parent dirs.
+    Top-level names only: mutmut's `copy_also_copy_files` does `shutil.copy2`
+    for a file and never creates the parent dirs, so a nested file entry is
+    never copied. And every entry must be tracked, or it copies nothing.
     """
-    import tomllib
+    config = tomllib.loads(_PYPROJECT.read_text(encoding="utf-8"))
+    also_copy = {entry.rstrip("/") for entry in config["tool"]["mutmut"]["also_copy"]}
+    assert sorted(entry for entry in also_copy if "/" in entry) == [], "nested entry"
+    assert sorted(also_copy - _tracked_top_level()) == [], "also_copy names an untracked path"
 
-    pyproject = Path(__file__).parent.parent / "pyproject.toml"
-    config = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-    also_copy = config["tool"]["mutmut"]["also_copy"]
-    assert str(_GATE.parent.relative_to(pyproject.parent)) in also_copy
+
+def test_a_read_is_placed_by_the_path_it_resolves_to_not_by_how_it_was_spelled() -> None:
+    """The first version of this guard matched quoted names in test sources, so
+    a path built at runtime was missed and a name in a comment looked live."""
+    computed = _REPO.joinpath("".join(["LI", "CENSE"]))
+    assert touched_by("open", (str(computed), "r", 0)) == {"LICENSE"}
+    assert touched_by("os.scandir", (str(_REPO / "docs" / "reference"),)) == {"docs"}
+    assert touched_by(
+        "subprocess.Popen", ("/bin/sh", ["/bin/sh", str(_REPO / "contrib" / "x.sh")], None, None)
+    ) == {"contrib"}
+    assert touched_by(
+        "subprocess.Popen",
+        ("/usr/bin/git", ["/usr/bin/git", "status"], str(_REPO / ".github"), None),
+    ) == {".github"}
+
+
+def test_what_cannot_be_placed_under_the_repo_is_not_counted() -> None:
+    assert touched_by("open", ("/etc/hosts", "r", 0)) == set()
+    # `os.open` with no mode may be relative to a directory fd, as in shutil.rmtree.
+    assert touched_by("open", (".claude", None, 0)) == set()
+    assert touched_by("os.scandir", (3,)) == set()
+    assert touched_by("exec", (str(_REPO / "LICENSE"),)) == set()
+
+
+def test_only_tracked_names_mutmut_will_not_copy_are_reported() -> None:
+    # README.md is in also_copy, src/ is copied by mutmut itself, .venv is not
+    # tracked, and LICENSE is tracked and not copied.
+    assert uncopied({"LICENSE", "README.md", "src", ".venv"}) == ["LICENSE"]

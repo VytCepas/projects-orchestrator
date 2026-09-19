@@ -19,12 +19,15 @@ network must not look like a contract change (epic #68 / #106).
 from __future__ import annotations
 
 import json
+import logging
 import urllib.error
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+_log = logging.getLogger(__name__)
 
 # Where project-init publishes the machine-readable contract it ships
 # (VytCepas/project-init#603, packaged via #786).
@@ -177,6 +180,7 @@ def _version(text: str) -> tuple[int, ...] | None:
     try:
         return tuple(int(p) for p in parts)
     except ValueError:
+        # expected: an unparseable version IS the answer: None means not comparable
         return None
 
 
@@ -246,7 +250,8 @@ def load_vendored_schema(path: Path) -> Any:
     """Read the vendored schema; ``None`` when unreadable."""
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        _log.debug("vendored schema %s unreadable: %r", path, exc)
         return None
 
 
@@ -255,5 +260,6 @@ def fetch_upstream_schema(fetch: Fetcher | None = None) -> Any:
     fetcher = fetch or _urllib_fetch
     try:
         return json.loads(fetcher(UPSTREAM_SCHEMA_URL))
-    except (urllib.error.URLError, OSError, ValueError, TimeoutError):
+    except (urllib.error.URLError, OSError, ValueError, TimeoutError) as exc:
+        _log.debug("upstream schema fetch failed: %r", exc)
         return None

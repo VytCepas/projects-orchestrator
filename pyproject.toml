@@ -49,8 +49,13 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# tests/integration/ runs in CI's own "Integration tests" job, which names the
+# directory explicitly (an explicit path overrides --ignore). Ignoring it here
+# keeps the unit run and mutmut from running those subprocess tests a second time.
+addopts = "--ignore=tests/integration"
 markers = [
     "inspects_agent_launch: exercises _default_agent_run itself (must stub subprocess.run); exempt from the no-live-agent fixture",
+    "reads_the_checkout: reads files through git's top level, which under mutmut is the original checkout, not mutants/; exempt from the mutmut copy check",
 ]
 
 # The version lives in ONE place, __init__.py, and hatch reads it at build time
@@ -80,15 +85,24 @@ packages = ["src/projects_orchestrator"]
 [tool.mutmut]
 source_paths = ["src/projects_orchestrator"]
 # mutmut copies the tree into `mutants/` and runs pytest FROM THERE, so anything
-# the tests open by path must be copied too. Without this, test_mutation_gate.py
-# — which loads the gate script from .agents/scripts/ — dies with FileNotFoundError
-# at COLLECTION, taking the whole nightly run down with it. i.e. the fix that made
-# the gate honest would have been the thing that stopped it running at all.
-# NOTE: a DIRECTORY, not the file. mutmut's copy_also_copy_files does
-# `shutil.copy2(path, "mutants"/path)` for a file — and never creates the parent
-# dirs, so a nested file entry fails while a directory entry (copytree, which does
-# makedirs) works. Verified, not assumed.
-also_copy = [".agents/scripts"]
+# the tests open by path must be copied too, or the clean run dies with
+# FileNotFoundError and the nightly never mutates anything (#253: README.md,
+# eleven red nights). Top-level names only: mutmut's copy_also_copy_files does
+# `shutil.copy2(path, "mutants"/path)` for a file and never creates the parent
+# dirs, so a nested file entry fails while a directory entry (copytree) works.
+# tests/test_mutation_gate.py derives the required set from the tree, so a test
+# that starts reading a new top-level path fails in its own PR, not at 3am.
+also_copy = [
+    ".agents",
+    ".github",
+    "AGENTS.md",
+    "CHANGELOG.md",
+    "README.md",
+    "contrib",
+    "docs",
+    "justfile",
+    "schemas",
+]
 only_mutate = [
     "*/naming.py",
     "*/briefing.py",

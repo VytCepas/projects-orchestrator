@@ -12,8 +12,8 @@ Never raises: an unreadable or corrupt state file is treated as "no prior run"
 
 from __future__ import annotations
 
-import contextlib
 import json
+import logging
 import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -21,6 +21,8 @@ from pathlib import Path
 from projects_orchestrator import persist
 from projects_orchestrator.audit import AuditFinding, AuditReport
 from projects_orchestrator.doctor import OK
+
+_log = logging.getLogger(__name__)
 
 _STATE_DIRNAME = "projects-orchestrator"
 _DIGEST_FILENAME = "audit-digest.json"
@@ -126,7 +128,8 @@ def load_prior(path: Path | None = None) -> list[AuditFinding]:
     path = path or digest_path()
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        _log.debug("prior digest %s unreadable: %r", path, exc)
         return []
     if not isinstance(raw, dict) or not isinstance(raw.get("issues"), list):
         return []
@@ -144,5 +147,7 @@ def save_current(reports: list[AuditReport], path: Path | None = None) -> None:
     body = json.dumps({"issues": [asdict(f) for f in issues]}, indent=2)
     # Locked and fsynced via the shared helper (#181). The inline copy here was
     # atomic but unlocked and unsynced.
-    with contextlib.suppress(OSError, ValueError):
+    try:
         persist.locked_write(path, body)
+    except (OSError, ValueError) as exc:
+        _log.debug("cannot save digest %s: %r", path, exc)

@@ -33,8 +33,9 @@ WHAT IS REFUSED, AND WHAT DELIBERATELY IS NOT
 ---------------------------------------------
 
 - **Scheme**: ``http`` and ``https`` only. Everything else is refused.
-- **Link-local literals** (``169.254.0.0/16``, ``fe80::/10``, and — via the
-  stdlib's own handling, not ours — the IPv4-mapped spelling) are refused:
+- **Link-local literals** (``169.254.0.0/16``, ``fe80::/10``, and the
+  IPv4-mapped spelling ``::ffff:169.254.169.254``, unwrapped by this module) are
+  refused:
   ``169.254.169.254`` is the AWS/GCP instance-metadata endpoint, and this fleet
   runs on machines that may hold cloud credentials (project-init ADR-012).
 - **Numeric-looking hosts that are not strict literals**, and **any host
@@ -86,17 +87,23 @@ _HEX_HOST = re.compile(r"0[xX][0-9a-fA-F]+")
 def _literal_host(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
     """Parse ``host`` as an IP literal; ``None`` when it is not one (pure).
 
-    This carried an IPv4-mapped unwrap (``::ffff:169.254.169.254`` →
-    ``169.254.169.254``) on the assumption that
-    :attr:`IPv6Address.is_link_local` tests only ``fe80::/10``. **That was
-    wrong** — the stdlib already reports the mapped address's verdict, so the
-    unwrap was dead code and a mutation test proved it: deleting it changed no
-    test outcome. Removed rather than kept as reassurance.
+    An IPv4-mapped IPv6 literal (``::ffff:169.254.169.254``) is returned as the
+    IPv4 address it maps, so the link-local verdict is the IPv4 one on every
+    interpreter. The stdlib cannot be relied on for this: newer patch releases
+    report the mapped address's IPv4 verdict from
+    :attr:`IPv6Address.is_link_local`, but CPython 3.12.3 answers ``False`` for
+    ``::ffff:169.254.169.254``. Measured, and it was a nightly CI failure: an
+    earlier version of this function dropped the unwrap as dead code because
+    the interpreter it was tested on already gave the right answer.
     """
     try:
-        return ipaddress.ip_address(host)
+        address = ipaddress.ip_address(host)
     except ValueError:
+        # expected: not an IP literal: None means a hostname
         return None
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        return address.ipv4_mapped
+    return address
 
 
 def is_probe_safe(url: str) -> bool:
@@ -126,6 +133,7 @@ def is_probe_safe(url: str) -> bool:
     except ValueError:
         # Malformed authority — an unbracketed IPv6 literal, a port that is not
         # a number or is out of range. Refuse rather than guess at the intent.
+        # expected: a malformed authority is refused, which is the guard's answer
         return False
     if scheme not in _ALLOWED_SCHEMES:
         return False
