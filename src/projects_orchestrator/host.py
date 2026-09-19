@@ -29,10 +29,10 @@ from __future__ import annotations
 
 import logging
 import os
+import selectors
 import shlex
 import signal
 import subprocess
-import threading
 import time
 from pathlib import Path
 from typing import IO, cast
@@ -67,6 +67,28 @@ def _kill_session(proc: subprocess.Popen[bytes]) -> None:
         proc.kill()
 
 
+def _read_capped(stdout: IO[bytes], deadline: float) -> bytes | None:
+    """Read stdout until EOF or :data:`_MAX_OUTPUT_BYTES`; ``None`` past the deadline.
+
+    One thread and a selector, not a blocking reader thread: a thread blocked in
+    ``read`` holds the buffer's lock, so closing the pipe afterwards waited for
+    whatever still held its other end, such as a reporter's orphaned child,
+    and the timeout stopped bounding the call.
+    """
+    buf = bytearray()
+    with selectors.DefaultSelector() as selector:
+        selector.register(stdout, selectors.EVENT_READ)
+        while len(buf) < _MAX_OUTPUT_BYTES:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not selector.select(remaining):
+                return None
+            chunk = os.read(stdout.fileno(), _MAX_OUTPUT_BYTES - len(buf))
+            if not chunk:
+                break
+            buf += chunk
+    return bytes(buf)
+
+
 def _run_capped(argv: list[str], timeout: float) -> tuple[int | None, bytes]:
     """Run ``argv`` in its own session, holding at most :data:`_MAX_OUTPUT_BYTES` of stdout.
 
@@ -85,24 +107,18 @@ def _run_capped(argv: list[str], timeout: float) -> tuple[int | None, bytes]:
         start_new_session=True,
     )
     stdout = cast("IO[bytes]", proc.stdout)  # stdout=PIPE always sets it
-    out: list[bytes] = []
-    reader = threading.Thread(
-        target=lambda: out.append(stdout.read(_MAX_OUTPUT_BYTES)), daemon=True
-    )
-    reader.start()
     try:
-        reader.join(max(0.0, deadline - time.monotonic()))
-        if reader.is_alive():
+        raw = _read_capped(stdout, deadline)
+        if raw is None:
             raise subprocess.TimeoutExpired(argv, timeout)
         code = proc.wait(timeout=max(0.0, deadline - time.monotonic()))
     except subprocess.TimeoutExpired:
         _kill_session(proc)
         proc.wait()
-        reader.join(1.0)
         return None, b""
     finally:
         stdout.close()
-    return code, out[0] if out else b""
+    return code, raw
 
 
 def host_health(command: str, timeout: float = HOST_TIMEOUT) -> str:

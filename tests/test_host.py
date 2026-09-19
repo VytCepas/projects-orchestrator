@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import signal
 import time
 from pathlib import Path
 
@@ -83,13 +85,17 @@ def test_a_timeout_kills_the_reporters_children(tmp_path: Path) -> None:
     command = _reporter(tmp_path, f"sleep 30 &\necho $! > {pid_file}\nexec sleep 30\n")
     assert host_health(command, timeout=0.5) == HOST_UNKNOWN
     child = int(pid_file.read_text(encoding="utf-8"))
-    for _ in range(200):  # a bounded number of polls, not a clock reading
-        try:
-            os.kill(child, 0)
-        except ProcessLookupError:
-            return
-        time.sleep(0.01)  # the orphan is reparented; give its reaper a moment
-    pytest.fail(f"the reporter's child {child} survived the timeout")
+    try:
+        for _ in range(200):  # a bounded number of polls, not a clock reading
+            try:
+                os.kill(child, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.01)  # the orphan is reparented; give its reaper a moment
+        pytest.fail(f"the reporter's child {child} survived the timeout")
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(child, signal.SIGKILL)  # expected: already dead unless the test failed
 
 
 def test_a_long_line_is_cut_to_one_tile() -> None:
