@@ -10,7 +10,9 @@ that had no first section, and an audit spent effort looking for it.
 So a citation takes one of two forms, and this test enforces it:
 
 - ``ADR-NNN`` — resolves to ``.agents/docs/adr/adr-NNN-*.md`` in this repo;
-- ``project-init ADR-NNN`` — names the repo whose decision it is.
+- ``project-init ADR-NNN`` — resolves to a row of ``.agents/docs/adr/UPSTREAM.md``,
+  which names the upstream file. Accepting any qualified number would let a typo
+  point at nothing, so the qualifier alone is not enough.
 
 Files project-init renders (the scaffold-managed set in ``.upgrade-base.json``,
 and the descriptor) cite project-init's numbering in project-init's own words and
@@ -30,9 +32,13 @@ import pytest
 
 _ROOT = Path(__file__).resolve().parents[1]
 _ADR_DIR = _ROOT / ".agents" / "docs" / "adr"
+_INDEX = ".agents/docs/adr/UPSTREAM.md"
 
 _CITATION = re.compile(r"ADR-(\d{3})\b")
 _UPSTREAM = "project-init "
+_INDEX_ROW = re.compile(
+    r"^\| project-init ADR-(\d{3}) \| `adr-(\d{3})-[a-z0-9-]+\.md` \|", flags=re.MULTILINE
+)
 
 #: Tracked paths not scanned, each with the reason. Scaffold-managed files are
 #: derived from the upgrade base and never listed here.
@@ -50,15 +56,33 @@ _EXEMPT: dict[str, str] = {
 _UPGRADE_BASES = (".agents/.upgrade-base.json", ".claude/.upgrade-base.json")
 
 
-def phantoms(text: str, local: set[str]) -> list[tuple[int, str]]:
-    """``(line, number)`` for each citation that is neither local nor qualified."""
-    found = []
-    for match in _CITATION.finditer(text):
-        number = match.group(1)
-        if number in local or text[: match.start()].endswith(_UPSTREAM):
-            continue
-        found.append((text.count("\n", 0, match.start()) + 1, number))
-    return found
+def citations(text: str) -> list[tuple[int, str, bool]]:
+    """``(line, number, qualified)`` for every ADR citation in ``text``."""
+    return [
+        (
+            text.count("\n", 0, match.start()) + 1,
+            match.group(1),
+            text[: match.start()].endswith(_UPSTREAM),
+        )
+        for match in _CITATION.finditer(text)
+    ]
+
+
+def phantoms(text: str, local: set[str], upstream: set[str]) -> list[tuple[int, str]]:
+    """``(line, citation)`` for each citation that resolves to nothing."""
+    return [
+        (line, f"{_UPSTREAM if qualified else ''}ADR-{number}")
+        for line, number, qualified in citations(text)
+        if number not in (upstream if qualified else local)
+    ]
+
+
+def upstream_index(text: str) -> set[str]:
+    """The numbers ``UPSTREAM.md`` records, each row naming its own file."""
+    rows = _INDEX_ROW.findall(text)
+    mismatched = [(cited, filed) for cited, filed in rows if cited != filed]
+    assert not mismatched, f"UPSTREAM.md rows naming another ADR's file: {mismatched}"
+    return {cited for cited, _ in rows}
 
 
 def _tracked() -> list[str]:
@@ -82,63 +106,88 @@ def _managed() -> set[str]:
 
 
 @pytest.fixture(scope="module")
-def tracked() -> list[str]:
+def scanned() -> dict[str, str]:
+    """Path -> text for every tracked, authored-here text file."""
     # mutmut runs the suite from a copy of the tree with no ADR directory and no
     # git index of its own; there is nothing to scan there, so say so.
     files = _tracked()
     if not _ADR_DIR.is_dir() or not files:
         pytest.skip("not a git checkout of this repo (e.g. mutmut's mutants/ copy)")
-    return files
-
-
-def test_every_cited_adr_resolves_here_or_names_its_repo(tracked: list[str]) -> None:
-    local = _local_adrs()
+    stale = sorted(set(_EXEMPT) - set(files))
+    assert not stale, f"exemptions for untracked paths: {stale}"
     skip = _managed() | set(_EXEMPT)
-    bad = []
-    scanned = 0
-    for path in tracked:
+    texts = {}
+    for path in files:
         if path in skip:
             continue
         try:
-            text = (_ROOT / path).read_text(encoding="utf-8")
+            texts[path] = (_ROOT / path).read_text(encoding="utf-8")
         except (UnicodeDecodeError, FileNotFoundError, IsADirectoryError):
             continue
-        scanned += 1
-        bad += [f"{path}:{line}: ADR-{number}" for line, number in phantoms(text, local)]
-    assert scanned > 50, f"scanned only {scanned} files — the listing is broken, not clean"
+    assert len(texts) > 50, f"scanned only {len(texts)} files — the listing is broken, not clean"
+    return texts
+
+
+def test_every_cited_adr_resolves_here_or_upstream(scanned: dict[str, str]) -> None:
+    local = _local_adrs()
+    upstream = upstream_index(scanned[_INDEX])
+    bad = [
+        f"{path}:{line}: {citation}"
+        for path, text in scanned.items()
+        for line, citation in phantoms(text, local, upstream)
+    ]
     assert not bad, (
-        "ADR cited with no file in .agents/docs/adr/ — write the ADR, or, if the "
-        "decision is project-init's, cite it as 'project-init ADR-NNN':\n  " + "\n  ".join(bad)
+        "ADR cited that resolves to nothing. Write the ADR in .agents/docs/adr/, or, if "
+        f"the decision is project-init's, cite it as 'project-init ADR-NNN' with a row in "
+        f"{_INDEX}:\n  " + "\n  ".join(bad)
     )
 
 
-def test_the_scan_sees_local_adrs_and_they_exist(tracked: list[str]) -> None:
-    # Control: a scanner that matched nothing would pass the test above on any tree.
+def test_every_upstream_row_is_cited(scanned: dict[str, str]) -> None:
+    # A row nothing cites is an index entry nobody re-reads.
+    upstream = upstream_index(scanned[_INDEX])
+    cited = {
+        number
+        for path, text in scanned.items()
+        if path != _INDEX
+        for _, number, qualified in citations(text)
+        if qualified
+    }
+    assert upstream, "UPSTREAM.md has no rows — the row pattern no longer matches the table"
+    assert not upstream - cited, f"UPSTREAM.md rows cited nowhere: {sorted(upstream - cited)}"
+
+
+def test_the_scan_sees_local_citations(scanned: dict[str, str]) -> None:
+    # Control: a scanner that matched nothing would pass the tests above on any tree.
     local = _local_adrs()
     assert {"003", "006", "007"} <= local
-    cited = set()
-    for path in tracked:
-        if path.startswith("src/") and path.endswith(".py"):
-            cited |= set(_CITATION.findall((_ROOT / path).read_text(encoding="utf-8")))
+    cited = {
+        number
+        for path, text in scanned.items()
+        if path.startswith("src/")
+        for _, number, _ in citations(text)
+    }
     assert {"003", "006", "007"} <= cited
-
-
-def test_every_exemption_names_a_tracked_path(tracked: list[str]) -> None:
-    # An exemption for a path that is gone is a decision nobody is re-reading.
-    stale = sorted(set(_EXEMPT) - set(tracked))
-    assert not stale, f"exemptions for untracked paths: {stale}"
 
 
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
         ("see ADR-003 for the engine", []),
-        ("per ADR-025 §4, degrade by tier", [(1, "025")]),
+        ("per ADR-025 §4, degrade by tier", [(1, "ADR-025")]),
         ("per project-init ADR-025 §4", []),
-        ("line one\nADR-003 / ADR-012 boundary", [(2, "012")]),
+        ("per project-init ADR-251, a typo", [(1, "project-init ADR-251")]),
+        ("line one\nADR-003 / ADR-012 boundary", [(2, "ADR-012")]),
         ("ADR-003 / project-init ADR-012 boundary", []),
-        ("the project-init\nADR-012 wrapped across a line", [(2, "012")]),
+        ("the project-init\nADR-012 wrapped across a line", [(2, "ADR-012")]),
+        ("project-init ADR-003 is not this repo's ADR-003", [(1, "project-init ADR-003")]),
     ],
 )
 def test_phantoms(text: str, expected: list[tuple[int, str]]) -> None:
-    assert phantoms(text, {"003"}) == expected
+    assert phantoms(text, {"003"}, {"012", "025"}) == expected
+
+
+def test_an_index_row_must_name_its_own_file() -> None:
+    row = "| project-init ADR-012 | `adr-017-per-surface-config-generator.md` | x |\n"
+    with pytest.raises(AssertionError, match="another ADR's file"):
+        upstream_index(row)
