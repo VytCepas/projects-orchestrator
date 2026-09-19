@@ -4,6 +4,9 @@ Goal-oriented recipes for someone already working with the project: "How do
 I X?" Each guide solves one real problem, assumes basic familiarity, and
 skips teaching.
 
+- [Install and upgrade the orchestrator itself](install-and-upgrade.md) — from a
+  checkout, and why a pull is not an upgrade until the tool is reinstalled. Not
+  `upgrade-plan`, which upgrades the child projects.
 - [Watch the fleet on a schedule](scheduled-watch.md) — hourly, refresh the
   gates, record the trend, and push threshold alerts the moment they appear.
   Linux/systemd; nothing schedules it on macOS.
