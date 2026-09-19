@@ -220,15 +220,55 @@ def test_the_env_toggle_is_the_flag(
     assert "Traceback (most recent call last)" in capsys.readouterr().err
 
 
-def test_a_closed_pipe_is_not_an_internal_error(
-    fleet_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    def _reader_went_away(_args: object) -> int:
+class _BrokenStdout(io.StringIO):
+    """Stdout whose reader went away: every flush raises, as a real closed pipe does."""
+
+    def flush(self) -> None:
         raise BrokenPipeError(32, "Broken pipe")
 
+
+def _reader_went_away(_args: object) -> int:
+    raise BrokenPipeError(32, "Broken pipe")
+
+
+def test_a_closed_stdout_exits_quietly_and_redirects_only_at_exit(
+    fleet_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registered: list[object] = []
     monkeypatch.setattr(cli, "_cmd_projects", _reader_went_away)
+    monkeypatch.setattr(cli.sys, "stdout", _BrokenStdout())
+    monkeypatch.setattr(cli.atexit, "register", registered.append)
+    monkeypatch.setattr(cli, "_silence_stdout", _not_before_exit)
     assert main(["projects", "--root", str(fleet_dir)]) == 1
-    assert capsys.readouterr().err == ""
+    assert (capsys.readouterr().err, registered) == ("", [_not_before_exit])
+
+
+def _not_before_exit() -> None:
+    raise AssertionError("fd 1 was redirected while the caller's process still runs")
+
+
+def test_a_reader_that_leaves_after_the_last_write_is_caught_in_main_too(
+    fleet_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The usual `… | head` case: every write fits the buffer and the pipe breaks
+    # only at the flush. Left to the interpreter's exit flush, that is
+    # "Exception ignored" and exit 120, after main() can classify anything.
+    make_project(fleet_dir, "alpha")
+    registered: list[object] = []
+    monkeypatch.setattr(cli.sys, "stdout", _BrokenStdout())
+    monkeypatch.setattr(cli.atexit, "register", registered.append)
+    assert main(["projects", "--root", str(fleet_dir)]) == 1
+    assert (capsys.readouterr().err, len(registered)) == ("", 1)
+
+
+def test_another_pipe_breaking_is_a_real_fault(
+    fleet_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # stdout flushes fine, so the broken pipe was a subprocess's or a socket's:
+    # waving it through as `… | head` would hide a bug behind a quiet exit 1.
+    monkeypatch.setattr(cli, "_cmd_projects", _reader_went_away)
+    assert main(["projects", "--root", str(fleet_dir)]) == EXIT_INTERNAL_ERROR
+    assert "internal error in 'projects': BrokenPipeError" in capsys.readouterr().err
 
 
 def test_a_usage_error_still_exits_2_through_argparse() -> None:
@@ -323,6 +363,32 @@ def test_a_handler_the_host_attached_to_the_package_logger_is_set_aside(
         logger.setLevel(saved_level)
     loud = capsys.readouterr().err
     assert (collect.records, attached_after, "debug:" in loud) == ([], True, True)
+
+
+def test_a_handler_the_host_attached_to_a_module_logger_is_set_aside_too(
+    fleet_dir: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A module logger's handlers run BEFORE the record reaches the package
+    # logger, so isolating only the package would still leak (Codex on #269).
+    fleet = _plain_repo_fleet(fleet_dir)
+    drift_log, collect = logging.getLogger("projects_orchestrator.drift"), _Collect()
+    before = (drift_log.level, drift_log.propagate)
+    drift_log.addHandler(collect)
+    drift_log.setLevel(logging.WARNING)
+    drift_log.propagate = False
+    try:
+        main(["snapshot", "--fleet", str(fleet)])
+        main(["snapshot", "--fleet", str(fleet), "--verbose"])
+        after = (collect in drift_log.handlers, drift_log.level, drift_log.propagate)
+    finally:
+        drift_log.removeHandler(collect)
+        drift_log.setLevel(before[0])
+        drift_log.propagate = before[1]
+    loud = capsys.readouterr().err
+    # The host's WARNING level and propagate=False must not hide drift's trail
+    # from --verbose either: during the run the package owns the whole tree.
+    assert "debug: projects_orchestrator.drift:" in loud
+    assert (collect.records, after) == ([], (True, logging.WARNING, False))
 
 
 def test_main_hands_the_package_logger_back_as_it_found_it(

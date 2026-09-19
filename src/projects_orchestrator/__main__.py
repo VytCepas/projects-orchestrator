@@ -9,6 +9,7 @@ interactively (``controller`` REPL / ``tui``). Every data command takes
 from __future__ import annotations
 
 import argparse
+import atexit
 import contextlib
 import datetime as _dt
 import json
@@ -1870,40 +1871,59 @@ def _verbose(args: argparse.Namespace) -> bool:
     return os.environ.get(VERBOSE_ENV, "").strip().lower() in _TRUTHY
 
 
+_PACKAGE_LOGGER = "projects_orchestrator"
+
+
+def _package_loggers() -> list[logging.Logger]:
+    """The package logger and every module logger under it that exists so far."""
+    prefix = f"{_PACKAGE_LOGGER}."
+    children = [
+        logger
+        for name, logger in list(logging.Logger.manager.loggerDict.items())
+        if name.startswith(prefix) and isinstance(logger, logging.Logger)
+    ]
+    return [logging.getLogger(_PACKAGE_LOGGER), *children]
+
+
 @contextlib.contextmanager
 def _diagnostic_trail(verbose: bool) -> Iterator[None]:
     """Own the package's debug records for one command, then hand them back.
 
-    Degraded paths log at DEBUG. While a command runs, the package logger stops
-    propagating and sets aside any handler already attached to it. A host
-    process that configured the root logger, or this logger directly, at DEBUG
-    then neither sees the trail on a quiet run nor prints each line twice on a
-    verbose one (Codex on #269). Quiet: no handler at all, so a default run
+    Degraded paths log at DEBUG. While a command runs, every logger in the
+    package, the module loggers included, sets aside the handlers a host
+    attached to it and defers to the package logger, which stops propagating.
+    A host that configured logging at DEBUG, on the root, the package or any one
+    module, then neither sees the trail on a quiet run nor prints each line twice
+    on a verbose one (Codex on #269). Quiet: no handler at all, so a default run
     prints exactly what it did before the seam existed. Verbose: one stderr
     handler. Everything is restored on the way out, so a repeated ``main()``
-    never stacks a second handler and an embedding caller gets its logger back.
+    never stacks a second handler and an embedding caller gets its loggers back.
     """
-    logger = logging.getLogger("projects_orchestrator")
-    saved_level, saved_propagate = logger.level, logger.propagate
-    saved_handlers = list(logger.handlers)
-    for existing in saved_handlers:
-        logger.removeHandler(existing)
+    loggers = _package_loggers()
+    saved = [(lg, list(lg.handlers), lg.level, lg.propagate) for lg in loggers]
+    for lg in loggers:
+        for existing in list(lg.handlers):
+            lg.removeHandler(existing)
+        lg.setLevel(logging.NOTSET)
+        lg.propagate = True
+    package = loggers[0]
+    package.propagate = False
     handler: logging.Handler | None = None
-    logger.propagate = False
     if verbose:
         handler = logging.StreamHandler(sys.stderr)
         handler.setFormatter(logging.Formatter("debug: %(name)s: %(message)s"))
-        logger.addHandler(handler)
-        logger.setLevel(logging.DEBUG)
+        package.addHandler(handler)
+        package.setLevel(logging.DEBUG)
     try:
         yield
     finally:
         if handler is not None:
-            logger.removeHandler(handler)
-        for existing in saved_handlers:
-            logger.addHandler(existing)
-        logger.setLevel(saved_level)
-        logger.propagate = saved_propagate
+            package.removeHandler(handler)
+        for lg, handlers, level, propagate in saved:
+            for existing in handlers:
+                lg.addHandler(existing)
+            lg.setLevel(level)
+            lg.propagate = propagate
 
 
 def _internal_error(command: str, exc: Exception, verbose: bool) -> int:
@@ -1919,11 +1939,36 @@ def _internal_error(command: str, exc: Exception, verbose: bool) -> int:
     return EXIT_INTERNAL_ERROR
 
 
+def _stdout_is_broken() -> bool:
+    """Whether the broken pipe is stdout's own, rather than some other pipe a command used.
+
+    After a failed write, flushing stdout raises again only when stdout itself lost
+    its reader. Any other ``BrokenPipeError`` (a subprocess's stdin, a socket) is a
+    real fault and must be reported, not waved through as ``… | head``.
+    """
+    try:
+        sys.stdout.flush()
+    except BrokenPipeError:
+        # expected: this IS the answer — stdout's reader went away
+        return True
+    except (OSError, ValueError) as exc:
+        _log.debug("cannot flush stdout: %r", exc)
+    return False
+
+
 def _silence_stdout() -> None:
-    """Point stdout at /dev/null so the interpreter's final flush cannot raise again."""
+    """At process exit, point fd 1 at /dev/null so the final flush cannot raise again.
+
+    Registered with :mod:`atexit` rather than run in place, so a caller embedding
+    ``main()`` keeps its stdout for as long as its process lives (Codex on #269).
+    """
     # expected: stdout is no real descriptor (captured, or closed), so nothing is left to flush
     with contextlib.suppress(OSError, ValueError):
-        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        try:
+            os.dup2(devnull, sys.stdout.fileno())
+        finally:
+            os.close(devnull)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1948,9 +1993,15 @@ def main(argv: list[str] | None = None) -> int:
     with _diagnostic_trail(verbose):
         try:
             exit_code: int = args.handler(args)
-        except BrokenPipeError:
-            # expected: the reader went away (`… | head`), and nothing is wrong with the command
-            _silence_stdout()
+            # Flush HERE, not at interpreter exit: a reader that went away
+            # (`… | head`) otherwise surfaces after main() has returned, as
+            # "Exception ignored" and exit 120, where nothing can classify it.
+            sys.stdout.flush()
+        except BrokenPipeError as exc:
+            if not _stdout_is_broken():
+                return _internal_error(args.command, exc, verbose)
+            # The reader went away (`… | head`): nothing is wrong with the command.
+            atexit.register(_silence_stdout)
             return 1
         except Exception as exc:  # noqa: BLE001 — the CLI boundary is where never-raise ends
             return _internal_error(args.command, exc, verbose)
