@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -131,22 +132,62 @@ def test_main_exits_nonzero_on_a_real_failing_run(tmp_path: Path) -> None:
 # --- The coupling that only breaks at 3am --------------------------------------
 
 
-def test_the_gate_script_is_copied_into_mutmuts_test_tree() -> None:
-    """mutmut runs pytest from a COPY of the tree (`mutants/`), so this test file
-    can only find the gate script if `[tool.mutmut] also_copy` brings it along.
+#: mutmut's own additions to ``also_copy`` (``mutmut/configuration.py``), plus
+#: the source tree it copies itself. Kept as a literal because the point of the
+#: guard is to fail in a PR, where mutmut is not installed.
+_MUTMUT_COPIES = frozenset({"src", "tests", "test", "setup.cfg", "pyproject.toml", "uv.lock"})
 
-    Without it, collection dies with FileNotFoundError and the whole nightly run
-    fails — the fix that made the gate honest would have been the thing that
-    stopped it running at all. That failure would surface only at 3am, in a
-    non-blocking job, which is to say: never. So it is pinned here, where it
-    breaks in the PR that breaks it.
+#: Tracked top-level names that tests quote WITHOUT reading the real one. Each
+#: needs a reason; an entry that no longer matches anything fails below.
+_NOT_READ_FROM_THE_TREE = {
+    ".claude": "tests build synthetic fleet repos with a .claude/ layout; none "
+    "reads this repo's own, and its untracked agent worktrees would be copied too",
+}
 
-    Note it must be the DIRECTORY, not the file: mutmut's `copy_also_copy_files`
-    does `shutil.copy2` for a file entry and never creates the parent dirs.
+
+def _tracked_top_level() -> set[str]:
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        ["git", "ls-files"], cwd=root, capture_output=True, text=True, check=True
+    )
+    return {line.split("/", 1)[0] for line in result.stdout.splitlines() if line}
+
+
+def _quoted_in_tests(names: set[str]) -> set[str]:
+    sources = [
+        path.read_text(encoding="utf-8")
+        for path in Path(__file__).resolve().parent.rglob("*.py")
+    ]
+    return {name for name in names if any(f'"{name}"' in text for text in sources)}
+
+
+def test_mutmuts_test_tree_carries_every_repo_path_a_test_names() -> None:
+    """mutmut runs pytest from a COPY of the tree (`mutants/`), and copies only
+    the source, `tests/` and what `[tool.mutmut] also_copy` names. A test that
+    opens a repo file mutmut did not copy fails there with FileNotFoundError,
+    and pytest's `-x` stops the whole nightly run at the first one.
+
+    It happened twice. The gate script under `.agents/scripts/` first; then the
+    README read by test_docs.py, which kept the nightly red for eleven days
+    while every PR stayed green (#253). The first fix pinned one path by hand,
+    so the second went unseen. This derives the set instead: every tracked
+    top-level name a test quotes must be copied, or exempted with a reason.
+    Over-copying a name a test only uses for a synthetic repo costs nothing.
+
+    Directory entries, not nested files: mutmut's `copy_also_copy_files` does
+    `shutil.copy2` for a file and never creates the parent dirs.
     """
     import tomllib
 
-    pyproject = Path(__file__).parent.parent / "pyproject.toml"
-    config = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-    also_copy = config["tool"]["mutmut"]["also_copy"]
-    assert str(_GATE.parent.relative_to(pyproject.parent)) in also_copy
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    also_copy = set(tomllib.loads(pyproject.read_text(encoding="utf-8"))["tool"]["mutmut"]["also_copy"])
+    assert not {entry for entry in also_copy if "/" in entry and not entry.endswith("/")}, (
+        "also_copy entries must be top-level names; a nested file is never copied"
+    )
+    copied = {entry.rstrip("/") for entry in also_copy} | _MUTMUT_COPIES
+    tracked = _tracked_top_level()
+    needed = _quoted_in_tests(tracked) - set(_NOT_READ_FROM_THE_TREE)
+    assert sorted(needed - copied) == [], "add these to [tool.mutmut] also_copy"
+    stale = {name for name in _NOT_READ_FROM_THE_TREE if name not in _quoted_in_tests(tracked)}
+    assert sorted(stale) == [], "exemption no longer matches a quoted tracked name"
+    assert sorted(also_copy - tracked) == [], "also_copy names a path the repo does not track"
