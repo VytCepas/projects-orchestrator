@@ -22,6 +22,8 @@ version's only source. `tests/test_version.py` fails when they disagree.
 ### Changed
 
 - The version is single-sourced from `__init__.py` (#191).
+- `memory` search ranks hits by BM25 and matches query terms separately, rather
+  than scoring every substring hit alike (#264).
 - Fleet discovery no longer counts a linked worktree as a separate project when
   its repository is already in the fleet (#261).
 - The memory tier is derived from `memory.stack`. A contract-v1+ descriptor with
