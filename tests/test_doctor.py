@@ -226,7 +226,17 @@ def test_contract_finding_names_a_malformed_version_as_present(fleet_dir: Path) 
 def test_contract_finding_still_reports_a_genuinely_absent_version(fleet_dir: Path) -> None:
     # The control: absence must keep its own, correct message.
     report = _with_version(fleet_dir, "b", "")
-    assert _finding(report, "contract").detail.startswith("no project_init_contract_version")
+    assert _finding(report, "contract").detail.startswith("project_init_contract_version absent")
+
+
+def test_contract_finding_does_not_call_an_explicit_zero_absent(fleet_dir: Path) -> None:
+    # #221: a present `0` read "no project_init_contract_version", which is false.
+    finding = _finding(
+        _with_version(fleet_dir, "z", "  project_init_contract_version: 0"), "contract"
+    )
+    assert finding.status == "fail"
+    assert not finding.detail.startswith("no ")
+    assert "absent or 0" in finding.detail
 
 
 def test_contract_finding_does_not_call_a_negative_version_absent(fleet_dir: Path) -> None:
