@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -34,6 +35,16 @@ _log = logging.getLogger(__name__)
 UPSTREAM_SCHEMA_URL = (
     "https://raw.githubusercontent.com/VytCepas/project-init/main/schemas/descriptor.schema.json"
 )
+
+# Where project-init declares the descriptor contract version it emits (#221).
+# A contract newer than the orchestrator reads must go red HERE, once, before any
+# child upgrades: `doctor` only WARNs on it, and on a fleet that is already all
+# warn a new WARN changes nothing anyone sees.
+UPSTREAM_CONTRACT_SOURCE = "src/project_init/scaffold.py"
+UPSTREAM_CONTRACT_URL = (
+    f"https://raw.githubusercontent.com/VytCepas/project-init/main/{UPSTREAM_CONTRACT_SOURCE}"
+)
+_CONTRACT_RE = re.compile(r"""^CONTRACT_VERSION\s*=\s*["']?(\d+)["']?\s*$""", re.MULTILINE)
 
 FRESH = "fresh"
 STALE = "stale"
@@ -204,8 +215,72 @@ def compare_fixture_version(pinned: str, upstream: str) -> list[Drift]:
     ]
 
 
+@dataclass(frozen=True)
+class ContractProbe:
+    """The contract-version half of a freshness run (#221).
+
+    Attributes:
+        source: The fetched project-init file that declares the version, or
+            ``None`` when it could not be fetched.
+        understood: The newest contract version the reader understands
+            (``doctor.CONTRACT_VERSION_MAX``).
+    """
+
+    source: str | None
+    understood: int
+
+
+def parse_contract_version(source: str) -> int | None:
+    """The ``CONTRACT_VERSION`` a project-init source file declares; ``None`` if none (pure)."""
+    match = _CONTRACT_RE.search(source)
+    return int(match.group(1)) if match else None
+
+
+def compare_contract_version(upstream_source: str | None, understood: int) -> list[Drift]:
+    """Flag an upstream descriptor contract newer than this orchestrator understands (pure).
+
+    Args:
+        upstream_source: The fetched project-init source that declares the
+            version, or ``None`` when it could not be fetched (no drift: that
+            half is unknown, which :func:`compare` reports).
+        understood: The newest contract version the reader understands
+            (``doctor.CONTRACT_VERSION_MAX``).
+
+    Returns:
+        One drift when upstream declares a newer version, or when the file no
+        longer declares one at all: a check that silently stopped finding its
+        subject would read fresh for ever. Otherwise empty.
+    """
+    if upstream_source is None:
+        return []
+    declared = parse_contract_version(upstream_source)
+    if declared is None:
+        return [
+            Drift(
+                "contract-version",
+                f"upstream no longer declares CONTRACT_VERSION in {UPSTREAM_CONTRACT_SOURCE}"
+                " — point this check at where it moved",
+            )
+        ]
+    if declared > understood:
+        return [
+            Drift(
+                "contract-version",
+                f"upstream emits descriptor contract v{declared}; this orchestrator understands"
+                f" up to v{understood} (doctor.CONTRACT_VERSION_MAX). Teach the descriptor"
+                f" reader v{declared} and raise CONTRACT_VERSION_MAX before any child upgrades",
+            )
+        ]
+    return []
+
+
 def compare(
-    vendored_schema: Any, upstream_schema: Any, pinned_version: str, upstream_version: str
+    vendored_schema: Any,
+    upstream_schema: Any,
+    pinned_version: str,
+    upstream_version: str,
+    *,
+    contract: ContractProbe | None = None,
 ) -> FreshnessReport:
     """Build the full freshness report (pure).
 
@@ -221,14 +296,22 @@ def compare(
 
     Drift found from a source that *did* arrive still wins — a half-outage that
     already proves staleness should say so, not hide behind ``unknown``.
+
+    The contract-version check (#221) runs when ``contract`` is given: its
+    source is then a third half, and its absence is ``unknown`` too.
     """
-    drifts = tuple(
-        compare_schema(vendored_schema, upstream_schema)
-        + compare_fixture_version(pinned_version, upstream_version)
+    drifts = compare_schema(vendored_schema, upstream_schema) + compare_fixture_version(
+        pinned_version, upstream_version
     )
+    if contract is not None:
+        drifts += compare_contract_version(contract.source, contract.understood)
     if drifts:
-        return FreshnessReport(status=STALE, drifts=drifts)
-    if upstream_schema is None or not upstream_version:
+        return FreshnessReport(status=STALE, drifts=tuple(drifts))
+    if (
+        upstream_schema is None
+        or not upstream_version
+        or (contract is not None and contract.source is None)
+    ):
         return FreshnessReport(status=UNKNOWN)
     return FreshnessReport(status=FRESH)
 
@@ -241,8 +324,19 @@ def render(report: FreshnessReport) -> str:
         return "contract freshness: fresh — the vendored contract matches upstream"
     lines = [f"contract freshness: STALE — {len(report.drifts)} divergence(s) from upstream"]
     lines.extend(f"  [{d.surface}] {d.detail}" for d in report.drifts)
-    lines.append("")
-    lines.append("Re-vendor: see tests/fixtures/project_init/README.md")
+    # A contract-version drift carries its own remedy; re-vendoring does not fix it.
+    # Said IN the report because the scheduled job's issue footer always adds a
+    # generic "re-vendor" line, and this report is the only part of it that
+    # knows which remedy applies (Codex on #291).
+    if any(d.surface != "contract-version" for d in report.drifts):
+        lines.append("")
+        lines.append("Re-vendor: see tests/fixtures/project_init/README.md")
+    if any(d.surface == "contract-version" for d in report.drifts):
+        lines.append("")
+        lines.append(
+            "Contract version: re-vendoring does NOT clear this. Teach the descriptor reader"
+            " the new version and raise doctor.CONTRACT_VERSION_MAX."
+        )
     return "\n".join(lines)
 
 
@@ -262,4 +356,14 @@ def fetch_upstream_schema(fetch: Fetcher | None = None) -> Any:
         return json.loads(fetcher(UPSTREAM_SCHEMA_URL))
     except (urllib.error.URLError, OSError, ValueError, TimeoutError) as exc:
         _log.debug("upstream schema fetch failed: %r", exc)
+        return None
+
+
+def fetch_upstream_contract_source(fetch: Fetcher | None = None) -> str | None:
+    """Fetch the project-init file that declares its contract version; ``None`` on any problem."""
+    fetcher = fetch or _urllib_fetch
+    try:
+        return fetcher(UPSTREAM_CONTRACT_URL)
+    except (urllib.error.URLError, OSError, ValueError, TimeoutError) as exc:
+        _log.debug("upstream contract source fetch failed: %r", exc)
         return None

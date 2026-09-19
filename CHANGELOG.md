@@ -16,6 +16,10 @@ version's only source. `tests/test_version.py` fails when they disagree.
   project-init's default branch ships: `plugin 0.9.16 → 0.9.20 behind`, `ok`,
   or `unknown`, never `ok` when upstream cannot be read. It is its own field;
   the scaffold status and the exit code are unchanged (#212).
+- The scheduled contract-freshness check fails when project-init declares a
+  descriptor contract version newer than `doctor.CONTRACT_VERSION_MAX`, so the
+  lock-step rule goes red once, before any child upgrades. `doctor` still
+  warns (#221).
 - `--json` output is a frozen seam: versioned schemas under `schemas/`, golden
   fixtures, and producer-side validation (#230).
 - `watch` reports when its own timer stops, instead of going quiet (#244).
