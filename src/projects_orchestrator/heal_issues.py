@@ -21,12 +21,15 @@ read per notify-mode project per pass, and a read that fails leaves the answer
 unknown: nothing is filed or closed for that project, and the pass reports a
 failed delivery.
 
-**Only committed state is reported.** A result is filed or closed on only when it
-carries the clean-tree HEAD it ran at. A gate run on uncommitted changes says
-something about the operator's work in progress, not about any commit: filing
-it would publish a failure no commit contains, and closing on it would close an
-issue while the default branch is still red. Those results are logged and left
-alone, and the heal report still shows the failure.
+**Only the published default branch is reported.** A result is filed or closed
+on only when it ran on a clean tree whose HEAD is the commit ``origin``'s
+default branch points at. Anything else describes the operator's own work, not
+the project: uncommitted changes, a local feature branch, or commits not yet
+pushed or pulled. Filing on it would publish a failure the default branch may
+not have, citing a commit GitHub may never have seen. Closing on it would close
+an issue while the default branch is still red, which an independent review of
+#287 reproduced with a fix committed on an unpushed branch. Those results are
+logged and left alone, and the heal report still shows the failure.
 
 **Closing needs evidence.** An issue closes only when this pass ran its gate and
 the gate *passed*. A gate that was skipped, or not run this pass, says nothing
@@ -46,7 +49,7 @@ import re
 from collections.abc import Sequence
 from pathlib import Path
 
-from projects_orchestrator import landing
+from projects_orchestrator import landing, status
 from projects_orchestrator.checks import CheckResult
 from projects_orchestrator.descriptor import ProjectDescriptor
 from projects_orchestrator.heal import (
@@ -133,17 +136,22 @@ def _close_comment(check: CheckResult) -> str:
     return f"`{check.task}` passed on {when}{at}. Closing."
 
 
-def _committed(name: str, tasks: Sequence[str], cached: dict[str, CheckResult]) -> list[str]:
-    """The tasks whose result was taken at a clean, committed HEAD; log the rest."""
-    unstamped = [task for task in tasks if not cached[task].head]
-    if unstamped:
+def _published(
+    name: str, tasks: Sequence[str], cached: dict[str, CheckResult], tip: str
+) -> list[str]:
+    """The tasks whose result ran at ``tip``, the published default branch; log the rest."""
+    kept = [task for task in tasks if tip and cached[task].head == tip]
+    skipped = [task for task in tasks if task not in kept]
+    if skipped:
         _log.warning(
-            "%s: %s ran on uncommitted changes (or outside a git checkout), so no issue"
-            " is filed or closed for it",
+            "%s: %s did not run at origin's default-branch tip (%s), so no issue is filed"
+            " or closed for it: a dirty or untracked tree, a local branch, unpushed or"
+            " unpulled commits, or no origin/HEAD (`git remote set-head origin --auto`)",
             name,
-            ", ".join(unstamped),
+            ", ".join(skipped),
+            tip[:12] or "unknown",
         )
-    return [task for task in tasks if cached[task].head]
+    return kept
 
 
 def _file_issues(
@@ -214,8 +222,10 @@ def _deliver_project(
     passing = [
         task for task, check in cached.items() if task in HEALABLE_TASKS and check.status == "pass"
     ]
-    to_file = _committed(descriptor.name, to_file, cached)
-    passing = _committed(descriptor.name, passing, cached)
+    if to_file or passing:
+        tip = status.published_default_head(descriptor.path)
+        to_file = _published(descriptor.name, to_file, cached, tip)
+        passing = _published(descriptor.name, passing, cached, tip)
     if not to_file and not passing:
         return None
     issues = landing.own_open_issues(descriptor.path)

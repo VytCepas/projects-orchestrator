@@ -86,6 +86,32 @@ def test_build_row_reads_the_visible_plugin_version(fleet_dir: Path) -> None:
     )
 
 
+def test_the_scaffold_record_wins_over_a_frozen_visible_plugin_version(fleet_dir: Path) -> None:
+    # Before project-init#1019 the visible field was frozen at render time while
+    # `upgrade` kept the record current: 0.1.0 visible against 0.9.16 recorded.
+    project = make_project(
+        fleet_dir,
+        "alpha",
+        config_text=(
+            "project:\n  name: alpha\n  project_init_plugin_version: 0.1.0\n"
+            'scaffold:\n  variables: {"project_init_plugin_version": "0.9.16"}\n'
+        ),
+    )
+    assert load_descriptor(project).project_init_plugin_version == "0.9.16"
+
+
+def test_a_malformed_record_falls_back_to_the_visible_plugin_version(fleet_dir: Path) -> None:
+    project = make_project(
+        fleet_dir,
+        "alpha",
+        config_text=(
+            "project:\n  name: alpha\n  project_init_plugin_version: 0.8.5\n"
+            "scaffold:\n  variables: [not, a, mapping]\n"
+        ),
+    )
+    assert load_descriptor(project).project_init_plugin_version == "0.8.5"
+
+
 def test_a_project_recording_no_plugin_version_is_unknown(fleet_dir: Path) -> None:
     descriptor = load_descriptor(make_project(fleet_dir, "alpha"))
     assert descriptor is not None

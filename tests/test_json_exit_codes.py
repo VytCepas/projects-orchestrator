@@ -104,6 +104,7 @@ def _upgrade(latest: tuple[int, int, int] | None) -> Setup:
     def setup(fleet: Path, _tmp: Path, mp: pytest.MonkeyPatch) -> list[str]:
         make_project(fleet, "alpha")
         mp.setattr(cli, "latest_upstream_version", lambda _cwd: latest)
+        mp.setattr(cli, "latest_plugin_version", lambda _cwd: None)
         return ["upgrade-plan", *_root(fleet)]
 
     return setup

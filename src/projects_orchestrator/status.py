@@ -64,6 +64,23 @@ def _git(path: Path, *args: str) -> str | None:
     return result.stdout.strip() if result.ok else None
 
 
+def published_default_head(path: Path) -> str:
+    """The commit ``origin``'s default branch was at when last fetched; ``""`` when unknown.
+
+    Read from the local ``refs/remotes/origin/HEAD`` only: no network, and no
+    remote-supplied branch name ever reaches the shell string :func:`_git` runs.
+    A clone always has that ref; a repository given its remote by hand gets it
+    from ``git remote set-head origin --auto``.
+
+    Args:
+        path: The repository to ask.
+
+    Returns:
+        The full SHA, or ``""`` when there is no ``origin`` default branch to read.
+    """
+    return _git(path, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/HEAD") or ""
+
+
 def _ahead_behind(path: Path) -> tuple[int | None, int | None]:
     """Return (ahead, behind) relative to upstream, or (None, None)."""
     counts = _git(path, "rev-list", "--left-right", "--count", "@{upstream}...HEAD")

@@ -519,6 +519,7 @@ Live fleet dashboard — a read-only view that can, opt-in, act on the fleet.
 Per-project git health, degraded gracefully to ``unknown``.
 
 - `class ProjectStatus` — Git health of one project.
+- `def published_default_head` — The commit ``origin``'s default branch was at when last fetched; ``""`` when unknown.
 - `def collect_status` — Collect git health for one project; never raises.
 - `def clean_worktree_head` — Return the HEAD commit SHA when the worktree is clean; else empty.
 
