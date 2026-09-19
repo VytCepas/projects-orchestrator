@@ -77,6 +77,12 @@ version's only source. `tests/test_version.py` fails when they disagree.
 - A project that declares `heal.mode: notify` was advised to run `heal <project>`,
   which its own declaration overrides. The advice now says the declaration has
   to change first.
+- The notify-mode issue sink (#282):
+  - a gate that printed a NUL byte crashed the heal pass;
+  - `PO_HEAL_ISSUES=0` turned filing on;
+  - an unreadable issue list on a clean pass reported `delivery failed`;
+  - issues were filed and closed on uncommitted working-copy state.
+  It now files and closes only on results taken at a clean, committed HEAD.
 
 ### Security
 

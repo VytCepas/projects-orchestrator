@@ -29,7 +29,9 @@ WorkingDirectory=%h
 #                                            failed; a clean pass posts nothing)
 #   PO_HEAL_ISSUES=1                        (optional: each notify-mode project
 #                                            gets one GitHub issue per failing
-#                                            gate, closed once the gate passes)
+#                                            gate, closed once the gate passes.
+#                                            Only the value 1 enables it; 0,
+#                                            false or unset leave it off)
 # The leading `-` makes the file optional: with no override the unit heals
 # ~/projects and attempts at most PO_HEAL_LIMIT (default 3) projects per firing.
 EnvironmentFile=-%h/.config/projects-orchestrator/heal.env
@@ -39,7 +41,7 @@ EnvironmentFile=-%h/.config/projects-orchestrator/heal.env
 # a coding agent on (each agent is itself capped at a small per-run budget), so a
 # fleet that goes red overnight cannot fan out unbounded spend. Start LOW and
 # raise it once you trust the PRs it opens.
-ExecStart=/bin/sh -c 'exec %h/.local/bin/projects-orchestrator heal --all --root "${PO_FLEET_ROOT:-%h/projects}" --limit "${PO_HEAL_LIMIT:-3}" --mode "${PO_HEAL_MODE:-fix}" ${PO_HEAL_WEBHOOK:+--webhook "$PO_HEAL_WEBHOOK"} ${PO_HEAL_ISSUES:+--issues}'
+ExecStart=/bin/sh -c 'exec %h/.local/bin/projects-orchestrator heal --all --root "${PO_FLEET_ROOT:-%h/projects}" --limit "${PO_HEAL_LIMIT:-3}" --mode "${PO_HEAL_MODE:-fix}" ${PO_HEAL_WEBHOOK:+--webhook "$PO_HEAL_WEBHOOK"} $([ "${PO_HEAL_ISSUES:-}" = 1 ] && echo --issues)'
 
 # `heal --all` exits 1 when the pass was EVENTFUL — it opened a PR, a heal failed
 # to verify, or projects were deferred past the limit. That is a run that worked

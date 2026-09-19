@@ -1125,10 +1125,15 @@ def _heal_targets(
     if cached:
         store = cache.load_results()
         return [(descriptor, store.get(descriptor.name, {})) for descriptor in descriptors]
+    # Stamped with the clean-tree HEAD, exactly as `checks` stamps it: the notify
+    # issue sink files and closes only on results taken at a commit, never on
+    # uncommitted work in progress (#164 review).
     fresh = [
         result
         for project_results in map_ordered(
-            lambda d: collect_checks(d, HEALABLE_TASKS), descriptors, jobs=jobs
+            lambda d: [result for result, _ in _project_checks(d, HEALABLE_TASKS, None, False)],
+            descriptors,
+            jobs=jobs,
         )
         for result in project_results
     ]
