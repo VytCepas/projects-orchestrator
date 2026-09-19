@@ -9,10 +9,14 @@ interactively (``controller`` REPL / ``tui``). Every data command takes
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as _dt
 import json
+import logging
 import math
+import os
 import sys
+import traceback
 from dataclasses import asdict, replace
 from pathlib import Path
 
@@ -114,6 +118,16 @@ from projects_orchestrator.supervisor import logs as run_logs
 from projects_orchestrator.supervisor import start as run_start
 from projects_orchestrator.supervisor import stop as run_stop
 from projects_orchestrator.upgrade import upgrade_plan
+
+_log = logging.getLogger(__name__)
+
+#: Truthy value turns on the diagnostic trail without the flag, for a scheduled
+#: run whose command line is harder to change than its environment.
+VERBOSE_ENV = "PROJECTS_ORCHESTRATOR_VERBOSE"
+#: sysexits EX_SOFTWARE: the orchestrator itself failed, which is not the
+#: "something in the fleet needs attention" that 1 means on every data command.
+EXIT_INTERNAL_ERROR = 70
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 
 def _fleet_config(args: argparse.Namespace) -> FleetConfig:
@@ -639,6 +653,8 @@ def _cmd_upgrade_plan(args: argparse.Namespace) -> int:
             f"{row.project}: {row.status} "
             f"(scaffold {row.scaffold_version}, drift {row.drift}, PRs {row.open_prs})"
         )
+        if row.reason:
+            line += f" — {row.reason}"
         if row.project in applied:
             line += f" — upgrade {applied[row.project]}"
         print(line)
@@ -690,7 +706,8 @@ def _read_text_or_none(path: str) -> str | None:
     """Read a file's text, or ``None`` when it is unreadable."""
     try:
         return Path(path).read_text(encoding="utf-8")
-    except OSError:
+    except OSError as exc:
+        _log.debug("cannot read %s: %r", path, exc)
         return None
 
 
@@ -1423,6 +1440,7 @@ def _cmd_controller(args: argparse.Namespace) -> int:
         try:
             line = input("orchestrator> ")
         except (EOFError, KeyboardInterrupt):
+            # expected: end of input or Ctrl-C is how an operator leaves the REPL
             print()
             return 0
         intent = parse_command(line)
@@ -1437,6 +1455,7 @@ def _cmd_tui(args: argparse.Namespace) -> int:
     try:
         from projects_orchestrator.tui import OrchestratorApp
     except ModuleNotFoundError:
+        # expected: the tui extra is not installed, and the message below says so
         print(
             "the TUI needs the optional dependency: uv sync --extra tui "
             "(or: pip install 'projects-orchestrator[tui]')",
@@ -1447,10 +1466,21 @@ def _cmd_tui(args: argparse.Namespace) -> int:
     return 0
 
 
+_VERBOSE_HELP = (
+    f"log why each degraded cell degraded, and show a traceback on an internal error "
+    f"(also: {VERBOSE_ENV}=1)"
+)
+
+
 def _add_common(parser: argparse.ArgumentParser, json_flag: bool = True) -> None:
     """Attach the shared --fleet/--root (and usually --json) options."""
     parser.add_argument("--fleet", help="path to a fleet.yaml describing the fleet")
     parser.add_argument("--root", help="directory scanned one level deep for projects")
+    # SUPPRESS, so `cmd --verbose` and `--verbose cmd` both work and neither
+    # position's absence overwrites the other's presence.
+    parser.add_argument(
+        "--verbose", action="store_true", default=argparse.SUPPRESS, help=_VERBOSE_HELP
+    )
     if json_flag:
         parser.add_argument("--json", action="store_true", help="emit JSON instead of text")
 
@@ -1564,13 +1594,20 @@ def _add_work_arguments(sub: argparse._SubParsersAction[argparse.ArgumentParser]
     sub.choices[work.RUNNER_SUBCOMMAND].add_argument("run_id")
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    """Build the CLI parser with all subcommands."""
+def _top_level_parser() -> argparse.ArgumentParser:
+    """The root parser and its global flags, before any subcommand is attached."""
     parser = argparse.ArgumentParser(
         prog="projects-orchestrator",
         description="Cross-project orchestration layer for agentic development.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument("--verbose", action="store_true", help=_VERBOSE_HELP)
+    return parser
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the CLI parser with all subcommands."""
+    parser = _top_level_parser()
     sub = parser.add_subparsers(dest="command")
 
     specs: list[tuple[str, str, object, bool]] = [
@@ -1825,8 +1862,64 @@ def _add_serve_arguments(sub: argparse._SubParsersAction[argparse.ArgumentParser
     )
 
 
+def _verbose(args: argparse.Namespace) -> bool:
+    """Whether the diagnostic trail is on: the flag, or the env toggle."""
+    if getattr(args, "verbose", False):
+        return True
+    return os.environ.get(VERBOSE_ENV, "").strip().lower() in _TRUTHY
+
+
+_trail: logging.Handler | None = None
+
+
+def _configure_trail(verbose: bool) -> None:
+    """Route the package's debug records to stderr when verbose; else keep them silent.
+
+    Degraded paths log at DEBUG, below the stdlib's last-resort WARNING handler,
+    so with no handler attached nothing prints and the default output is
+    byte-identical to a build without the seam. The handler is replaced rather
+    than added, so repeated ``main()`` calls in one process never double a line.
+    """
+    global _trail
+    logger = logging.getLogger("projects_orchestrator")
+    if _trail is not None:
+        logger.removeHandler(_trail)
+        _trail = None
+    if not verbose:
+        logger.setLevel(logging.NOTSET)
+        return
+    _trail = logging.StreamHandler(sys.stderr)
+    _trail.setFormatter(logging.Formatter("debug: %(name)s: %(message)s"))
+    logger.addHandler(_trail)
+    logger.setLevel(logging.DEBUG)
+
+
+def _internal_error(command: str, exc: Exception, verbose: bool) -> int:
+    """Report an exception that escaped a command: one line, traceback on request."""
+    if verbose:
+        traceback.print_exception(exc, file=sys.stderr)
+    hint = "" if verbose else "; rerun with --verbose for the traceback"
+    detail = f"{type(exc).__name__}: {exc}".splitlines()[0]
+    print(
+        f"projects-orchestrator: internal error in '{command}': {detail} — this is a bug{hint}",
+        file=sys.stderr,
+    )
+    return EXIT_INTERNAL_ERROR
+
+
+def _silence_stdout() -> None:
+    """Point stdout at /dev/null so the interpreter's final flush cannot raise again."""
+    # expected: stdout is no real descriptor (captured, or closed), so nothing is left to flush
+    with contextlib.suppress(OSError, ValueError):
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the projects-orchestrator CLI.
+
+    The engine degrades instead of raising (ADR-003), so an exception reaching
+    this boundary is a bug. It exits :data:`EXIT_INTERNAL_ERROR` with one line
+    rather than a traceback; ``--verbose`` adds the traceback back.
 
     Args:
         argv: Optional argument vector; defaults to ``sys.argv[1:]``.
@@ -1836,10 +1929,19 @@ def main(argv: list[str] | None = None) -> int:
     """
     parser = _build_parser()
     args = parser.parse_args(argv)
+    verbose = _verbose(args)
+    _configure_trail(verbose)
     if args.command is None:
         parser.print_help()
         return 0
-    exit_code: int = args.handler(args)
+    try:
+        exit_code: int = args.handler(args)
+    except BrokenPipeError:
+        # expected: the reader went away (`… | head`), and nothing is wrong with the command
+        _silence_stdout()
+        return 1
+    except Exception as exc:  # noqa: BLE001 — the CLI boundary is where never-raise ends
+        return _internal_error(args.command, exc, verbose)
     return exit_code
 
 

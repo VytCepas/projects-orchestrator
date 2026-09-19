@@ -9,6 +9,7 @@ truth. Row building is pure and unit-testable.
 from __future__ import annotations
 
 import datetime as _dt
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,6 +28,8 @@ from projects_orchestrator.registry import Fleet
 from projects_orchestrator.runs import AgentRun, latest_open_run, list_runs
 from projects_orchestrator.status import ProjectStatus, collect_status
 from projects_orchestrator.supervisor import RunState, running_state
+
+_log = logging.getLogger(__name__)
 
 COLUMNS = (
     "Project",
@@ -162,7 +165,8 @@ def humanize_age(iso_timestamp: str, now: _dt.datetime | None = None) -> str:
         return "never"
     try:
         then = _dt.datetime.fromisoformat(iso_timestamp)
-    except ValueError:
+    except ValueError as exc:
+        _log.debug("unparseable timestamp %r: %r", iso_timestamp, exc)
         return "never"
     if then.tzinfo is None:
         then = then.replace(tzinfo=_dt.UTC)

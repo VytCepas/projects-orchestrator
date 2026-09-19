@@ -16,6 +16,7 @@ path, and the result is sorted by name for stable rendering.
 from __future__ import annotations
 
 import fnmatch
+import logging
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -31,6 +32,8 @@ from projects_orchestrator.descriptor import (
     load_descriptor,
     resolve_config,
 )
+
+_log = logging.getLogger(__name__)
 
 FLEET_FILENAME = "fleet.yaml"
 
@@ -243,7 +246,8 @@ def _nested_projects(root: Path, config: FleetConfig) -> tuple[list[Path], bool]
             continue
         try:
             children = sorted(c for c in current.iterdir() if c.is_dir())
-        except OSError:
+        except OSError as exc:
+            _log.debug("cannot list %s: %r", current, exc)
             continue  # unreadable subtree is not this function's problem to report
         for child in children:
             if visited >= _HINT_BUDGET:
@@ -378,10 +382,11 @@ def _git_dirs(path: Path) -> tuple[Path, Path] | None:
             return gitdir, gitdir
         pointer = Path(commondir_file.read_text(encoding="utf-8", errors="replace").strip())
         return gitdir, (pointer if pointer.is_absolute() else gitdir / pointer).resolve()
-    except (OSError, RuntimeError):
+    except (OSError, RuntimeError) as exc:
         # RuntimeError: Python 3.11's resolve() raises it, not OSError, on a symlink loop,
         # and discovery never raises (ADR-003): one malformed pointer must not empty the
         # fleet (Codex on #261).
+        _log.debug("cannot read git pointers under %s: %r", path, exc)
         return None
 
 

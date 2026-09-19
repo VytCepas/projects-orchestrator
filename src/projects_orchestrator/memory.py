@@ -13,6 +13,7 @@ files degrade to untyped entries.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 from dataclasses import dataclass, replace
@@ -21,6 +22,8 @@ from pathlib import Path
 import yaml
 
 from projects_orchestrator.descriptor import TIER_GRAPH, TIER_RAG, ProjectDescriptor
+
+_log = logging.getLogger(__name__)
 
 _INDEX_FILES = {"MEMORY.md", "SCHEMA.md", "README.md"}
 
@@ -128,7 +131,8 @@ def _split_frontmatter(text: str) -> tuple[dict[str, str], str]:
         return {}, text
     try:
         meta = yaml.safe_load(parts[1])
-    except yaml.YAMLError:
+    except yaml.YAMLError as exc:
+        _log.debug("memory frontmatter is not valid YAML: %r", exc)
         return {}, parts[2]
     if not isinstance(meta, dict):
         return {}, parts[2]
@@ -148,7 +152,8 @@ def _read_memory_file(path: Path, project: str) -> MemoryFile | None:
         if path.stat().st_size > _MAX_FILE_BYTES:
             return None
         text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+    except OSError as exc:
+        _log.debug("cannot read memory file %s: %r", path, exc)
         return None
     meta, body = _split_frontmatter(text)
     return MemoryFile(
@@ -172,7 +177,8 @@ def _is_dir(path: Path) -> bool:
     """
     try:
         return path.is_dir()
-    except OSError:
+    except OSError as exc:
+        _log.debug("cannot stat %s: %r", path, exc)
         return False
 
 
@@ -260,7 +266,8 @@ def load_graph_facts(descriptor: ProjectDescriptor) -> tuple[MemoryFile, ...]:
         if path.stat().st_size > _MAX_GRAPH_BYTES:
             return ()
         data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        _log.debug("graph file %s unreadable: %r", path, exc)
         return ()
     nodes = data.get("nodes") if isinstance(data, dict) else data
     if not isinstance(nodes, list):

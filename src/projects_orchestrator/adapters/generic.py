@@ -19,10 +19,13 @@ task. Inferred descriptors carry ``contract_version 0`` and a warning, so
 from __future__ import annotations
 
 import json
+import logging
 import re
 from pathlib import Path
 
 from projects_orchestrator.descriptor import ProjectDescriptor
+
+_log = logging.getLogger(__name__)
 
 _MAX_MANIFEST_BYTES = 262_144
 
@@ -43,7 +46,8 @@ def _read_text(path: Path) -> str:
         if path.stat().st_size > _MAX_MANIFEST_BYTES:
             return ""
         return path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+    except OSError as exc:
+        _log.debug("cannot read %s: %r", path, exc)
         return ""
 
 
@@ -66,7 +70,8 @@ def _npm_scripts(project_dir: Path) -> set[str]:
     """Script names declared in package.json (tolerant of bad JSON)."""
     try:
         raw = json.loads(_read_text(project_dir / "package.json") or "{}")
-    except ValueError:
+    except ValueError as exc:
+        _log.debug("package.json in %s is not valid JSON: %r", project_dir, exc)
         return set()
     scripts = raw.get("scripts") if isinstance(raw, dict) else None
     return set(scripts) if isinstance(scripts, dict) else set()
@@ -117,6 +122,12 @@ def is_git_repo(project_dir: Path) -> bool:
     return (project_dir / ".git").exists()
 
 
+#: The warning an inferred descriptor carries. A named constant so a consumer can
+#: say WHY a row degraded ("no project-init descriptor") by joining this, rather
+#: than re-deriving it from a file check that could disagree (#185).
+NO_DESCRIPTOR_WARNING = "no project-init descriptor — inferred from repo conventions"
+
+
 def infer_descriptor(project_dir: Path) -> ProjectDescriptor | None:
     """Infer a minimal descriptor for a plain git repo; never raises.
 
@@ -136,5 +147,5 @@ def infer_descriptor(project_dir: Path) -> ProjectDescriptor | None:
         path=project_dir,
         language=_infer_language(project_dir),
         tooling=_infer_tooling(project_dir),
-        warnings=("no project-init descriptor — inferred from repo conventions",),
+        warnings=(NO_DESCRIPTOR_WARNING,),
     )

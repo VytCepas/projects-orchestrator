@@ -8,11 +8,14 @@ fleet view must render even for a corrupted or non-git directory.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from projects_orchestrator.descriptor import ProjectDescriptor
 from projects_orchestrator.runner import run_command
+
+_log = logging.getLogger(__name__)
 
 GIT_TIMEOUT = 15.0
 
@@ -69,7 +72,8 @@ def _ahead_behind(path: Path) -> tuple[int | None, int | None]:
     try:
         behind_str, ahead_str = counts.split()
         return int(ahead_str), int(behind_str)
-    except ValueError:
+    except ValueError as exc:
+        _log.debug("unparseable ahead/behind counts %r: %r", counts, exc)
         return None, None
 
 

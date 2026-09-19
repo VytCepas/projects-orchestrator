@@ -106,6 +106,7 @@ def _compare(actual: str, op: str, value: str) -> bool:
     try:
         left, right = float(actual), float(value)
     except ValueError:
+        # expected: a non-numeric comparison is False, never folded into 0 (see above)
         return False
     if op == ">":
         return left > right

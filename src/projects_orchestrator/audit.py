@@ -15,6 +15,7 @@ anything is ``warn`` or worse.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +25,8 @@ from projects_orchestrator.descriptor import ProjectDescriptor
 from projects_orchestrator.doctor import FAIL, OK, WARN, diagnose
 from projects_orchestrator.drift import compute_drift
 from projects_orchestrator.memory import load_project_memory
+
+_log = logging.getLogger(__name__)
 
 _COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 
@@ -109,7 +112,8 @@ def _read_index(memory_path: Path) -> str | None:
     """Read ``MEMORY.md`` text for index checks; ``None`` when unreadable."""
     try:
         return (memory_path / "MEMORY.md").read_text(encoding="utf-8", errors="replace")
-    except OSError:
+    except OSError as exc:
+        _log.debug("cannot read %s: %r", memory_path / "MEMORY.md", exc)
         return None
 
 

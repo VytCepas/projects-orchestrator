@@ -14,6 +14,7 @@ without promoting its draft PR (#165).
 from __future__ import annotations
 
 import json
+import logging
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -22,6 +23,8 @@ from dataclasses import asdict, dataclass
 from projects_orchestrator.fleet import ProjectSnapshot
 from projects_orchestrator.heal import FIXED, FleetHealReport, HealResult, HealSink
 from projects_orchestrator.urlguard import is_probe_safe
+
+_log = logging.getLogger(__name__)
 
 CRITICAL = "critical"
 WARNING = "warning"
@@ -140,7 +143,8 @@ def post_payload(url: str, payload: dict[str, object], send: Sender | None = Non
     body = json.dumps(payload).encode("utf-8")
     try:
         status = sender(url, body)
-    except (urllib.error.URLError, OSError, ValueError):
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        _log.debug("webhook POST failed: %r", exc)
         return False
     return 200 <= status < 300
 

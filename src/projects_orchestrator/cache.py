@@ -9,8 +9,8 @@ missing cache is simply empty.
 
 from __future__ import annotations
 
-import contextlib
 import json
+import logging
 import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -18,10 +18,13 @@ from pathlib import Path
 try:  # POSIX advisory locking; absent on non-POSIX, where we degrade to no lock.
     import fcntl
 except ImportError:  # pragma: no cover - platform-dependent
+    # expected: no fcntl off POSIX, so the cache degrades to unlocked writes
     fcntl = None  # type: ignore[assignment]
 
 from projects_orchestrator import persist
 from projects_orchestrator.checks import CheckResult
+
+_log = logging.getLogger(__name__)
 
 _CACHE_DIRNAME = "projects-orchestrator"
 _CACHE_FILENAME = "checks.json"
@@ -108,7 +111,8 @@ def read_cache(path: Path | None = None) -> CacheState:
     path = path or cache_path()
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        _log.debug("checks cache %s unreadable: %r", path, exc)
         return CacheState({}, LEGACY_SCHEMA_VERSION, UNREADABLE)
     if not isinstance(raw, dict):
         return CacheState({}, LEGACY_SCHEMA_VERSION, UNREADABLE)
@@ -182,7 +186,8 @@ def _coerce_result(entry: dict[str, object]) -> CheckResult | None:
             values[key] = float(entry[key])  # type: ignore[arg-type]
     try:
         return CheckResult(**values)  # type: ignore[arg-type]
-    except TypeError:
+    except TypeError as exc:
+        _log.debug("dropping a malformed cache entry: %r", exc)
         return None
 
 
@@ -215,8 +220,10 @@ def save_results(
             # it (#183).
             return merged
 
-        with contextlib.suppress(OSError, ValueError):
+        try:
             _atomic_write(path, _serialize(merged))
+        except (OSError, ValueError) as exc:
+            _log.debug("cannot write checks cache %s: %r", path, exc)
     return merged
 
 
@@ -261,8 +268,10 @@ def drop_result(project: str, task: str, path: Path | None = None) -> None:
             return
         if not merged[project]:
             del merged[project]
-        with contextlib.suppress(OSError, ValueError):
+        try:
             _atomic_write(path, _serialize(merged))
+        except (OSError, ValueError) as exc:
+            _log.debug("cannot write checks cache %s: %r", path, exc)
 
 
 #: Both helpers now delegate to :mod:`persist` (#181). They were the ONLY copy

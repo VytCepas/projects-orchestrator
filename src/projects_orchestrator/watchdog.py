@@ -24,14 +24,16 @@ Reading and writing never raise; a missing or corrupt marker degrades to
 
 from __future__ import annotations
 
-import contextlib
 import datetime as _dt
 import json
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
 
 from projects_orchestrator import persist
+
+_log = logging.getLogger(__name__)
 
 _STATE_DIRNAME = "projects-orchestrator"
 _WATCH_FILENAME = "watch-heartbeat.json"
@@ -105,8 +107,11 @@ def record_pass(
         "last_pass": moment.isoformat(timespec="seconds"),
         "interval_seconds": max(0, int(interval_seconds)),
     }
-    with contextlib.suppress(OSError, ValueError):
-        persist.locked_write(path or watch_path(), json.dumps(document, indent=2))
+    target = path or watch_path()
+    try:
+        persist.locked_write(target, json.dumps(document, indent=2))
+    except (OSError, ValueError) as exc:
+        _log.debug("cannot write watch heartbeat %s: %r", target, exc)
 
 
 def read_state(path: Path | None = None, now: _dt.datetime | None = None) -> WatchState:
@@ -124,7 +129,8 @@ def read_state(path: Path | None = None, now: _dt.datetime | None = None) -> Wat
     target = path or watch_path()
     try:
         raw = json.loads(target.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        _log.debug("watch heartbeat %s unreadable: %r", target, exc)
         return WatchState()
     if not isinstance(raw, dict):
         return WatchState()
@@ -134,7 +140,8 @@ def read_state(path: Path | None = None, now: _dt.datetime | None = None) -> Wat
         return WatchState()
     try:
         last = _dt.datetime.fromisoformat(stamp)
-    except ValueError:
+    except ValueError as exc:
+        _log.debug("unparseable last_pass %r: %r", stamp, exc)
         return WatchState()
     if last.tzinfo is None:
         last = last.replace(tzinfo=_dt.UTC)

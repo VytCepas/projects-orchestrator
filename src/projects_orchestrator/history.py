@@ -12,14 +12,16 @@ missing or corrupt log reads as empty history.
 
 from __future__ import annotations
 
-import contextlib
 import json
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
 
 from projects_orchestrator import persist
 from projects_orchestrator.checks import CheckResult
+
+_log = logging.getLogger(__name__)
 
 _STATE_DIRNAME = "projects-orchestrator"
 _HISTORY_FILENAME = "history.jsonl"
@@ -94,7 +96,8 @@ def load_history(path: Path | None = None) -> list[HistoryEntry]:
     path = path or history_path()
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+    except OSError as exc:
+        _log.debug("history log %s unreadable: %r", path, exc)
         return []
     entries: list[HistoryEntry] = []
     for line in text.splitlines():
@@ -110,7 +113,8 @@ def _parse_line(line: str) -> HistoryEntry | None:
     """Parse one JSONL history line; ``None`` when malformed."""
     try:
         raw = json.loads(line)
-    except ValueError:
+    except ValueError as exc:
+        _log.debug("skipping a malformed history line: %r", exc)
         return None
     if not isinstance(raw, dict):
         return None
@@ -175,5 +179,7 @@ def _atomic_write(path: Path, text: str) -> None:
     # NOT `locked_write`: `record` holds the lock across its whole
     # read-modify-write, and re-entering a held flock from the same process is
     # not something to rely on.
-    with contextlib.suppress(OSError, ValueError):
+    try:
         persist.atomic_write(path, text)
+    except (OSError, ValueError) as exc:
+        _log.debug("cannot write history log %s: %r", path, exc)
