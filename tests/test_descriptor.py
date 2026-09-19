@@ -267,6 +267,48 @@ def test_vault_path_escaping_project_root_warns(tmp_path: Path) -> None:
     assert any("escapes the project root" in w for w in descriptor.warnings)
 
 
+# --- #236: a surface declared below its gate is dropped, and SAYS so ----------
+
+_GATED = (
+    ("vault_path", "  vault_path: .claude/vault\n", 1),
+    ("graph_path", "  graph_path: graphify-out/graph.json\n", 2),
+    ("rag_endpoint", "  rag_endpoint: http://127.0.0.1:8099\n", 3),
+)
+
+
+@pytest.mark.parametrize(("key", "line", "gate"), _GATED)
+def test_a_surface_declared_one_rung_below_its_gate_warns(
+    tmp_path: Path, key: str, line: str, gate: int
+) -> None:
+    descriptor = parse_config(_memory_config(gate - 1, line), tmp_path)
+    assert descriptor.warnings == (
+        f"memory.{key} is declared at memory tier {gate - 1} but needs tier {gate}+ — ignored",
+    )
+
+
+def test_an_escaping_path_below_its_gate_warns_as_an_escape(tmp_path: Path) -> None:
+    # Gating first let this through both checks without a word.
+    descriptor = parse_config(_memory_config(1, "  graph_path: ../../etc/graph.json\n"), tmp_path)
+    assert descriptor.graph_path is None
+    assert descriptor.warnings == (
+        "memory.graph_path '../../etc/graph.json' escapes the project root — ignored",
+    )
+
+
+def test_every_surface_at_its_own_tier_is_silent(tmp_path: Path) -> None:
+    # The control: a reader that warned on every declared surface would pass the
+    # two tests above. Each rung declares exactly what the template renders for
+    # it, including tier 3's empty `rag_endpoint:` before RAG setup has run.
+    rungs = {
+        0: "",
+        1: "  vault_path: .claude/vault\n",
+        2: "  vault_path: .claude/vault\n  graph_path: graphify-out/graph.json\n",
+        3: "  vault_path: .claude/vault\n  graph_path: graphify-out/graph.json\n  rag_endpoint:\n",
+    }
+    for tier, extra in rungs.items():
+        assert parse_config(_memory_config(tier, extra), tmp_path).warnings == (), tier
+
+
 class TestScaffoldLayout:
     """PI-627: the descriptor lives under ``.agents/`` (current project-init)
     or ``.claude/`` (legacy). The reader must find both — a current scaffold

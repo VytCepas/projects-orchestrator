@@ -547,30 +547,47 @@ def _tier_gated_path(
     Read only at/above ``min_tier`` — a lower-tier child never emits it, and
     ignoring a stray value keeps the anchors-never-move invariant (a value that
     only appears with its tier can never shift a lower-tier reader's behaviour).
-    A path escaping the project root is dropped with a warning, exactly as
-    ``memory_path`` is.
+    Ignored is not the same as unreported, though (#236): a value declared below
+    its gate is dropped WITH a warning, the same channel an escaping path uses.
+    Dropping it silently made the one descriptor fault this reader said nothing
+    about look like a project that never declared the surface.
+
+    Containment is checked BEFORE the gate, so an escaping path warns as an
+    escape at any tier. Gating first let a below-gate escape through both
+    checks without a word.
     """
-    if memory.tier < min_tier:
-        return None
     declared = memory.block.get(key)
     if not isinstance(declared, str) or not declared.strip():
         return None
     contained = _contained_path(memory.project_dir, declared.strip())
     if contained is None:
         warnings.append(f"memory.{key} '{declared.strip()}' escapes the project root — ignored")
+        return None
+    if memory.tier < min_tier:
+        warnings.append(_below_gate(key, memory.tier, min_tier))
+        return None
     return contained
 
 
-def _tier_gated_endpoint(memory: _MemorySurface) -> str:
+def _below_gate(key: str, tier: int, min_tier: int) -> str:
+    """The warning for a retrieval surface declared below its memory-tier gate."""
+    return f"memory.{key} is declared at memory tier {tier} but needs tier {min_tier}+ — ignored"
+
+
+def _tier_gated_endpoint(memory: _MemorySurface, warnings: list[str]) -> str:
     """Resolve the tier-3 ``rag_endpoint`` string; empty below tier 3/undeclared.
 
     Unlike the vault/graph *paths*, the endpoint is an opaque address (a URL or
     ``host:port``), so it is kept as a plain string rather than a contained path.
+    A non-empty endpoint below tier 3 is dropped with a warning, as the paths
+    are (#236).
     """
-    if memory.tier < TIER_RAG:
-        return ""
     endpoint = memory.block.get("rag_endpoint")
-    return endpoint.strip() if isinstance(endpoint, str) else ""
+    value = endpoint.strip() if isinstance(endpoint, str) else ""
+    if value and memory.tier < TIER_RAG:
+        warnings.append(_below_gate("rag_endpoint", memory.tier, TIER_RAG))
+        return ""
+    return value
 
 
 def _memory_stack(raw: dict[str, Any], memory: dict[str, Any], contract_version: int) -> str:
@@ -690,7 +707,7 @@ def parse_config(text: str, project_dir: Path, config_root: str = ".claude") -> 
         memory_path=memory_path,
         vault_path=_tier_gated_path(surface, "vault_path", TIER_VAULT, warnings),
         graph_path=_tier_gated_path(surface, "graph_path", TIER_GRAPH, warnings),
-        rag_endpoint=_tier_gated_endpoint(surface),
+        rag_endpoint=_tier_gated_endpoint(surface, warnings),
         tooling=_extract_tooling(raw),
         deploy=_extract_deploy(raw) if is_v2 else None,
         observability_path=(
