@@ -91,13 +91,16 @@ class MemoryHit:
         file: The memory file that matched.
         line_number: 1-based line of the match within the body (0 = metadata).
         line: The matching line (or the description for metadata hits).
-        score: The document's BM25 relevance — higher sorts first.
+        score: The document's BM25 relevance.
+        matched: How many distinct query terms the document contains. It sorts
+            before ``score``: a note with more of the query ranks first.
     """
 
     file: MemoryFile
     line_number: int
     line: str
     score: float = 0.0
+    matched: int = 0
 
 
 def _split_frontmatter(text: str) -> tuple[dict[str, str], str]:
@@ -342,8 +345,10 @@ def _document_length(fields: tuple[tuple[int, str], ...]) -> int:
     return sum(weight * len(_TOKEN.findall(text)) for weight, text in fields)
 
 
-def _bm25_scores(files: list[MemoryFile], terms: tuple[str, ...]) -> list[float]:
-    """Score every document against ``terms``; 0.0 means no term matched (pure).
+def _bm25_scores(files: list[MemoryFile], terms: tuple[str, ...]) -> list[tuple[float, int]]:
+    """Score every document against ``terms``, with how many it matched (pure).
+
+    ``(0.0, 0)`` means no term matched.
 
     IDF is the non-negative form ``ln(1 + (N - n + 0.5) / (n + 0.5))``. The
     classic form goes negative once a term is in more than half the documents,
@@ -358,16 +363,17 @@ def _bm25_scores(files: list[MemoryFile], terms: tuple[str, ...]) -> list[float]
         math.log(1 + (total - n + 0.5) / (n + 0.5))
         for n in (sum(1 for row in tfs if row[i]) for i in range(len(terms)))
     ]
-    scores: list[float] = []
+    scores: list[tuple[float, int]] = []
     for row, length in zip(tfs, lengths, strict=True):
         norm = BM25_K1 * (1 - BM25_B + BM25_B * (length / average if average else 0.0))
-        scores.append(
-            sum(idf[i] * tf * (BM25_K1 + 1) / (tf + norm) for i, tf in enumerate(row) if tf)
-        )
+        score = sum(idf[i] * tf * (BM25_K1 + 1) / (tf + norm) for i, tf in enumerate(row) if tf)
+        scores.append((score, sum(1 for tf in row if tf)))
     return scores
 
 
-def _file_hits(memory_file: MemoryFile, terms: tuple[str, ...], score: float) -> list[MemoryHit]:
+def _file_hits(
+    memory_file: MemoryFile, terms: tuple[str, ...], score: float, matched: int
+) -> list[MemoryHit]:
     """The lines of one matching document to show, each carrying its score (pure).
 
     One metadata hit (line 0) when a term is in the name or description, then
@@ -377,13 +383,25 @@ def _file_hits(memory_file: MemoryFile, terms: tuple[str, ...], score: float) ->
     metadata = f"{memory_file.name}\n{memory_file.description}".lower()
     if any(term in metadata for term in terms):
         hits.append(
-            MemoryHit(file=memory_file, line_number=0, line=memory_file.description, score=score)
+            MemoryHit(
+                file=memory_file,
+                line_number=0,
+                line=memory_file.description,
+                score=score,
+                matched=matched,
+            )
         )
     for number, line in enumerate(memory_file.body.splitlines(), start=1):
         lowered = line.lower()
         if any(term in lowered for term in terms):
             hits.append(
-                MemoryHit(file=memory_file, line_number=number, line=line.strip(), score=score)
+                MemoryHit(
+                    file=memory_file,
+                    line_number=number,
+                    line=line.strip(),
+                    score=score,
+                    matched=matched,
+                )
             )
     return hits
 
@@ -394,19 +412,24 @@ def search_memory(memories: list[ProjectMemory], query: str) -> list[MemoryHit]:
     Each fact file is one document, and the corpus is every file across the
     memories passed in, so a term's rarity is judged fleet-wide. The query is
     split on whitespace into terms, and a document matches when it contains
-    ANY term: ``descriptor drift`` finds a note that uses the two words apart,
-    and one that uses both outranks one that uses either. Scoring is BM25
+    ANY term: ``descriptor drift`` finds a note that uses the two words apart.
+
+    Order is by how many distinct terms a note contains, then by BM25
     (:data:`BM25_K1`, :data:`BM25_B`), with the name and description weighted
-    above the body. A rare term therefore outranks a common one.
+    above the body. Coverage comes first because BM25 alone does not guarantee
+    it: its length normalisation can score a short note with one term above a
+    long note with every term, and a note that answers the whole query should
+    not be buried under one that answers half. Among notes matching the same
+    number of terms, a rare term outranks a common one.
 
     Args:
         memories: Per-project memories (see :func:`load_project_memory`).
         query: Text to look for in names, descriptions, and bodies.
 
     Returns:
-        Hits sorted by their document's score, highest first, then project,
-        file and line. A document's metadata hit (line 0) precedes its body
-        lines.
+        Hits sorted by terms matched, then score, highest first, then
+        project, file and line. A document's metadata hit (line 0) precedes
+        its body lines.
     """
     terms = _query_terms(query)
     if not terms:
@@ -414,9 +437,17 @@ def search_memory(memories: list[ProjectMemory], query: str) -> list[MemoryHit]:
 
     files = [memory_file for memory in memories for memory_file in memory.files]
     hits: list[MemoryHit] = []
-    for memory_file, score in zip(files, _bm25_scores(files, terms), strict=True):
-        if score > 0:
-            hits.extend(_file_hits(memory_file, terms, score))
+    for memory_file, (score, matched) in zip(files, _bm25_scores(files, terms), strict=True):
+        if matched:
+            hits.extend(_file_hits(memory_file, terms, score, matched))
 
-    hits.sort(key=lambda h: (-h.score, h.file.project.lower(), h.file.path.name, h.line_number))
+    hits.sort(
+        key=lambda h: (
+            -h.matched,
+            -h.score,
+            h.file.project.lower(),
+            h.file.path.name,
+            h.line_number,
+        )
+    )
     return hits

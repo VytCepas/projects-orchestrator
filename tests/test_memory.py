@@ -288,6 +288,17 @@ def test_a_multi_word_query_matches_terms_used_apart(fleet_dir: Path) -> None:
     assert _order(hits) == ["both.md", "one.md"]
 
 
+def test_a_note_with_every_term_outranks_a_short_one_with_some(fleet_dir: Path) -> None:
+    # BM25 alone fails this: length normalisation scores a short one-term note
+    # above a long note carrying the whole query (review on #264).
+    bodies = {f"u{i}.md": "unrelated" for i in range(20)}
+    bodies["long.md"] = "descriptor drift " + "padding " * 2000
+    bodies["short.md"] = "drift"
+    hits = search_memory(_corpus(fleet_dir, bodies), "descriptor drift")
+    assert _order(hits) == ["long.md", "short.md"]
+    assert [h.matched for h in hits][:1] == [2]
+
+
 def test_a_short_note_outranks_a_long_one_with_the_same_count(fleet_dir: Path) -> None:
     # b > 0: one mention in a short note is stronger evidence than in a long one.
     memories = _corpus(
