@@ -175,3 +175,61 @@ def test_only_tracked_names_mutmut_will_not_copy_are_reported() -> None:
     # README.md is in also_copy, src/ is copied by mutmut itself, .venv is not
     # tracked, and LICENSE is tracked and not copied.
     assert uncopied({"LICENSE", "README.md", "src", ".venv"}) == ["LICENSE"]
+
+
+# --- mutmut's leftover copy does not break the ordinary run (#297) -------------
+
+
+def _tree_with_a_mutants_copy(root: Path) -> None:
+    """A miniature repo whose `mutants/` holds a second copy of the suite.
+
+    That is what `just test-mutation` leaves behind. Without the ignore, pytest
+    collects both copies, finds two modules named `test_dup`, and reports an
+    import file mismatch for every one of them.
+    """
+    addopts = tomllib.loads(_PYPROJECT.read_text(encoding="utf-8"))["tool"]["pytest"][
+        "ini_options"
+    ]["addopts"]
+    (root / "pyproject.toml").write_text(
+        f'[tool.pytest.ini_options]\naddopts = "{addopts}"\n', encoding="utf-8"
+    )
+    for where in ("tests", "mutants/tests"):
+        directory = root / where
+        directory.mkdir(parents=True)
+        (directory / "test_dup.py").write_text(
+            "def test_one():\n    assert True\n", encoding="utf-8"
+        )
+
+
+def test_a_leftover_mutants_copy_does_not_break_collection(tmp_path: Path) -> None:
+    import subprocess
+
+    _tree_with_a_mutants_copy(tmp_path)
+    run = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert run.returncode == 0, run.stdout[-2000:]
+    assert "1 passed" in run.stdout, run.stdout[-2000:]
+
+
+def test_the_ignore_does_not_hide_the_suite_from_mutmut_itself(tmp_path: Path) -> None:
+    # mutmut runs pytest FROM `mutants/`, where the same setting names
+    # `mutants/mutants` — a path that does not exist. The copy's own tests must
+    # still be collected, or the ignore would kill the nightly it protects.
+    import shutil
+    import subprocess
+
+    _tree_with_a_mutants_copy(tmp_path)
+    shutil.copy(tmp_path / "pyproject.toml", tmp_path / "mutants" / "pyproject.toml")
+    run = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"],
+        cwd=tmp_path / "mutants",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert "1 passed" in run.stdout, run.stdout[-2000:]

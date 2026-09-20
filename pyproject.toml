@@ -52,7 +52,15 @@ asyncio_mode = "auto"
 # tests/integration/ runs in CI's own "Integration tests" job, which names the
 # directory explicitly (an explicit path overrides --ignore). Ignoring it here
 # keeps the unit run and mutmut from running those subprocess tests a second time.
-addopts = "--ignore=tests/integration"
+#
+# mutants/ is mutmut's copy of the whole tree. It is gitignored but it is still
+# there after a local `just test-mutation`, and collection walking into
+# `mutants/tests/` finds a second module named `test_watchdog` — 69 collection
+# errors about a working tree that is fine, and a pre-push hook that refuses the
+# push (#297). The nightly is unaffected: mutmut runs pytest FROM `mutants/`,
+# where this names `mutants/mutants`, a path that does not exist and that pytest
+# ignores in both senses of the word.
+addopts = "--ignore=tests/integration --ignore=mutants"
 markers = [
     "inspects_agent_launch: exercises _default_agent_run itself (must stub subprocess.run); exempt from the no-live-agent fixture",
     "reads_the_checkout: reads files through git's top level, which under mutmut is the original checkout, not mutants/; exempt from the mutmut copy check",
