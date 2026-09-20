@@ -377,12 +377,23 @@ def test_commit_all_on_a_non_repo_fails_rather_than_raising(fleet_dir: Path) -> 
         # Host-aware by decision (project-init ADR-013): GHE.com and GHES children work.
         ("git@github.example.com:acme/alpha.git", "github.example.com/acme/alpha"),
         ("https://acme.ghe.com/acme/alpha.git", "acme.ghe.com/acme/alpha"),
+        # A GHES on a non-default port: the port is part of the authority gh is
+        # given, and scp-style takes none — `git@host:8443/x` means the PATH.
+        ("https://ghes.example.com:8443/acme/alpha.git", "ghes.example.com:8443/acme/alpha"),
+        ("ssh://git@ghes.example.com:2222/acme/alpha.git", "ghes.example.com:2222/acme/alpha"),
+        ("git@ghes.example.com:8443/alpha.git", "ghes.example.com/8443/alpha"),
         # A lookalike host is carried through as itself, never read as github.com.
         ("https://github.com.evil.example/acme/alpha.git", "github.com.evil.example/acme/alpha"),
+        # A malformed authority is not a host. Leading dash especially: it is the
+        # one shape that could be read as a flag downstream.
+        ("https://-evil.example/acme/alpha.git", ""),
+        ("https://.example.com/acme/alpha.git", ""),
+        ("https://example.com./acme/alpha.git", ""),
         # Not remotes gh can be pointed at.
         ("/srv/mirrors/alpha.git", ""),
         ("mirrors/acme/alpha.git", ""),
         ("file:///srv/mirrors/alpha.git", ""),
+        ("https://github.com/acme/deep/alpha.git", ""),
         ("", ""),
     ],
 )

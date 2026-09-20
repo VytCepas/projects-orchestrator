@@ -128,17 +128,34 @@ def _why(result: RunResult, fallback: str) -> str:
     return (result.stderr or result.error or "").strip()[-300:] or fallback
 
 
-#: ``host/owner/name`` as it appears in a remote URL — `gh`'s own
-#: ``[HOST/]OWNER/REPO``. The host is NOT pinned to ``github.com``: this system
-#: is host-aware by decision (project-init ADR-013, spike #254), covering GHE.com and
-#: GitHub Enterprise Server, and a pattern that only knew ``github.com`` would refuse
+#: A remote URL's authority and path, in the two shapes git accepts. They are
+#: separate patterns because a colon means different things in each: in
+#: `ssh://host:22/owner/name` it introduces a PORT, and in scp-style
+#: `git@host:owner/name` it separates the host from the path. One pattern that
+#: treats every colon alike cannot read `https://ghes.example:8443/acme/alpha`
+#: (Codex on #296, verified: the old pattern returned no match at all).
+#:
+#: The host is NOT pinned to ``github.com``: this system is host-aware by
+#: decision (project-init ADR-013, spike #254), covering GHE.com and GitHub
+#: Enterprise Server, and a pattern that only knew ``github.com`` would refuse
 #: every write on an Enterprise child — *after* the branch had already been
-#: pushed (Codex on #296). Each part is the character set GitHub allows, so
-#: nothing parsed out of a remote can be read by ``gh`` as a flag or a path.
-_REMOTE_URL = re.compile(
-    r"(?:(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*)://)?(?:(?P<user>[^@/]+)@)?"
-    r"(?P<host>[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9])"
-    r"[:/](?P<owner>[A-Za-z0-9][A-Za-z0-9-]*)/(?P<name>[A-Za-z0-9._-]+?)(?:\.git)?/?\Z"
+#: pushed.
+_AUTHORITY = r"[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]"
+_SCHEME_URL = re.compile(
+    rf"[A-Za-z][A-Za-z0-9+.-]*://(?:[^@/]+@)?"
+    rf"(?P<authority>{_AUTHORITY}(?::[0-9]{{1,5}})?)/(?P<path>.+)\Z"
+)
+#: scp-style takes no port — `git@host:8443/owner` means the PATH `8443/owner`.
+#: The path's leading `[^/]` is what keeps the two patterns order-independent: it
+#: is the reason `ssh://git@host/owner/name` cannot also parse as scp with the
+#: authority `ssh` and the path `//git@host/…`. Swapping the two is therefore an
+#: equivalent mutant, and only while that character stays.
+_SCP_URL = re.compile(rf"(?:[^@/:]+@)?(?P<authority>{_AUTHORITY}):(?P<path>[^/].*)\Z")
+
+#: ``owner/name``, in the character set GitHub allows for each, so nothing parsed
+#: out of a remote can be read by ``gh`` as a flag or a path.
+_OWNER_NAME = re.compile(
+    r"(?P<owner>[A-Za-z0-9][A-Za-z0-9-]*)/(?P<name>[A-Za-z0-9._-]+?)(?:\.git)?/?\Z"
 )
 
 
@@ -154,15 +171,19 @@ def origin_repo(repo: Path) -> str:
     draft PRs, and filed and closed its notify-mode issues, on somebody else's
     repository — the one place the blast radius is not ours to take (#286).
 
-    The host travels with the answer rather than being assumed or dropped. A
-    lookalike host is therefore preserved, not silently read as ``github.com``,
-    and an Enterprise child keeps working. What this does NOT do is decide which
-    forge a host belongs to — ``gh`` knows which hosts it is configured for and
-    fails loudly on one it does not, and guessing from the hostname would be the
+    The authority travels with the answer rather than being assumed or dropped,
+    port included (``gh`` keeps it as the HTTP Host — verified: ``--repo
+    localhost:8443/foo/bar`` reaches ``https://localhost:8443/api/graphql``,
+    where a malformed value is rejected at argument parsing instead). A lookalike
+    host is therefore preserved, not silently read as ``github.com``, and an
+    Enterprise child keeps working. What this does NOT do is decide which forge a
+    host belongs to — ``gh`` knows which hosts it is configured for and fails
+    loudly on one it does not, and guessing from the hostname would be the
     confident-wrong answer this module refuses elsewhere.
 
     ``""`` is a refusal, not a default: a caller that fell back to ``gh``'s own
-    resolution would reintroduce exactly the behaviour this exists to prevent.
+    resolution would reintroduce exactly the behaviour this exists to prevent. A
+    local path has neither of the two shapes and is refused by that alone.
     """
     remote = _run_argv(["git", "remote", "get-url", "origin"], cwd=repo)
     if not remote.ok:
@@ -170,12 +191,12 @@ def origin_repo(repo: Path) -> str:
             "cannot read origin in %s: %s", repo, _why(remote, "git remote get-url failed")
         )
         return ""
-    match = _REMOTE_URL.match(remote.stdout.strip())
-    # A bare `host/owner/name` with no scheme, no user and no dot is a relative
-    # path, not a remote — `mirrors/acme/alpha.git` must not become a host.
-    if not match or not (match["scheme"] or match["user"] or "." in match["host"]):
+    url = remote.stdout.strip()
+    match = _SCHEME_URL.match(url) or _SCP_URL.match(url)
+    path = _OWNER_NAME.match(match["path"]) if match else None
+    if not match or not path:
         return ""
-    return f"{match['host']}/{match['owner']}/{match['name']}"
+    return f"{match['authority']}/{path['owner']}/{path['name']}"
 
 
 def _not_github(repo: Path) -> Landing:
