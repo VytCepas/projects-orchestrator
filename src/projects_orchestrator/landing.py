@@ -142,9 +142,14 @@ def _why(result: RunResult, fallback: str) -> str:
 #: pushed.
 _AUTHORITY = r"[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]"
 _SCHEME_URL = re.compile(
-    rf"[A-Za-z][A-Za-z0-9+.-]*://(?:[^@/]+@)?"
-    rf"(?P<authority>{_AUTHORITY}(?::[0-9]{{1,5}})?)/(?P<path>.+)\Z"
+    rf"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*)://(?:[^@/]+@)?"
+    rf"(?P<host>{_AUTHORITY})(?P<port>:[0-9]{{1,5}})?/(?P<path>.+)\Z"
 )
+#: The only schemes whose port is the port ``gh`` should dial. `--repo
+#: host:2222/owner/name` makes gh request `https://host:2222/api/graphql`, so
+#: carrying an `ssh://…:2222` transport port into the answer points every write
+#: at the SSH daemon (Codex on #296 — and at a test case of mine that blessed it).
+_API_SCHEMES = frozenset({"http", "https"})
 #: scp-style takes no port — `git@host:8443/owner` means the PATH `8443/owner`.
 #: The path's leading `[^/]` is what keeps the two patterns order-independent: it
 #: is the reason `ssh://git@host/owner/name` cannot also parse as scp with the
@@ -157,6 +162,18 @@ _SCP_URL = re.compile(rf"(?:[^@/:]+@)?(?P<authority>{_AUTHORITY}):(?P<path>[^/].
 _OWNER_NAME = re.compile(
     r"(?P<owner>[A-Za-z0-9][A-Za-z0-9-]*)/(?P<name>[A-Za-z0-9._-]+?)(?:\.git)?/?\Z"
 )
+
+
+def _authority_and_path(url: str) -> tuple[str, str]:
+    """The host ``gh`` should be given and the path after it; ``("", "")`` for neither shape."""
+    with_scheme = _SCHEME_URL.match(url)
+    if with_scheme:
+        port = with_scheme["port"] or ""
+        if with_scheme["scheme"].lower() not in _API_SCHEMES:
+            port = ""
+        return with_scheme["host"] + port, with_scheme["path"]
+    scp = _SCP_URL.match(url)
+    return (scp["authority"], scp["path"]) if scp else ("", "")
 
 
 def origin_repo(repo: Path) -> str:
@@ -191,12 +208,11 @@ def origin_repo(repo: Path) -> str:
             "cannot read origin in %s: %s", repo, _why(remote, "git remote get-url failed")
         )
         return ""
-    url = remote.stdout.strip()
-    match = _SCHEME_URL.match(url) or _SCP_URL.match(url)
-    path = _OWNER_NAME.match(match["path"]) if match else None
-    if not match or not path:
+    authority, path = _authority_and_path(remote.stdout.strip())
+    owner_name = _OWNER_NAME.match(path)
+    if not (authority and owner_name):
         return ""
-    return f"{match['authority']}/{path['owner']}/{path['name']}"
+    return f"{authority}/{owner_name['owner']}/{owner_name['name']}"
 
 
 def _not_github(repo: Path) -> Landing:

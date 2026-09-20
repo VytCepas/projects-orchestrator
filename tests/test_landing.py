@@ -380,7 +380,13 @@ def test_commit_all_on_a_non_repo_fails_rather_than_raising(fleet_dir: Path) -> 
         # A GHES on a non-default port: the port is part of the authority gh is
         # given, and scp-style takes none — `git@host:8443/x` means the PATH.
         ("https://ghes.example.com:8443/acme/alpha.git", "ghes.example.com:8443/acme/alpha"),
-        ("ssh://git@ghes.example.com:2222/acme/alpha.git", "ghes.example.com:2222/acme/alpha"),
+        ("http://ghes.example.com:8080/acme/alpha.git", "ghes.example.com:8080/acme/alpha"),
+        # A URL scheme is case-insensitive; the port must not depend on spelling.
+        ("HTTPS://ghes.example.com:8443/acme/alpha.git", "ghes.example.com:8443/acme/alpha"),
+        # An SSH TRANSPORT port is not the API port gh dials. Carrying :2222 here
+        # would point every write at the SSH daemon.
+        ("ssh://git@ghes.example.com:2222/acme/alpha.git", "ghes.example.com/acme/alpha"),
+        ("git+ssh://git@ghes.example.com:2222/acme/alpha.git", "ghes.example.com/acme/alpha"),
         ("git@ghes.example.com:8443/alpha.git", "ghes.example.com/8443/alpha"),
         # A lookalike host is carried through as itself, never read as github.com.
         ("https://github.com.evil.example/acme/alpha.git", "github.com.evil.example/acme/alpha"),
