@@ -9,6 +9,7 @@ boundary on a scaffolded repo would prove the child's guard works, not ours.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -51,8 +52,11 @@ class _Ok:
     """A successful RunResult stand-in."""
 
     ok = True
-    stdout = "https://example/pr/1"
     stderr = ""
+    error = ""
+
+    def __init__(self, stdout: str = "https://example/pr/1") -> None:
+        self.stdout = stdout
 
 
 def _spy(launched: list[list[str]], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -60,9 +64,20 @@ def _spy(launched: list[list[str]], monkeypatch: pytest.MonkeyPatch) -> None:
 
     def record(args: list[str], cwd: Path, timeout: float = 30.0) -> object:  # noqa: ARG001
         launched.append(args)
+        # Every GitHub write resolves `origin` first (#286), so the stub has to
+        # answer that question or the boundary refuses before it reaches `gh`.
+        if args[:3] == ["git", "remote", "get-url"]:
+            return _Ok("https://github.com/acme/alpha.git")
         return _Ok()
 
     monkeypatch.setattr("projects_orchestrator.landing._run_argv", record)
+
+
+def _gh(launched: list[list[str]]) -> list[str]:
+    """The one ``gh`` argv the boundary launched."""
+    calls = [args for args in launched if args and args[0] == "gh"]
+    assert len(calls) == 1, f"expected exactly one gh call, got {calls}"
+    return calls[0]
 
 
 # --- What may never be pushed --------------------------------------------------
@@ -210,7 +225,7 @@ def test_the_pr_is_opened_as_a_draft(fleet_dir: Path, monkeypatch: pytest.Monkey
     seen: list[list[str]] = []
     _spy(seen, monkeypatch)
     open_draft_pr(project, "heal/lint-x", "t", "b")
-    assert "--draft" in seen[0]
+    assert "--draft" in _gh(seen)
 
 
 def test_the_pr_is_opened_from_the_agent_branch(
@@ -220,7 +235,7 @@ def test_the_pr_is_opened_from_the_agent_branch(
     seen: list[list[str]] = []
     _spy(seen, monkeypatch)
     open_draft_pr(project, "heal/lint-x", "t", "b")
-    assert "--head" in seen[0] and "heal/lint-x" in seen[0]
+    assert "--head" in _gh(seen) and "heal/lint-x" in _gh(seen)
 
 
 # --- What the boundary never does ----------------------------------------------
@@ -346,3 +361,153 @@ def test_commit_all_on_a_non_repo_fails_rather_than_raising(fleet_dir: Path) -> 
 
     plain = make_project(fleet_dir, "alpha")  # no git_init
     assert commit_all(plain, "m").status == COMMIT_FAILED
+
+
+# --- Every GitHub write names its repository (#286) ----------------------------
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://github.com/acme/alpha.git", "github.com/acme/alpha"),
+        ("https://github.com/acme/alpha", "github.com/acme/alpha"),
+        ("git@github.com:acme/alpha.git", "github.com/acme/alpha"),
+        ("ssh://git@github.com/acme/alpha.git", "github.com/acme/alpha"),
+        ("https://github.com/acme/alpha.js", "github.com/acme/alpha.js"),
+        # Host-aware by decision (project-init ADR-013): GHE.com and GHES children work.
+        ("git@github.example.com:acme/alpha.git", "github.example.com/acme/alpha"),
+        ("https://acme.ghe.com/acme/alpha.git", "acme.ghe.com/acme/alpha"),
+        # A GHES on a non-default port: the port is part of the authority gh is
+        # given, and scp-style takes none — `git@host:8443/x` means the PATH.
+        ("https://ghes.example.com:8443/acme/alpha.git", "ghes.example.com:8443/acme/alpha"),
+        ("http://ghes.example.com:8080/acme/alpha.git", "ghes.example.com:8080/acme/alpha"),
+        # A URL scheme is case-insensitive; the port must not depend on spelling.
+        ("HTTPS://ghes.example.com:8443/acme/alpha.git", "ghes.example.com:8443/acme/alpha"),
+        # An SSH TRANSPORT port is not the API port gh dials. Carrying :2222 here
+        # would point every write at the SSH daemon.
+        ("ssh://git@ghes.example.com:2222/acme/alpha.git", "ghes.example.com/acme/alpha"),
+        ("git+ssh://git@ghes.example.com:2222/acme/alpha.git", "ghes.example.com/acme/alpha"),
+        ("git@ghes.example.com:8443/alpha.git", "ghes.example.com/8443/alpha"),
+        # A bracketed IPv6 literal: its own colons are not a port separator, which
+        # is what the brackets are for. gh takes the authority either way.
+        ("https://[2001:db8::1]:8443/acme/alpha.git", "[2001:db8::1]:8443/acme/alpha"),
+        ("https://[2001:db8::1]/acme/alpha.git", "[2001:db8::1]/acme/alpha"),
+        ("ssh://git@[2001:db8::1]:2222/acme/alpha.git", "[2001:db8::1]/acme/alpha"),
+        ("git@[2001:db8::1]:acme/alpha.git", "[2001:db8::1]/acme/alpha"),
+        ("https://[2001:db8::1/acme/alpha.git", ""),
+        # A lookalike host is carried through as itself, never read as github.com.
+        ("https://github.com.evil.example/acme/alpha.git", "github.com.evil.example/acme/alpha"),
+        # A one-character host is valid; it must not need a second to prove it.
+        ("ssh://git@g/acme/alpha.git", "g/acme/alpha"),
+        ("git@g:acme/alpha.git", "g/acme/alpha"),
+        # A malformed authority is not a host. Leading dash especially: it is the
+        # one shape that could be read as a flag downstream.
+        ("https://-evil.example/acme/alpha.git", ""),
+        ("https://.example.com/acme/alpha.git", ""),
+        ("https://example.com./acme/alpha.git", ""),
+        # Not remotes gh can be pointed at.
+        ("/srv/mirrors/alpha.git", ""),
+        ("mirrors/acme/alpha.git", ""),
+        ("file:///srv/mirrors/alpha.git", ""),
+        ("https://github.com/acme/deep/alpha.git", ""),
+        ("", ""),
+    ],
+)
+def test_origin_repo_reads_owner_and_name_from_the_origin_url(
+    fleet_dir: Path, monkeypatch: pytest.MonkeyPatch, url: str, expected: str
+) -> None:
+    from projects_orchestrator.landing import origin_repo
+
+    project = make_project(fleet_dir, "alpha")
+    monkeypatch.setattr(
+        "projects_orchestrator.landing._run_argv",
+        lambda args, cwd, timeout=30.0: _Ok(url),  # noqa: ARG005
+    )
+    assert origin_repo(project) == expected
+
+
+def _two_remote_clone(fleet_dir: Path, tmp_path: Path) -> tuple[Path, Path]:
+    """A clone whose `origin` is ours and whose `upstream` is somebody else's.
+
+    Measured with gh 2.98.0: `gh` resolves the base repository of this clone to
+    `upstream`, so a write that does not name its repository lands on the other
+    repo (#286). A stub `gh` records the argv instead of making the call.
+    """
+    project = make_project(fleet_dir, "alpha")
+    git_init(project)
+    for name, url in (
+        ("origin", "https://github.com/acme/alpha.git"),
+        ("upstream", "https://github.com/someone-else/alpha.git"),
+    ):
+        subprocess.run(["git", "-C", str(project), "remote", "add", name, url], check=True)
+    log = tmp_path / "gh-argv.txt"
+    stub_dir = tmp_path / "stub-bin"
+    stub_dir.mkdir()
+    stub = stub_dir / "gh"
+    stub.write_text(f'#!/bin/sh\nprintf "%s\\n" "$@" >> "{log}"\necho https://example/1\n')
+    stub.chmod(0o755)
+    return project, log
+
+
+@pytest.mark.parametrize("write", ["pr", "issue_create", "issue_view", "issue_list"])
+def test_every_github_write_names_the_origin_repository(
+    fleet_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, write: str
+) -> None:
+    from projects_orchestrator.landing import (
+        close_own_issue,
+        issue_marker,
+        open_issue,
+        own_open_issues,
+    )
+
+    project, log = _two_remote_clone(fleet_dir, tmp_path)
+    monkeypatch.setenv("PATH", f"{log.parent / 'stub-bin'}{os.pathsep}{os.environ['PATH']}")
+    body = f"a finding {issue_marker('alpha/lint')}"
+    {
+        "pr": lambda: open_draft_pr(project, "heal/x", "t", body),
+        "issue_create": lambda: open_issue(project, "t", body),
+        "issue_view": lambda: close_own_issue(project, 7, "alpha/lint", "fixed"),
+        "issue_list": lambda: own_open_issues(project),
+    }[write]()
+    argv = log.read_text(encoding="utf-8").split()
+    assert "--repo" in argv, f"{write} did not name a repository: {argv}"
+    assert argv[argv.index("--repo") + 1] == "github.com/acme/alpha"
+
+
+@pytest.mark.parametrize("write", ["pr", "issue_create", "issue_view"])
+def test_an_origin_gh_cannot_be_pointed_at_is_refused_rather_than_left_to_gh(
+    fleet_dir: Path, monkeypatch: pytest.MonkeyPatch, write: str
+) -> None:
+    from projects_orchestrator.landing import close_own_issue, issue_marker, open_issue
+
+    project = make_project(fleet_dir, "alpha")
+    launched: list[list[str]] = []
+
+    def record(args: list[str], cwd: Path, timeout: float = 30.0) -> object:  # noqa: ARG001
+        launched.append(args)
+        return _Ok("/srv/mirrors/alpha.git")
+
+    monkeypatch.setattr("projects_orchestrator.landing._run_argv", record)
+    body = f"a finding {issue_marker('alpha/lint')}"
+    result = {
+        "pr": lambda: open_draft_pr(project, "heal/x", "t", body),
+        "issue_create": lambda: open_issue(project, "t", body),
+        "issue_view": lambda: close_own_issue(project, 7, "alpha/lint", "fixed"),
+    }[write]()
+    assert result.status == REFUSED
+    assert not [args for args in launched if args[0] == "gh"], "gh was launched anyway"
+
+
+def test_an_unaddressable_origin_makes_the_open_issues_unknown_not_empty(
+    fleet_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `None` is "unknown"; an empty tuple would mean "no open issues" and every
+    # pass would file a duplicate.
+    from projects_orchestrator.landing import own_open_issues
+
+    project = make_project(fleet_dir, "alpha")
+    monkeypatch.setattr(
+        "projects_orchestrator.landing._run_argv",
+        lambda args, cwd, timeout=30.0: _Ok("/srv/mirrors/alpha.git"),  # noqa: ARG005
+    )
+    assert own_open_issues(project) is None

@@ -10,6 +10,16 @@ version's only source. `tests/test_version.py` fails when they disagree.
 
 ## [Unreleased]
 
+### Fixed
+
+- Every GitHub write heal makes — the draft PR, and notify mode's issues —
+  names the repository its `origin` remote points at. `gh` resolves a clone
+  with a second remote to `upstream`, so a fork clone would have opened PRs
+  and filed issues on the upstream repository. The remote's host travels with
+  the answer, so GHE.com and GHES children keep working (project-init ADR-013),
+  and an `origin` that `gh` cannot be pointed at is refused rather than left to
+  `gh`'s own resolution (#286).
+
 ## [0.3.0] - 2026-09-19
 
 The first release since 0.2.0: the fleet-audit fixes, the frozen `--json`

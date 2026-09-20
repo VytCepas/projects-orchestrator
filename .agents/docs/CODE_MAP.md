@@ -354,6 +354,7 @@ Render the fleet view as one self-contained HTML page.
 The write boundary — an agent run's work leaves here as a draft PR, or not at all.
 
 - `class Landing` — The outcome of trying to land a run's work.
+- `def origin_repo` — ``host/owner/name`` for ``repo``'s ``origin`` remote; ``""`` when there is none.
 - `def default_branch` — Resolve the repo's *actual* default branch; ``""`` when it cannot be.
 - `def is_protected` — Whether ``branch`` is a ref an agent run may never write to (pure).
 - `def push_branch` — Push one agent branch to ``origin``; refuse anything else.

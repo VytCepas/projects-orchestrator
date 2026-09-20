@@ -128,6 +128,111 @@ def _why(result: RunResult, fallback: str) -> str:
     return (result.stderr or result.error or "").strip()[-300:] or fallback
 
 
+#: A remote URL's authority and path, in the two shapes git accepts. They are
+#: separate patterns because a colon means different things in each: in
+#: `ssh://host:22/owner/name` it introduces a PORT, and in scp-style
+#: `git@host:owner/name` it separates the host from the path. One pattern that
+#: treats every colon alike cannot read `https://ghes.example:8443/acme/alpha`
+#: (Codex on #296, verified: the old pattern returned no match at all).
+#:
+#: The host is NOT pinned to ``github.com``: this system is host-aware by
+#: decision (project-init ADR-013, spike #254), covering GHE.com and GitHub
+#: Enterprise Server, and a pattern that only knew ``github.com`` would refuse
+#: every write on an Enterprise child — *after* the branch had already been
+#: pushed.
+#: Starts and ends alphanumeric — a leading `-` is the one shape that could be
+#: read as a flag downstream — but a ONE-character host is valid and must not
+#: need a second character to prove it (Codex on #296).
+_NAMED_HOST = r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?"
+#: A bracketed IPv6 literal is the one authority whose own colons are not a port
+#: separator, which is what the brackets are FOR. `gh` takes it either way —
+#: verified: `--repo "[::1]:8443/foo/bar"` requests `https://[::1]:8443/api/graphql`
+#: and `--repo "[::1]/foo/bar"` requests `https://[::1]/api/graphql` (Codex on #296).
+_HOST = rf"(?:\[[0-9A-Fa-f:.]+\]|{_NAMED_HOST})"
+_SCHEME_URL = re.compile(
+    rf"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*)://(?:[^@/]+@)?"
+    rf"(?P<host>{_HOST})(?P<port>:[0-9]{{1,5}})?/(?P<path>.+)\Z"
+)
+#: The only schemes whose port is the port ``gh`` should dial. `--repo
+#: host:2222/owner/name` makes gh request `https://host:2222/api/graphql`, so
+#: carrying an `ssh://…:2222` transport port into the answer points every write
+#: at the SSH daemon (Codex on #296 — and at a test case of mine that blessed it).
+_API_SCHEMES = frozenset({"http", "https"})
+#: scp-style takes no port — `git@host:8443/owner` means the PATH `8443/owner`.
+#: The path's leading `[^/]` is what keeps the two patterns order-independent: it
+#: is the reason `ssh://git@host/owner/name` cannot also parse as scp with the
+#: authority `ssh` and the path `//git@host/…`. Swapping the two is therefore an
+#: equivalent mutant, and only while that character stays.
+_SCP_URL = re.compile(rf"(?:[^@/:]+@)?(?P<authority>{_HOST}):(?P<path>[^/].*)\Z")
+
+#: ``owner/name``, in the character set GitHub allows for each, so nothing parsed
+#: out of a remote can be read by ``gh`` as a flag or a path.
+_OWNER_NAME = re.compile(
+    r"(?P<owner>[A-Za-z0-9][A-Za-z0-9-]*)/(?P<name>[A-Za-z0-9._-]+?)(?:\.git)?/?\Z"
+)
+
+
+def _authority_and_path(url: str) -> tuple[str, str]:
+    """The host ``gh`` should be given and the path after it; ``("", "")`` for neither shape."""
+    with_scheme = _SCHEME_URL.match(url)
+    if with_scheme:
+        port = with_scheme["port"] or ""
+        if with_scheme["scheme"].lower() not in _API_SCHEMES:
+            port = ""
+        return with_scheme["host"] + port, with_scheme["path"]
+    scp = _SCP_URL.match(url)
+    return (scp["authority"], scp["path"]) if scp else ("", "")
+
+
+def origin_repo(repo: Path) -> str:
+    """``host/owner/name`` for ``repo``'s ``origin`` remote; ``""`` when there is none.
+
+    Every ``gh`` write this module makes names its repository explicitly, because
+    ``gh``'s own answer is not ``origin``. In a clone with a second remote and no
+    ``gh repo set-default``, ``gh`` resolves the base repository to ``upstream``
+    (measured with gh 2.98.0: in a clone whose ``origin`` was this project and
+    whose ``upstream`` was another, ``gh issue list`` returned the *other* repo's
+    issues). A fork clone healed by this system would therefore have opened its
+    draft PRs, and filed and closed its notify-mode issues, on somebody else's
+    repository — the one place the blast radius is not ours to take (#286).
+
+    The authority travels with the answer rather than being assumed or dropped,
+    port included (``gh`` keeps it as the HTTP Host — verified: ``--repo
+    localhost:8443/foo/bar`` reaches ``https://localhost:8443/api/graphql``,
+    where a malformed value is rejected at argument parsing instead). A lookalike
+    host is therefore preserved, not silently read as ``github.com``, and an
+    Enterprise child keeps working. What this does NOT do is decide which forge a
+    host belongs to — ``gh`` knows which hosts it is configured for and fails
+    loudly on one it does not, and guessing from the hostname would be the
+    confident-wrong answer this module refuses elsewhere.
+
+    ``""`` is a refusal, not a default: a caller that fell back to ``gh``'s own
+    resolution would reintroduce exactly the behaviour this exists to prevent. A
+    local path has neither of the two shapes and is refused by that alone.
+    """
+    remote = _run_argv(["git", "remote", "get-url", "origin"], cwd=repo)
+    if not remote.ok:
+        _log.warning(
+            "cannot read origin in %s: %s", repo, _why(remote, "git remote get-url failed")
+        )
+        return ""
+    authority, path = _authority_and_path(remote.stdout.strip())
+    owner_name = _OWNER_NAME.match(path)
+    if not (authority and owner_name):
+        return ""
+    return f"{authority}/{owner_name['owner']}/{owner_name['name']}"
+
+
+def _not_github(repo: Path) -> Landing:
+    return Landing(
+        REFUSED,
+        detail=(
+            f"refusing to write to GitHub from {repo}: its 'origin' remote is not a "
+            "repository gh can be pointed at, and gh would pick a base repository of its own"
+        ),
+    )
+
+
 def default_branch(repo: Path) -> str:
     """Resolve the repo's *actual* default branch; ``""`` when it cannot be.
 
@@ -228,10 +333,15 @@ def open_draft_pr(worktree: Path, branch: str, title: str, body: str) -> Landing
     with no human in the loop at all — which is the entire thing this system
     promises not to do.
     """
+    target = origin_repo(worktree)
+    if not target:
+        return _not_github(worktree)
     args = [
         "gh",
         "pr",
         "create",
+        "--repo",
+        target,
         "--draft",
         "--head",
         branch,
@@ -328,11 +438,17 @@ def own_open_issues(repo: Path, limit: int = ISSUE_LIST_LIMIT) -> tuple[OwnIssue
     is not "none": a caller that read ``None`` as "no open issues" would file a
     duplicate every pass.
     """
+    target = origin_repo(repo)
+    if not target:
+        _log.warning("%s: origin is not a GitHub repository, so its issues cannot be read", repo)
+        return None
     listed = _run_argv(
         [
             "gh",
             "issue",
             "list",
+            "--repo",
+            target,
             "--state",
             "open",
             "--author",
@@ -380,7 +496,12 @@ def open_issue(repo: Path, title: str, body: str) -> Landing:
     """
     if not marker_key(body):
         return Landing(REFUSED, detail="refusing to file an issue that carries no finding marker")
-    result = _run_argv(["gh", "issue", "create", "--title", title, "--body", body], cwd=repo)
+    target = origin_repo(repo)
+    if not target:
+        return _not_github(repo)
+    result = _run_argv(
+        ["gh", "issue", "create", "--repo", target, "--title", title, "--body", body], cwd=repo
+    )
     if not result.ok:
         return Landing(ISSUE_FAILED, detail=_why(result, "gh issue create failed"))
     url = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
@@ -394,7 +515,12 @@ def close_own_issue(repo: Path, number: int, key: str, comment: str) -> Landing:
     between the two, a person may have edited the issue into their own report, and
     closing that would be closing someone else's issue.
     """
-    viewed = _run_argv(["gh", "issue", "view", str(number), "--json", "state,body"], cwd=repo)
+    target = origin_repo(repo)
+    if not target:
+        return _not_github(repo)
+    viewed = _run_argv(
+        ["gh", "issue", "view", str(number), "--repo", target, "--json", "state,body"], cwd=repo
+    )
     if not viewed.ok:
         return Landing(ISSUE_FAILED, detail=_why(viewed, "gh issue view failed"))
     try:
@@ -407,7 +533,18 @@ def close_own_issue(repo: Path, number: int, key: str, comment: str) -> Landing:
     if marker_key(str(issue.get("body") or "")) != key:
         return Landing(REFUSED, detail=f"issue #{number} no longer carries the marker for {key}")
     closed = _run_argv(
-        ["gh", "issue", "close", str(number), "--reason", "completed", "--comment", comment],
+        [
+            "gh",
+            "issue",
+            "close",
+            str(number),
+            "--repo",
+            target,
+            "--reason",
+            "completed",
+            "--comment",
+            comment,
+        ],
         cwd=repo,
     )
     if not closed.ok:

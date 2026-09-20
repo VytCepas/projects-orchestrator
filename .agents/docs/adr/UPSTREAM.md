@@ -16,3 +16,4 @@ mistyped number fails instead of pointing at nothing.
 | project-init ADR-017 | `adr-017-per-surface-config-generator.md` | §6: the surface-independent capabilities inventory (`CAPABILITIES.md`) |
 | project-init ADR-024 | `adr-024-memory-tier-model.md` | the memory tier ladder |
 | project-init ADR-025 | `adr-025-agentic-os-root-layer.md` | §1: one-way producer→consumer dependency. §3: the capability inventory the root layer aggregates. §4: the descriptor contract and degrade-by-tier retrieval |
+| project-init ADR-013 | `adr-013-distribution-governance-model.md` | the estate is not only public `github.com`: a remote's host travels with the repository `gh` is pointed at (spike #254 — Enterprise Cloud, GHE.com, GHES) |
