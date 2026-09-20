@@ -397,6 +397,9 @@ def test_commit_all_on_a_non_repo_fails_rather_than_raising(fleet_dir: Path) -> 
         ("https://[2001:db8::1/acme/alpha.git", ""),
         # A lookalike host is carried through as itself, never read as github.com.
         ("https://github.com.evil.example/acme/alpha.git", "github.com.evil.example/acme/alpha"),
+        # A one-character host is valid; it must not need a second to prove it.
+        ("ssh://git@g/acme/alpha.git", "g/acme/alpha"),
+        ("git@g:acme/alpha.git", "g/acme/alpha"),
         # A malformed authority is not a host. Leading dash especially: it is the
         # one shape that could be read as a flag downstream.
         ("https://-evil.example/acme/alpha.git", ""),

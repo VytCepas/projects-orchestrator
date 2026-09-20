@@ -140,7 +140,10 @@ def _why(result: RunResult, fallback: str) -> str:
 #: Enterprise Server, and a pattern that only knew ``github.com`` would refuse
 #: every write on an Enterprise child — *after* the branch had already been
 #: pushed.
-_NAMED_HOST = r"[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]"
+#: Starts and ends alphanumeric — a leading `-` is the one shape that could be
+#: read as a flag downstream — but a ONE-character host is valid and must not
+#: need a second character to prove it (Codex on #296).
+_NAMED_HOST = r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?"
 #: A bracketed IPv6 literal is the one authority whose own colons are not a port
 #: separator, which is what the brackets are FOR. `gh` takes it either way —
 #: verified: `--repo "[::1]:8443/foo/bar"` requests `https://[::1]:8443/api/graphql`
