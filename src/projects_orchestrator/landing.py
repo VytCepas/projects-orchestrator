@@ -128,17 +128,22 @@ def _why(result: RunResult, fallback: str) -> str:
     return (result.stderr or result.error or "").strip()[-300:] or fallback
 
 
-#: ``owner/name`` as it appears in a GitHub remote URL. Both parts are the
-#: character set GitHub allows in an owner and a repository name, so nothing
-#: parsed out of a remote can be read by ``gh`` as a flag or a path.
-_GITHUB_REMOTE = re.compile(
-    r"(?:https://|git\+ssh://|ssh://)?(?:[^@/]+@)?github\.com[:/]"
-    r"(?P<owner>[A-Za-z0-9][A-Za-z0-9-]*)/(?P<name>[A-Za-z0-9._-]+?)(?:\.git)?/?\Z"
+#: ``host/owner/name`` as it appears in a remote URL — `gh`'s own
+#: ``[HOST/]OWNER/REPO``. The host is NOT pinned to ``github.com``: this system
+#: is host-aware by decision (project-init ADR-013, spike #254), covering GHE.com and
+#: GitHub Enterprise Server, and a pattern that only knew ``github.com`` would refuse
+#: every write on an Enterprise child — *after* the branch had already been
+#: pushed (Codex on #296). Each part is the character set GitHub allows, so
+#: nothing parsed out of a remote can be read by ``gh`` as a flag or a path.
+_REMOTE_URL = re.compile(
+    r"(?:(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*)://)?(?:(?P<user>[^@/]+)@)?"
+    r"(?P<host>[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9])"
+    r"[:/](?P<owner>[A-Za-z0-9][A-Za-z0-9-]*)/(?P<name>[A-Za-z0-9._-]+?)(?:\.git)?/?\Z"
 )
 
 
 def origin_repo(repo: Path) -> str:
-    """``owner/name`` for ``repo``'s ``origin`` remote; ``""`` when it is not GitHub's.
+    """``host/owner/name`` for ``repo``'s ``origin`` remote; ``""`` when there is none.
 
     Every ``gh`` write this module makes names its repository explicitly, because
     ``gh``'s own answer is not ``origin``. In a clone with a second remote and no
@@ -149,6 +154,13 @@ def origin_repo(repo: Path) -> str:
     draft PRs, and filed and closed its notify-mode issues, on somebody else's
     repository — the one place the blast radius is not ours to take (#286).
 
+    The host travels with the answer rather than being assumed or dropped. A
+    lookalike host is therefore preserved, not silently read as ``github.com``,
+    and an Enterprise child keeps working. What this does NOT do is decide which
+    forge a host belongs to — ``gh`` knows which hosts it is configured for and
+    fails loudly on one it does not, and guessing from the hostname would be the
+    confident-wrong answer this module refuses elsewhere.
+
     ``""`` is a refusal, not a default: a caller that fell back to ``gh``'s own
     resolution would reintroduce exactly the behaviour this exists to prevent.
     """
@@ -158,8 +170,12 @@ def origin_repo(repo: Path) -> str:
             "cannot read origin in %s: %s", repo, _why(remote, "git remote get-url failed")
         )
         return ""
-    match = _GITHUB_REMOTE.match(remote.stdout.strip())
-    return f"{match['owner']}/{match['name']}" if match else ""
+    match = _REMOTE_URL.match(remote.stdout.strip())
+    # A bare `host/owner/name` with no scheme, no user and no dot is a relative
+    # path, not a remote — `mirrors/acme/alpha.git` must not become a host.
+    if not match or not (match["scheme"] or match["user"] or "." in match["host"]):
+        return ""
+    return f"{match['host']}/{match['owner']}/{match['name']}"
 
 
 def _not_github(repo: Path) -> Landing:
@@ -167,7 +183,7 @@ def _not_github(repo: Path) -> Landing:
         REFUSED,
         detail=(
             f"refusing to write to GitHub from {repo}: its 'origin' remote is not a "
-            "GitHub repository, and gh would pick a base repository of its own"
+            "repository gh can be pointed at, and gh would pick a base repository of its own"
         ),
     )
 

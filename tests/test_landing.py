@@ -369,14 +369,20 @@ def test_commit_all_on_a_non_repo_fails_rather_than_raising(fleet_dir: Path) -> 
 @pytest.mark.parametrize(
     ("url", "expected"),
     [
-        ("https://github.com/acme/alpha.git", "acme/alpha"),
-        ("https://github.com/acme/alpha", "acme/alpha"),
-        ("git@github.com:acme/alpha.git", "acme/alpha"),
-        ("ssh://git@github.com/acme/alpha.git", "acme/alpha"),
-        ("https://github.com/acme/alpha.js", "acme/alpha.js"),
-        ("https://gitlab.com/acme/alpha.git", ""),
-        ("https://github.com.evil.example/acme/alpha.git", ""),
+        ("https://github.com/acme/alpha.git", "github.com/acme/alpha"),
+        ("https://github.com/acme/alpha", "github.com/acme/alpha"),
+        ("git@github.com:acme/alpha.git", "github.com/acme/alpha"),
+        ("ssh://git@github.com/acme/alpha.git", "github.com/acme/alpha"),
+        ("https://github.com/acme/alpha.js", "github.com/acme/alpha.js"),
+        # Host-aware by decision (project-init ADR-013): GHE.com and GHES children work.
+        ("git@github.example.com:acme/alpha.git", "github.example.com/acme/alpha"),
+        ("https://acme.ghe.com/acme/alpha.git", "acme.ghe.com/acme/alpha"),
+        # A lookalike host is carried through as itself, never read as github.com.
+        ("https://github.com.evil.example/acme/alpha.git", "github.com.evil.example/acme/alpha"),
+        # Not remotes gh can be pointed at.
         ("/srv/mirrors/alpha.git", ""),
+        ("mirrors/acme/alpha.git", ""),
+        ("file:///srv/mirrors/alpha.git", ""),
         ("", ""),
     ],
 )
@@ -438,11 +444,11 @@ def test_every_github_write_names_the_origin_repository(
     }[write]()
     argv = log.read_text(encoding="utf-8").split()
     assert "--repo" in argv, f"{write} did not name a repository: {argv}"
-    assert argv[argv.index("--repo") + 1] == "acme/alpha"
+    assert argv[argv.index("--repo") + 1] == "github.com/acme/alpha"
 
 
 @pytest.mark.parametrize("write", ["pr", "issue_create", "issue_view"])
-def test_a_non_github_origin_is_refused_rather_than_left_to_gh(
+def test_an_origin_gh_cannot_be_pointed_at_is_refused_rather_than_left_to_gh(
     fleet_dir: Path, monkeypatch: pytest.MonkeyPatch, write: str
 ) -> None:
     from projects_orchestrator.landing import close_own_issue, issue_marker, open_issue
@@ -452,7 +458,7 @@ def test_a_non_github_origin_is_refused_rather_than_left_to_gh(
 
     def record(args: list[str], cwd: Path, timeout: float = 30.0) -> object:  # noqa: ARG001
         launched.append(args)
-        return _Ok("https://gitlab.com/acme/alpha.git")
+        return _Ok("/srv/mirrors/alpha.git")
 
     monkeypatch.setattr("projects_orchestrator.landing._run_argv", record)
     body = f"a finding {issue_marker('alpha/lint')}"
@@ -465,7 +471,7 @@ def test_a_non_github_origin_is_refused_rather_than_left_to_gh(
     assert not [args for args in launched if args[0] == "gh"], "gh was launched anyway"
 
 
-def test_a_non_github_origin_makes_the_open_issues_unknown_not_empty(
+def test_an_unaddressable_origin_makes_the_open_issues_unknown_not_empty(
     fleet_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # `None` is "unknown"; an empty tuple would mean "no open issues" and every
@@ -475,6 +481,6 @@ def test_a_non_github_origin_makes_the_open_issues_unknown_not_empty(
     project = make_project(fleet_dir, "alpha")
     monkeypatch.setattr(
         "projects_orchestrator.landing._run_argv",
-        lambda args, cwd, timeout=30.0: _Ok("https://gitlab.com/acme/alpha.git"),  # noqa: ARG005
+        lambda args, cwd, timeout=30.0: _Ok("/srv/mirrors/alpha.git"),  # noqa: ARG005
     )
     assert own_open_issues(project) is None

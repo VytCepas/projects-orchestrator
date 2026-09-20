@@ -94,7 +94,7 @@ class _FakeGitHub:
                 command=" ".join(args), returncode=0, stdout="https://github.com/acme/alpha.git\n"
             )
         assert args[:2] == ["gh", "issue"], f"the boundary launched something else: {args}"
-        assert args[args.index("--repo") + 1] == "acme/alpha", f"unnamed repository: {args}"
+        assert args[args.index("--repo") + 1] == "github.com/acme/alpha", f"unnamed: {args}"
         self.calls.append(args)
         sub = args[2]
         if sub in self.broken:
