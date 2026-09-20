@@ -388,6 +388,13 @@ def test_commit_all_on_a_non_repo_fails_rather_than_raising(fleet_dir: Path) -> 
         ("ssh://git@ghes.example.com:2222/acme/alpha.git", "ghes.example.com/acme/alpha"),
         ("git+ssh://git@ghes.example.com:2222/acme/alpha.git", "ghes.example.com/acme/alpha"),
         ("git@ghes.example.com:8443/alpha.git", "ghes.example.com/8443/alpha"),
+        # A bracketed IPv6 literal: its own colons are not a port separator, which
+        # is what the brackets are for. gh takes the authority either way.
+        ("https://[2001:db8::1]:8443/acme/alpha.git", "[2001:db8::1]:8443/acme/alpha"),
+        ("https://[2001:db8::1]/acme/alpha.git", "[2001:db8::1]/acme/alpha"),
+        ("ssh://git@[2001:db8::1]:2222/acme/alpha.git", "[2001:db8::1]/acme/alpha"),
+        ("git@[2001:db8::1]:acme/alpha.git", "[2001:db8::1]/acme/alpha"),
+        ("https://[2001:db8::1/acme/alpha.git", ""),
         # A lookalike host is carried through as itself, never read as github.com.
         ("https://github.com.evil.example/acme/alpha.git", "github.com.evil.example/acme/alpha"),
         # A malformed authority is not a host. Leading dash especially: it is the

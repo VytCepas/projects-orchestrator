@@ -140,10 +140,15 @@ def _why(result: RunResult, fallback: str) -> str:
 #: Enterprise Server, and a pattern that only knew ``github.com`` would refuse
 #: every write on an Enterprise child — *after* the branch had already been
 #: pushed.
-_AUTHORITY = r"[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]"
+_NAMED_HOST = r"[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]"
+#: A bracketed IPv6 literal is the one authority whose own colons are not a port
+#: separator, which is what the brackets are FOR. `gh` takes it either way —
+#: verified: `--repo "[::1]:8443/foo/bar"` requests `https://[::1]:8443/api/graphql`
+#: and `--repo "[::1]/foo/bar"` requests `https://[::1]/api/graphql` (Codex on #296).
+_HOST = rf"(?:\[[0-9A-Fa-f:.]+\]|{_NAMED_HOST})"
 _SCHEME_URL = re.compile(
     rf"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*)://(?:[^@/]+@)?"
-    rf"(?P<host>{_AUTHORITY})(?P<port>:[0-9]{{1,5}})?/(?P<path>.+)\Z"
+    rf"(?P<host>{_HOST})(?P<port>:[0-9]{{1,5}})?/(?P<path>.+)\Z"
 )
 #: The only schemes whose port is the port ``gh`` should dial. `--repo
 #: host:2222/owner/name` makes gh request `https://host:2222/api/graphql`, so
@@ -155,7 +160,7 @@ _API_SCHEMES = frozenset({"http", "https"})
 #: is the reason `ssh://git@host/owner/name` cannot also parse as scp with the
 #: authority `ssh` and the path `//git@host/…`. Swapping the two is therefore an
 #: equivalent mutant, and only while that character stays.
-_SCP_URL = re.compile(rf"(?:[^@/:]+@)?(?P<authority>{_AUTHORITY}):(?P<path>[^/].*)\Z")
+_SCP_URL = re.compile(rf"(?:[^@/:]+@)?(?P<authority>{_HOST}):(?P<path>[^/].*)\Z")
 
 #: ``owner/name``, in the character set GitHub allows for each, so nothing parsed
 #: out of a remote can be read by ``gh`` as a flag or a path.
