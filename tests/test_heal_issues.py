@@ -86,7 +86,15 @@ class _FakeGitHub:
         return {n: issue for n, issue in self.issues.items() if issue["state"] == "OPEN"}
 
     def __call__(self, args: list[str], cwd: Path, timeout: float = 30.0) -> RunResult:  # noqa: ARG002
+        if args[:3] == ["git", "remote", "get-url"]:
+            # Every write names its repository rather than letting gh choose one
+            # (#286), so the fake answers for a GitHub origin. The repos these
+            # tests build have a bare origin on disk, which is not one.
+            return RunResult(
+                command=" ".join(args), returncode=0, stdout="https://github.com/acme/alpha.git\n"
+            )
         assert args[:2] == ["gh", "issue"], f"the boundary launched something else: {args}"
+        assert args[args.index("--repo") + 1] == "acme/alpha", f"unnamed repository: {args}"
         self.calls.append(args)
         sub = args[2]
         if sub in self.broken:

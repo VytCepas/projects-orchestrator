@@ -128,6 +128,50 @@ def _why(result: RunResult, fallback: str) -> str:
     return (result.stderr or result.error or "").strip()[-300:] or fallback
 
 
+#: ``owner/name`` as it appears in a GitHub remote URL. Both parts are the
+#: character set GitHub allows in an owner and a repository name, so nothing
+#: parsed out of a remote can be read by ``gh`` as a flag or a path.
+_GITHUB_REMOTE = re.compile(
+    r"(?:https://|git\+ssh://|ssh://)?(?:[^@/]+@)?github\.com[:/]"
+    r"(?P<owner>[A-Za-z0-9][A-Za-z0-9-]*)/(?P<name>[A-Za-z0-9._-]+?)(?:\.git)?/?\Z"
+)
+
+
+def origin_repo(repo: Path) -> str:
+    """``owner/name`` for ``repo``'s ``origin`` remote; ``""`` when it is not GitHub's.
+
+    Every ``gh`` write this module makes names its repository explicitly, because
+    ``gh``'s own answer is not ``origin``. In a clone with a second remote and no
+    ``gh repo set-default``, ``gh`` resolves the base repository to ``upstream``
+    (measured with gh 2.98.0: in a clone whose ``origin`` was this project and
+    whose ``upstream`` was another, ``gh issue list`` returned the *other* repo's
+    issues). A fork clone healed by this system would therefore have opened its
+    draft PRs, and filed and closed its notify-mode issues, on somebody else's
+    repository — the one place the blast radius is not ours to take (#286).
+
+    ``""`` is a refusal, not a default: a caller that fell back to ``gh``'s own
+    resolution would reintroduce exactly the behaviour this exists to prevent.
+    """
+    remote = _run_argv(["git", "remote", "get-url", "origin"], cwd=repo)
+    if not remote.ok:
+        _log.warning(
+            "cannot read origin in %s: %s", repo, _why(remote, "git remote get-url failed")
+        )
+        return ""
+    match = _GITHUB_REMOTE.match(remote.stdout.strip())
+    return f"{match['owner']}/{match['name']}" if match else ""
+
+
+def _not_github(repo: Path) -> Landing:
+    return Landing(
+        REFUSED,
+        detail=(
+            f"refusing to write to GitHub from {repo}: its 'origin' remote is not a "
+            "GitHub repository, and gh would pick a base repository of its own"
+        ),
+    )
+
+
 def default_branch(repo: Path) -> str:
     """Resolve the repo's *actual* default branch; ``""`` when it cannot be.
 
@@ -228,10 +272,15 @@ def open_draft_pr(worktree: Path, branch: str, title: str, body: str) -> Landing
     with no human in the loop at all — which is the entire thing this system
     promises not to do.
     """
+    target = origin_repo(worktree)
+    if not target:
+        return _not_github(worktree)
     args = [
         "gh",
         "pr",
         "create",
+        "--repo",
+        target,
         "--draft",
         "--head",
         branch,
@@ -328,11 +377,17 @@ def own_open_issues(repo: Path, limit: int = ISSUE_LIST_LIMIT) -> tuple[OwnIssue
     is not "none": a caller that read ``None`` as "no open issues" would file a
     duplicate every pass.
     """
+    target = origin_repo(repo)
+    if not target:
+        _log.warning("%s: origin is not a GitHub repository, so its issues cannot be read", repo)
+        return None
     listed = _run_argv(
         [
             "gh",
             "issue",
             "list",
+            "--repo",
+            target,
             "--state",
             "open",
             "--author",
@@ -380,7 +435,12 @@ def open_issue(repo: Path, title: str, body: str) -> Landing:
     """
     if not marker_key(body):
         return Landing(REFUSED, detail="refusing to file an issue that carries no finding marker")
-    result = _run_argv(["gh", "issue", "create", "--title", title, "--body", body], cwd=repo)
+    target = origin_repo(repo)
+    if not target:
+        return _not_github(repo)
+    result = _run_argv(
+        ["gh", "issue", "create", "--repo", target, "--title", title, "--body", body], cwd=repo
+    )
     if not result.ok:
         return Landing(ISSUE_FAILED, detail=_why(result, "gh issue create failed"))
     url = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
@@ -394,7 +454,12 @@ def close_own_issue(repo: Path, number: int, key: str, comment: str) -> Landing:
     between the two, a person may have edited the issue into their own report, and
     closing that would be closing someone else's issue.
     """
-    viewed = _run_argv(["gh", "issue", "view", str(number), "--json", "state,body"], cwd=repo)
+    target = origin_repo(repo)
+    if not target:
+        return _not_github(repo)
+    viewed = _run_argv(
+        ["gh", "issue", "view", str(number), "--repo", target, "--json", "state,body"], cwd=repo
+    )
     if not viewed.ok:
         return Landing(ISSUE_FAILED, detail=_why(viewed, "gh issue view failed"))
     try:
@@ -407,7 +472,18 @@ def close_own_issue(repo: Path, number: int, key: str, comment: str) -> Landing:
     if marker_key(str(issue.get("body") or "")) != key:
         return Landing(REFUSED, detail=f"issue #{number} no longer carries the marker for {key}")
     closed = _run_argv(
-        ["gh", "issue", "close", str(number), "--reason", "completed", "--comment", comment],
+        [
+            "gh",
+            "issue",
+            "close",
+            str(number),
+            "--repo",
+            target,
+            "--reason",
+            "completed",
+            "--comment",
+            comment,
+        ],
         cwd=repo,
     )
     if not closed.ok:

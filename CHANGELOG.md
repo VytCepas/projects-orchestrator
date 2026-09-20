@@ -10,6 +10,14 @@ version's only source. `tests/test_version.py` fails when they disagree.
 
 ## [Unreleased]
 
+### Fixed
+
+- Every GitHub write heal makes — the draft PR, and notify mode's issues —
+  names the repository its `origin` remote points at. `gh` resolves a clone
+  with a second remote to `upstream`, so a fork clone would have opened PRs
+  and filed issues on the upstream repository. An `origin` that is not a
+  GitHub repository is now refused rather than left to `gh` (#286).
+
 ## [0.3.0] - 2026-09-19
 
 The first release since 0.2.0: the fleet-audit fixes, the frozen `--json`
