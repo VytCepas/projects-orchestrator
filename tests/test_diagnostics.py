@@ -8,6 +8,7 @@ import ast
 import io
 import json
 import logging
+import subprocess
 import tokenize
 from pathlib import Path
 
@@ -20,8 +21,40 @@ from projects_orchestrator.adapters.generic import infer_descriptor
 from projects_orchestrator.descriptor import load_descriptor, parse_scaffold_version
 from projects_orchestrator.upgrade import build_row, unknown_reason
 
-SRC = Path(__file__).resolve().parent.parent / "src" / "projects_orchestrator"
+_TESTS = Path(__file__).resolve().parent
 MARKER = "expected:"
+
+
+def _src(start: Path = _TESTS) -> Path:
+    """The package to audit, asked of git rather than derived from ``__file__``.
+
+    The nightly mutation run executes this suite from mutmut's `mutants/` copy,
+    where every function has been rewritten into a generated one carrying neither
+    the original line numbers nor the `# expected:` comments. Auditing that copy
+    reported 32 handlers the checkout does not have and killed the nightly at its
+    clean run, so the audit follows git's top level to the real source.
+    """
+    top = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=start,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    return Path(top) / "src" / "projects_orchestrator"
+
+
+def test_the_audit_follows_git_rather_than_its_own_depth(tmp_path: Path) -> None:
+    """A copy of the suite one level deeper still audits the checkout's source.
+
+    That is mutmut's layout — `mutants/tests/` beside `mutants/src/` — and the
+    reason ``__file__.parent.parent`` was the wrong root (#295).
+    """
+    git_init(tmp_path)
+    (tmp_path / "src" / "projects_orchestrator").mkdir(parents=True)
+    nested = tmp_path / "mutants" / "tests"
+    nested.mkdir(parents=True)
+    assert _src(nested).resolve() == (tmp_path / "src" / "projects_orchestrator").resolve()
 
 
 @pytest.fixture(autouse=True)
@@ -109,11 +142,13 @@ def silent_sites(source: str) -> list[int]:
     return silent
 
 
+@pytest.mark.reads_the_checkout
 def test_every_swallowed_exception_in_the_package_leaves_a_trail() -> None:
-    files = sorted(SRC.rglob("*.py"))
+    src = _src()
+    files = sorted(src.rglob("*.py"))
     assert len(files) > 40, "the walk found too few modules to mean anything"
     offenders = [
-        f"{path.relative_to(SRC)}:{line}"
+        f"{path.relative_to(src)}:{line}"
         for path in files
         for line in silent_sites(path.read_text(encoding="utf-8"))
     ]
