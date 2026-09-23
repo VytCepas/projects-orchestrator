@@ -42,7 +42,7 @@ meaningful (`checks` exits non-zero on a failed gate, `drift` on divergence,
 
 | Command | Does | Module |
 |---|---|---|
-| `projects` | List discovered projects. Membership comes from `fleet.yaml` (scan roots + explicit paths) or the `~/projects/<name>` sibling convention — anything with a descriptor counts (`.agents/config.yaml` on a current scaffold, `.claude/config.yaml` on a pre-PI-627 one). | `registry.py` |
+| `projects` | List discovered projects. Membership comes from `fleet.yaml` (scan roots + explicit paths) or, without it, `$PO_FLEET_ROOT`, else the workspace the repositories live in side by side (`$PORT_ROOT`, else `~/port`) — anything with a descriptor counts (`.agents/config.yaml` on a current scaffold, `.claude/config.yaml` on a pre-PI-627 one). | `registry.py` |
 | `status` | The signature fleet table: health · branch · sync · scaffold version & freshness · contract version · drift · hook-install state · lint · tests · CI · open PRs · cloud · memory facts · check freshness. | `fleet.py`, `status.py` |
 | `snapshot --json / --html` | Full machine-readable fleet state, or one self-contained HTML dashboard. | `html.py` |
 | `serve` | Live, auto-refreshing web dashboard (`--host`, `--port`). | `server.py` |

@@ -55,8 +55,9 @@ printf 'PO_FLEET_ROOT=%s\nPO_WATCH_WEBHOOK=%s\n' \
 chmod 600 ~/.config/projects-orchestrator/watch.env
 ```
 
-With no env file the unit watches `~/projects` and prints alerts only to the
-journal. As with the other timers, `loginctl enable-linger "$USER"` keeps the
+With no env file the unit watches `$PORT_ROOT` (else `~/port`) and prints
+alerts only to the journal. A user unit reads no shell profile, so an exported
+`PORT_ROOT` belongs in the env file too. As with the other timers, `loginctl enable-linger "$USER"` keeps the
 schedule alive without an open session, and on WSL systemd must be enabled in
 `/etc/wsl.conf` (`[boot] systemd=true`) first.
 

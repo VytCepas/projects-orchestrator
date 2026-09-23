@@ -1,12 +1,15 @@
 # fleet.yaml — which projects this orchestrator governs.
 #
 # Copy to `fleet.yaml` (gitignored — the fleet is machine-specific) and
-# adjust. Without this file the orchestrator scans the parent directory of
-# the current checkout (the ~/projects/<name> sibling convention).
+# adjust. Without this file the orchestrator scans $PO_FLEET_ROOT, else the
+# directory the repositories live in side by side: $PORT_ROOT, else ~/port.
 #
 # Paths may be absolute, ~-relative, or relative to this file.
 
 # Directories scanned one level deep; anything with .claude/config.yaml counts.
+# `..` is the directory this checkout sits in, which is $PORT_ROOT when the
+# orchestrator lives at $PORT_ROOT/projects-orchestrator like its siblings.
+# YAML expands no variables: if the checkout lives elsewhere, spell the root.
 roots:
   - ..
 

@@ -143,8 +143,11 @@ commands* — the deterministic dispatcher still executes them.
 Copy [`fleet.yaml.example`](fleet.yaml.example) to `fleet.yaml` and list
 scan roots / explicit paths. The same file can list extra `memory_sources` for
 `memory` search, and a `host_health_command` whose first output line becomes the
-fleet view's host tile (`host: unknown` until one is declared and answers). Without it, the orchestrator scans the parent
-directory of the checkout — the `~/projects/<name>` sibling convention.
+fleet view's host tile (`host: unknown` until one is declared and answers). Without it, the orchestrator scans
+`$PO_FLEET_ROOT` when that is exported, else the directory the repositories
+live in side by side: `$PORT_ROOT`, else `~/port`. An empty `PORT_ROOT` counts
+as unset, and with neither `PORT_ROOT` nor `HOME` set there is no default —
+discovery scans nothing and says why rather than guessing `/port`.
 Anything with a descriptor (`.agents/config.yaml` on a current scaffold,
 `.claude/config.yaml` on a pre-PI-627 one — either is found) counts as a
 project; the orchestrator only ever *reads* that contract.

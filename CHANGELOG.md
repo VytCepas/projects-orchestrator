@@ -10,6 +10,18 @@ version's only source. `tests/test_version.py` fails when they disagree.
 
 ## [Unreleased]
 
+### Changed
+
+- The fleet root defaults to `PORT_ROOT`, not the checkout's parent. With no
+  `--fleet`, no `--root`, no `fleet.yaml` in the working directory and no
+  `PO_FLEET_ROOT`, discovery scans `$PORT_ROOT`, else `~/port` — the directory
+  the repositories live in side by side, and the same one from any working
+  directory. An empty `PORT_ROOT` counts as unset; with neither it nor `HOME`
+  set there is no default, and discovery says so instead of scanning `/port`.
+  The systemd units default `--root` the same way instead of `~/projects`.
+  **Breaking** for a fleet that relied on either old default: export
+  `PO_FLEET_ROOT` (or `PORT_ROOT`) to the directory it lives in (#313).
+
 ### Fixed
 
 - Every GitHub write heal makes — the draft PR, and notify mode's issues —

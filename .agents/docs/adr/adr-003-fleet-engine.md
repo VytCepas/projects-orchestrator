@@ -60,7 +60,9 @@ broken, missing, or half-scaffolded.
   is the single control surface; external monitors consume `--json`.
 - Fleet membership comes from `fleet.yaml` (roots/projects/exclude) or the
   sibling-directory convention — adding a project is dropping it next to
-  the others.
+  the others. (Amended by #313: "next to the others" is `$PORT_ROOT`, else
+  `~/port`, rather than the parent of whichever checkout the command runs
+  from — the same directory from every working directory.)
 - Engine logic stays UI-free and unit-tested with real subprocesses/git
   repos (no mocks), per repo test conventions.
 - Cross-repo features (CI status via `gh`, board aggregation, fleet-wide

@@ -15,6 +15,7 @@ from projects_orchestrator.registry import (
     default_fleet_config,
     discover,
     load_fleet_config,
+    port_root,
     register_project,
 )
 
@@ -214,10 +215,91 @@ def test_default_fleet_config_prefers_local_fleet_file(tmp_path: Path) -> None:
     assert default_fleet_config(tmp_path).roots == (tmp_path / "kids",)
 
 
-def test_default_fleet_config_falls_back_to_parent_scan(tmp_path: Path) -> None:
-    cwd = tmp_path / "orchestrator"
-    cwd.mkdir()
-    assert default_fleet_config(cwd).roots == (tmp_path,)
+def _dir(path: Path) -> Path:
+    path.mkdir(parents=True)
+    return path
+
+
+# --- PORT_ROOT: the directory the governed repos live under (#313) -----------
+#
+# The rule is frozen and shared with the other tools that read the variable,
+# each re-implementing it in its own language, so these pin it clause by clause
+# on the SPELLING, the way the other implementations are pinned.
+
+
+def test_port_root_reads_an_exported_value() -> None:
+    assert port_root({"PORT_ROOT": "/srv/ws", "HOME": "/home/u"}) == "/srv/ws"
+
+
+def test_port_root_defaults_to_port_under_home() -> None:
+    assert port_root({"HOME": "/home/u"}) == "/home/u/port"
+
+
+def test_port_root_treats_empty_as_unset() -> None:
+    """`PORT_ROOT=` in a profile is someone clearing it, never naming ``""``."""
+    assert port_root({"PORT_ROOT": "", "HOME": "/home/u"}) == "/home/u/port"
+
+
+def test_port_root_strips_trailing_slashes() -> None:
+    """`~/port/` and `~/port` are one directory; a root that does not exist yet
+    has nothing to resolve, so only the spelling can make them agree."""
+    assert port_root({"PORT_ROOT": "/srv/ws//"}) == "/srv/ws"
+
+
+def test_port_root_keeps_the_filesystem_root() -> None:
+    """Stripping must stop at `/`: an emptied `/` reads as unset, or as `.`."""
+    assert port_root({"PORT_ROOT": "/", "HOME": "/home/u"}) == "/"
+
+
+@pytest.mark.parametrize("env", [{}, {"HOME": ""}, {"PORT_ROOT": "", "HOME": ""}])
+def test_port_root_is_none_without_home(env: dict[str, str]) -> None:
+    """`$HOME/port` with HOME unset spells `/port` — a guess about the machine."""
+    assert port_root(env) is None
+
+
+def test_default_fleet_config_scans_an_exported_port_root(tmp_path: Path) -> None:
+    cwd = _dir(tmp_path / "somewhere-with-no-fleet-file")
+    workspace = _dir(tmp_path / "workspace")
+    config = default_fleet_config(cwd, env={"PORT_ROOT": str(workspace)})
+    assert config.roots == (workspace.resolve(),)
+
+
+def test_default_fleet_config_defaults_to_port_under_home(tmp_path: Path) -> None:
+    """Unset is the case that matters most: it is what an unconfigured box has."""
+    cwd = _dir(tmp_path / "somewhere-with-no-fleet-file")
+    home = _dir(tmp_path / "home")
+    port = _dir(home / "port")
+    config = default_fleet_config(cwd, env={"HOME": str(home)})
+    assert config.roots == (port.resolve(),)
+
+
+def test_default_fleet_config_treats_an_empty_port_root_as_unset(tmp_path: Path) -> None:
+    cwd = _dir(tmp_path / "somewhere-with-no-fleet-file")
+    home = _dir(tmp_path / "home")
+    port = _dir(home / "port")
+    config = default_fleet_config(cwd, env={"PORT_ROOT": "", "HOME": str(home)})
+    assert config.roots == (port.resolve(),)
+
+
+def test_po_fleet_root_still_beats_port_root(tmp_path: Path) -> None:
+    cwd = _dir(tmp_path / "somewhere-with-no-fleet-file")
+    declared = _dir(tmp_path / "declared")
+    workspace = _dir(tmp_path / "workspace")
+    env = {"PO_FLEET_ROOT": str(declared), "PORT_ROOT": str(workspace)}
+    assert default_fleet_config(cwd, env=env).roots == (declared.resolve(),)
+
+
+def test_default_fleet_config_scans_nothing_without_home(tmp_path: Path) -> None:
+    """No root is handled, not guessed: scanning `/port` would govern whatever
+    happens to live there."""
+    cwd = _dir(tmp_path / "somewhere-with-no-fleet-file")
+    assert default_fleet_config(cwd, env={}).roots == ()
+
+
+def test_default_fleet_config_says_why_it_scans_nothing_without_home(tmp_path: Path) -> None:
+    cwd = _dir(tmp_path / "somewhere-with-no-fleet-file")
+    warnings = default_fleet_config(cwd, env={}).warnings
+    assert any("PORT_ROOT" in w and "HOME" in w for w in warnings)
 
 
 def test_po_fleet_root_is_read_when_no_fleet_file(tmp_path: Path) -> None:
@@ -249,20 +331,23 @@ def test_an_unusable_po_fleet_root_warns_instead_of_silently_scanning(
     tmp_path: Path,
 ) -> None:
     """Set but not a directory is a typo, and a typo must not read as an answer."""
-    cwd = tmp_path / "orchestrator"
-    cwd.mkdir()
-    config = default_fleet_config(cwd, env={"PO_FLEET_ROOT": str(tmp_path / "nope")})
-    assert config.roots == (tmp_path,), "must fall back to the parent scan"
+    cwd = _dir(tmp_path / "orchestrator")
+    workspace = _dir(tmp_path / "workspace")
+    env = {"PO_FLEET_ROOT": str(tmp_path / "nope"), "PORT_ROOT": str(workspace)}
+    config = default_fleet_config(cwd, env=env)
+    assert config.roots == (workspace.resolve(),), "must fall back to the PORT_ROOT default"
     assert any("is not a directory" in w for w in config.warnings)
 
 
 def test_po_fleet_root_empty_or_blank_is_ignored(tmp_path: Path) -> None:
     """An exported-but-empty variable is not a configuration."""
-    cwd = tmp_path / "orchestrator"
-    cwd.mkdir()
+    cwd = _dir(tmp_path / "orchestrator")
+    workspace = _dir(tmp_path / "workspace")
     for value in ("", "   "):
-        config = default_fleet_config(cwd, env={"PO_FLEET_ROOT": value})
-        assert config.roots == (tmp_path,)
+        config = default_fleet_config(
+            cwd, env={"PO_FLEET_ROOT": value, "PORT_ROOT": str(workspace)}
+        )
+        assert config.roots == (workspace.resolve(),)
         assert config.warnings == ()
 
 

@@ -454,6 +454,7 @@ Discover the fleet: which projects the orchestrator governs.
 - `class FleetConfig` — Where to look for projects.
 - `class Fleet` — The discovered fleet.
 - `def load_fleet_config` — Parse a fleet file; never raises.
+- `def port_root` — Resolve the workspace root: ``$PORT_ROOT`` if set and non-empty, else ``$HOME/port``.
 - `def default_fleet_config` — Build the config used when no fleet file exists.
 - `def discover` — Discover every project the config points at; never raises.
 - `class RegisterOutcome` — The result of registering a project path into a fleet file.

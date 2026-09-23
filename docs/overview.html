@@ -438,7 +438,7 @@
         <div class="cards">
           <div class="card">
             <span class="cmd">projects</span>
-            <p>List every discovered project. Membership comes from <span class="mono">fleet.yaml</span> (scan roots + explicit paths) or, without it, the <span class="mono">~/projects/&lt;name&gt;</span> sibling convention — anything holding a <span class="mono">.claude/config.yaml</span> counts.</p>
+            <p>List every discovered project. Membership comes from <span class="mono">fleet.yaml</span> (scan roots + explicit paths) or, without it, <span class="mono">$PO_FLEET_ROOT</span>, else the workspace the repositories live in side by side (<span class="mono">$PORT_ROOT</span>, else <span class="mono">~/port</span>) — anything with a descriptor counts (<span class="mono">.agents/config.yaml</span> on a current scaffold, <span class="mono">.claude/config.yaml</span> on a pre-PI-627 one).</p>
             <span class="src">registry.py</span>
           </div>
           <div class="card">

@@ -8,8 +8,9 @@ survives reboots, and restarts itself after a crash.
 
 ## Install the service
 
-The unit serves `~/projects` read-only on `127.0.0.1:8787`. Override either,
-or enable the mutating buttons, in a private env file:
+The unit serves `$PORT_ROOT` (else `~/port`) read-only on `127.0.0.1:8787`.
+Override either, or enable the mutating buttons, in a private env file. A user
+unit reads no shell profile, so an exported `PORT_ROOT` belongs there too:
 
 ```bash
 mkdir -p ~/.config/projects-orchestrator
