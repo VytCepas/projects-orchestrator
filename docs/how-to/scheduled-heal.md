@@ -61,8 +61,9 @@ only once you trust them.
 
 ## Install the timer
 
-The unit heals `~/projects` and attempts at most 3 projects per firing. Override
-either in a private env file:
+The unit heals `$PORT_ROOT` (else `~/port`) and attempts at most 3 projects per
+firing. Override either in a private env file — and since a user unit reads no
+shell profile, an exported `PORT_ROOT` belongs there too:
 
 ```bash
 mkdir -p ~/.config/projects-orchestrator
@@ -70,7 +71,7 @@ printf 'PO_FLEET_ROOT=%s\nPO_HEAL_LIMIT=%s\n' "$HOME/projects" 2 \
   > ~/.config/projects-orchestrator/heal.env
 ```
 
-Skip that step to accept the defaults (`~/projects`, limit 3).
+Skip that step to accept the defaults (`$PORT_ROOT` else `~/port`, limit 3).
 
 The same file takes `PO_HEAL_MODE=notify` to make the whole pass diagnose
 instead of fix: no agent, no spend — each failing project is reported with

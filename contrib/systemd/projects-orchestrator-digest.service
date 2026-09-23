@@ -23,12 +23,15 @@ WorkingDirectory=%h
 
 # Optional config. Create the file with mode 600 and put in it:
 #   PO_DIGEST_WEBHOOK=https://hooks.slack.com/services/...   (a credential)
-#   PO_FLEET_ROOT=/path/to/your/projects                     (if not ~/projects)
+#   PORT_ROOT=/path/to/your/workspace                        (if not ~/port)
+#   PO_FLEET_ROOT=/path/to/your/projects                     (if not $PORT_ROOT)
 # The leading `-` makes the file optional: with no sink and no override, the
-# digest still runs against ~/projects and its output lands in the journal.
+# digest still runs against $PORT_ROOT, else ~/port, and its output lands in
+# the journal. The user manager reads no shell profile, so an exported
+# PORT_ROOT belongs in this file too.
 EnvironmentFile=-%h/.config/projects-orchestrator/digest.env
 
-ExecStart=/bin/sh -c 'exec %h/.local/bin/projects-orchestrator audit --digest --root "${PO_FLEET_ROOT:-%h/projects}" ${PO_DIGEST_WEBHOOK:+--webhook "$PO_DIGEST_WEBHOOK"}'
+ExecStart=/bin/sh -c 'exec %h/.local/bin/projects-orchestrator audit --digest --root "${PO_FLEET_ROOT:-${PORT_ROOT:-%h/port}}" ${PO_DIGEST_WEBHOOK:+--webhook "$PO_DIGEST_WEBHOOK"}'
 
 # `audit --digest` exits 1 when it finds NEW issues. That is a run that worked
 # and had something to say — not a failed unit. Without this, systemd would

@@ -19,7 +19,8 @@ Type=oneshot
 WorkingDirectory=%h
 
 # Optional config. Create the file with mode 600 and put in it:
-#   PO_FLEET_ROOT=/path/to/your/projects   (if your fleet is not ~/projects)
+#   PORT_ROOT=/path/to/your/workspace      (if the repos do not live in ~/port)
+#   PO_FLEET_ROOT=/path/to/your/projects   (if your fleet is not $PORT_ROOT)
 #   PO_HEAL_LIMIT=3                         (max projects to spend on per run)
 #   PO_HEAL_MODE=fix                        (fix | notify — run-wide default;
 #                                            a project's declared heal.mode
@@ -33,7 +34,9 @@ WorkingDirectory=%h
 #                                            Only the value 1 enables it; 0,
 #                                            false or unset leave it off)
 # The leading `-` makes the file optional: with no override the unit heals
-# ~/projects and attempts at most PO_HEAL_LIMIT (default 3) projects per firing.
+# $PORT_ROOT, else ~/port, and attempts at most PO_HEAL_LIMIT (default 3)
+# projects per firing. The user manager reads no shell profile, so an exported
+# PORT_ROOT belongs in this file too.
 EnvironmentFile=-%h/.config/projects-orchestrator/heal.env
 
 # `heal --all` is PR-gated and never merges anything: at worst it opens a draft
@@ -41,7 +44,7 @@ EnvironmentFile=-%h/.config/projects-orchestrator/heal.env
 # a coding agent on (each agent is itself capped at a small per-run budget), so a
 # fleet that goes red overnight cannot fan out unbounded spend. Start LOW and
 # raise it once you trust the PRs it opens.
-ExecStart=/bin/sh -c 'exec %h/.local/bin/projects-orchestrator heal --all --root "${PO_FLEET_ROOT:-%h/projects}" --limit "${PO_HEAL_LIMIT:-3}" --mode "${PO_HEAL_MODE:-fix}" ${PO_HEAL_WEBHOOK:+--webhook "$PO_HEAL_WEBHOOK"} $([ "${PO_HEAL_ISSUES:-}" = 1 ] && echo --issues)'
+ExecStart=/bin/sh -c 'exec %h/.local/bin/projects-orchestrator heal --all --root "${PO_FLEET_ROOT:-${PORT_ROOT:-%h/port}}" --limit "${PO_HEAL_LIMIT:-3}" --mode "${PO_HEAL_MODE:-fix}" ${PO_HEAL_WEBHOOK:+--webhook "$PO_HEAL_WEBHOOK"} $([ "${PO_HEAL_ISSUES:-}" = 1 ] && echo --issues)'
 
 # `heal --all` exits 1 when the pass was EVENTFUL — it opened a PR, a heal failed
 # to verify, or projects were deferred past the limit. That is a run that worked

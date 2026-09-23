@@ -4,8 +4,8 @@ Sources, in precedence order:
 
 1. An explicit fleet file (``fleet.yaml``) listing project paths and/or
    scan roots.
-2. Fallback: scan the parent directory of the orchestrator checkout —
-   the conventional ``~/projects/<name>`` sibling layout.
+2. Fallback: scan ``$PO_FLEET_ROOT``, else the workspace the repositories
+   live in side by side — ``$PORT_ROOT``, else ``$HOME/port`` (#313).
 
 Discovery never raises: unreadable directories are skipped, non-projects
 (no ``.agents/config.yaml``, nor a legacy ``.claude/`` one) are ignored,
@@ -146,6 +146,51 @@ def load_fleet_config(fleet_file: Path) -> FleetConfig:
 
 
 FLEET_ROOT_ENV = "PO_FLEET_ROOT"
+#: The directory every governed repository lives in, side by side (#313).
+PORT_ROOT_ENV = "PORT_ROOT"
+
+
+def port_root(env: Mapping[str, str] | None = None) -> str | None:
+    """Resolve the workspace root: ``$PORT_ROOT`` if set and non-empty, else ``$HOME/port``.
+
+    THE RULE IS FROZEN AND SHARED. Other tools on the same machine read the same
+    variable, each re-implementing this in its own language with no shared
+    runtime, so it is ported clause for clause rather than improved on here — a
+    divergence would give two verdicts about one directory:
+
+    - Empty is unset. ``PORT_ROOT=`` is someone clearing the variable, never
+      someone naming the root the empty string.
+    - ``HOME`` unset (or empty) with ``PORT_ROOT`` unset means THERE IS NO ROOT,
+      returned as ``None`` for the caller to handle. ``$HOME/port`` would spell
+      ``/port``: a guess about the machine, not a default.
+    - Trailing slashes are stripped, stopping at ``/`` itself. A root that does
+      not exist yet has nothing to resolve, so only the spelling can make
+      ``~/port/`` and ``~/port`` agree.
+    - No per-OS default is guessed. Windows has none yet (#311); there, as
+      anywhere, an unset ``HOME`` means no root rather than an invented one.
+
+    Args:
+        env: Environment to read from (defaults to the real one).
+
+    Returns:
+        The root's spelling — a string, as the other implementations return it —
+        or ``None`` when there is no root.
+    """
+    source = os.environ if env is None else env
+    root = source.get(PORT_ROOT_ENV) or ""
+    if not root:
+        home = source.get("HOME") or ""
+        if not home:
+            return None
+        root = f"{home}/port"
+    return root.rstrip("/") or "/"
+
+
+_NO_ROOT_WARNING = (
+    f"no fleet root: {PORT_ROOT_ENV} and HOME are both unset, and $HOME/port is not"
+    " guessed as /port — pass --root or --fleet, or export"
+    f" {FLEET_ROOT_ENV} or {PORT_ROOT_ENV}"
+)
 
 
 def default_fleet_config(
@@ -155,12 +200,13 @@ def default_fleet_config(
 
     Args:
         cwd: Directory to anchor discovery at (defaults to the process cwd).
-        env: Environment to read ``PO_FLEET_ROOT`` from (defaults to the real one).
+        env: Environment to read ``PO_FLEET_ROOT``, ``PORT_ROOT`` and ``HOME``
+            from (defaults to the real one).
 
     Returns:
         ``fleet.yaml`` in ``cwd`` when present; else ``$PO_FLEET_ROOT`` when set
-        to a directory; else a config scanning the parent directory of ``cwd``
-        (the sibling-checkout convention).
+        to a directory; else a config scanning :func:`port_root` — and, when
+        there is no root at all, a config scanning nothing that says why.
 
     ``PO_FLEET_ROOT`` IS READ HERE BECAUSE IT WAS ALREADY ADVERTISED (#204). The
     `watch` failure message told the operator to check it and nothing in the
@@ -177,12 +223,19 @@ def default_fleet_config(
 
     Precedence puts the file first on purpose: a `fleet.yaml` in the directory
     is a more specific statement than an environment default.
+
+    THE LAST RESORT IS ``PORT_ROOT``, NOT THE CHECKOUT'S PARENT (#313). The
+    repositories live side by side under one workspace directory, so that
+    directory is the fleet wherever the command is run from — the cwd-independence
+    the paragraph above wanted, now without exporting anything. The parent scan
+    it replaces found the fleet only from inside a sibling checkout.
     """
     cwd = (cwd or Path.cwd()).resolve()
     fleet_file = cwd / FLEET_FILENAME
     if fleet_file.is_file():
         return load_fleet_config(fleet_file)
     source = os.environ if env is None else env
+    warnings: tuple[str, ...] = ()
     declared = (source.get(FLEET_ROOT_ENV) or "").strip()
     if declared:
         candidate = Path(declared).expanduser()
@@ -190,11 +243,11 @@ def default_fleet_config(
             return FleetConfig(roots=(candidate.resolve(),))
         # Set but unusable. Saying so beats silently scanning somewhere else and
         # reporting an empty fleet the operator cannot explain.
-        return FleetConfig(
-            roots=(cwd.parent,),
-            warnings=(f"{FLEET_ROOT_ENV}={declared!r} is not a directory — ignoring it",),
-        )
-    return FleetConfig(roots=(cwd.parent,))
+        warnings = (f"{FLEET_ROOT_ENV}={declared!r} is not a directory — ignoring it",)
+    root = port_root(source)
+    if root is None:
+        return FleetConfig(warnings=(*warnings, _NO_ROOT_WARNING))
+    return FleetConfig(roots=(Path(root).resolve(),), warnings=warnings)
 
 
 def _excluded(name: str, patterns: tuple[str, ...]) -> bool:

@@ -10,7 +10,7 @@ type: project
   **Why:** Ground follow-up work in the accepted architecture instead of re-deriving it.
   **How to apply:** Read `.claude/docs/adr/adr-003-fleet-engine.md` before changing engine modules; keep new engine code never-raise and UI-free.
 
-- **Fact:** Fleet membership is defined by `fleet.yaml` (roots/projects/exclude) or defaults to scanning the parent directory for sibling checkouts.
+- **Fact:** Fleet membership is defined by `fleet.yaml` (roots/projects/exclude) or defaults to `$PO_FLEET_ROOT`, else `$PORT_ROOT`, else `~/port` — the directory the repos live in side by side (#313).
   **Why:** Discovery is configuration, not code; users control the fleet without touching Python.
   **How to apply:** For fleet-scope changes edit `fleet.yaml` (see `fleet.yaml.example`); never hardcode project paths in the engine.
 

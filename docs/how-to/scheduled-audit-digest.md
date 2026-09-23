@@ -55,9 +55,11 @@ chmod 600 ~/.config/projects-orchestrator/digest.env
 
 Skip that step to run with no sink — the digest still lands in the journal.
 
-The unit audits `~/projects` by default. If your fleet lives elsewhere, add
-`PO_FLEET_ROOT=/path/to/your/projects` to that same file. Nothing else needs
-editing — the unit does not care where the orchestrator itself is checked out.
+The unit audits `$PORT_ROOT`, else `~/port`, by default. If your fleet lives
+elsewhere, add `PO_FLEET_ROOT=/path/to/your/projects` to that same file — and
+put `PORT_ROOT` there too if you export one, because a user unit reads no
+shell profile. Nothing else needs editing — the unit does not care where the
+orchestrator itself is checked out.
 
 ```bash
 mkdir -p ~/.config/systemd/user
