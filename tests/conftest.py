@@ -353,6 +353,11 @@ def _isolate_xdg_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # are unaffected by this; what it protects is every test that never thought
     # about the environment at all.
     monkeypatch.delenv("PO_FLEET_ROOT", raising=False)
+    # PORT_ROOT is SET, not cleared (#313): cleared, the default falls through to
+    # the developer's real `$HOME/port`, and a test relying on the default would
+    # scan their actual repositories. A path that does not exist makes such a
+    # test fail loudly and identically on every machine instead.
+    monkeypatch.setenv("PORT_ROOT", str(tmp_path / "port-root-not-created"))
 
 
 @pytest.fixture()

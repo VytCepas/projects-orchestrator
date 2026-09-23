@@ -56,6 +56,56 @@ def test_projects_json_is_parseable(fleet_dir: Path, capsys) -> None:
     assert json.loads(capsys.readouterr().out)[0]["name"] == "alpha"
 
 
+# --- With no --root, the fleet is PORT_ROOT (#313) ---
+#
+# Run from a directory holding no fleet.yaml, so what is under test is the
+# default itself — the path a scheduled unit or a bare shell takes.
+
+
+def _names(capsys) -> list[str]:
+    return [row["name"] for row in json.loads(capsys.readouterr().out)]
+
+
+def test_projects_defaults_to_an_exported_port_root(
+    fleet_dir: Path, tmp_path: Path, monkeypatch, capsys
+) -> None:
+    make_project(fleet_dir, "alpha")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    monkeypatch.setenv("PORT_ROOT", str(fleet_dir))
+    main(["projects", "--json"])
+    assert _names(capsys) == ["alpha"]
+
+
+def test_projects_defaults_to_port_under_home_when_port_root_is_unset(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    home = tmp_path / "home"
+    make_project(home / "port", "alpha")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    monkeypatch.delenv("PORT_ROOT", raising=False)
+    monkeypatch.setenv("HOME", str(home))
+    main(["projects", "--json"])
+    assert _names(capsys) == ["alpha"]
+
+
+def test_projects_root_flag_still_beats_port_root(
+    fleet_dir: Path, tmp_path: Path, monkeypatch, capsys
+) -> None:
+    make_project(fleet_dir, "alpha")
+    workspace = tmp_path / "workspace"
+    make_project(workspace, "beta")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    monkeypatch.setenv("PORT_ROOT", str(workspace))
+    main(["projects", "--root", str(fleet_dir), "--json"])
+    assert _names(capsys) == ["alpha"]
+
+
 def test_status_renders_table(fleet_dir: Path, capsys) -> None:
     git_init(make_project(fleet_dir, "alpha"))
     main(["status", "--root", str(fleet_dir)])
