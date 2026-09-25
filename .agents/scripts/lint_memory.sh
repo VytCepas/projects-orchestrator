@@ -3,6 +3,12 @@
 # Agent-agnostic: any agent or hook can call this directly.
 # Exit 0 on clean, exit 1 with actionable messages.
 
+case "${1-}" in
+-h | --help) # the header above is the help; nothing else runs (#992)
+  sed -n '2,/^[^#]/s/^# \{0,1\}//p' "$0"
+  exit 0
+  ;;
+esac
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"

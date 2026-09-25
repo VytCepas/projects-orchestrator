@@ -39,6 +39,7 @@ import shlex
 import sys
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 # (pattern, label) — matched against the full command string. ``_SEG``
 # tolerates global flags between the CLI name and the destructive verb
@@ -317,6 +318,542 @@ DENY_RULES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bdocker\s+(volume\s+prune|system\s+prune)\b"), "docker prune"),
 ]
 
+# ── Prose is not execution (#965) ───────────────────────────────────────────
+# The deny table above regex-searches the RAW command string, so WRITING ABOUT a
+# destructive verb was indistinguishable from RUNNING it. Measured before this:
+# 5 of 5 pure documentation commands returned `ask`, including a commit message
+# that says never to run the verb it names.
+#
+#     git commit -m "docs: never run terraform destroy on prod"
+#     grep -rn 'terraform destroy' docs/
+#     echo 'the dangerous verb is DROP DATABASE'
+#     cat runbook.md | grep -c 'kubectl delete namespace'
+#
+# WHY THE `delete from` FIX DOES NOT GENERALISE. That rule solved its own
+# version of this by narrowing the RULE — requiring an identifier and then a
+# terminator — because "delete from" is ordinary English and real SQL is not.
+# That lever does not exist here: the text inside the commit message is
+# BYTE-IDENTICAL to the real command. `terraform destroy` is `terraform
+# destroy`. Only the CONTEXT it sits in separates the two, so context is what
+# this reads.
+#
+# FAIL-CLOSED BY CONSTRUCTION, and this is the whole safety argument: an
+# ALLOW-LIST of heads whose quoted arguments are inert, never a deny-list of
+# heads that execute. A deny-list has to enumerate `sh -c`, `bash -c`, `eval`,
+# `ssh`, `xargs`, `find -exec`, `su -c`, `env`, `timeout`, `watch`, `python -c`,
+# `perl -e`… and every one it misses is a fail-open. An allow-list that misses
+# something merely keeps today's prompt. `sh -c "terraform destroy"` is not
+# exempt because `sh` is not on the list.
+#
+# The exemption is also SUBTRACTIVE, never a short-circuit: a rule that still
+# matches once the prose is blanked out still fires, so `git commit -m "x" &&
+# terraform destroy` is unaffected. And blanking happens IN PLACE in the raw
+# string, preserving every other byte, because some rules match on quote
+# characters themselves (the `delete from` terminator class).
+_PROSE_HEADS = frozenset({"echo", "printf"})
+
+#: Searchers whose pattern argument is inert. DELIBERATELY NOT `_PATTERN_FIRST_ARG`,
+#: which exists for a different question (which arg is not a path) and includes
+#: `sed`/`awk`/`gawk`/`nawk`. Both of those EXECUTE: `awk 'BEGIN{system("…")}'`
+#: and GNU `sed 's/x/y/e'` run their argument, so exempting them would be a
+#: fail-open. Measured — both leaked through a draft of this that reused the
+#: other set.
+_PROSE_PATTERN_TOOLS = frozenset({"grep", "egrep", "fgrep", "rg", "ag", "ack"})
+
+#: A substitution inside a quoted string is code, whatever encloses it:
+#: `echo "$(terraform destroy)"` prints the OUTPUT of a real destroy. Blanking
+#: such a span would hide the verb from the deny table — the third fail-open a
+#: draft of this shipped.
+_HAS_SUBSTITUTION = re.compile(r"\$\(|`|\$\{")
+
+# ── PI-996: read the shell's grammar, not a regex that guesses at it ─────────
+# Five review rounds (#942, #952, #953, #974, #979) patched this exemption one
+# reported shape at a time, and #971 merged with three more already reported.
+# Every one was the same mistake — a regex deciding where a quote, a statement
+# or a redirection ends — and each of these RAN its verb with no verdict:
+#
+#     echo 'safe\'; terraform destroy; echo 'x'    `\'` is no escape inside '…'
+#     echo > >(sh) "terraform destroy"            the redirection came first
+#     echo > x.sh "terraform destroy"             the same, staging a script
+#     echo "terraform destroy" 2>/dev/null|sh     `2>\S+` swallowed the pipe
+#
+# So the command is now LEXED by POSIX quoting rules, and a quoted region is
+# exempt only when everything about the simple command holding it is modelled.
+# Every doubt resolves the way the allow-list above does: a construct this does
+# not model costs the WHOLE command its exemption, which keeps today's prompt
+# and never loses a verdict. Each refusal below was run in bash and zsh with a
+# harmless payload before it was written down.
+
+#: Names that end the analysis for the whole command. Compound-command words
+#: put a prose-headed statement inside a body whose output is piped at the
+#: closing word: `for x in 1; do echo "…"; done | sh` RAN, and so did the same
+#: body in `{ …; }`. The rest rebind a name or a descriptor for everything after
+#: them: `hash -p /bin/sh grep` (bash) and `hash grep=/bin/sh` (zsh) made
+#: `grep -c "…"` run its pattern, `alias echo='sh -c'` did the same to `echo` on
+#: the next line in zsh, and `exec >run.sh` writes every later statement to a
+#: file. `eval` and `source` run text this lexer never sees as statements.
+_UNMODELLED_NAMES = frozenset(
+    {
+        "case",
+        "coproc",
+        "do",
+        "done",
+        "elif",
+        "else",
+        "esac",
+        "fi",
+        "for",
+        "foreach",
+        "function",
+        "if",
+        "repeat",
+        "select",
+        "then",
+        "until",
+        "while",
+        "alias",
+        "eval",
+        "exec",
+        "hash",
+        "source",
+        ".",
+        # #1035: `enable -n echo` (bash), `disable echo` and `autoload echo`
+        # (zsh) hand `echo` to a PATH binary or a function; a DEBUG `trap`
+        # runs code before every later command. Each RAN a payload.
+        "enable",
+        "disable",
+        "autoload",
+        "trap",
+    }
+)
+
+#: Words that run the NEXT word as the command, so the name check looks past them.
+_COMMAND_PREFIXES = frozenset({"builtin", "command", "noglob", "nocorrect"})
+
+#: Where an unquoted word ends. Parens are here so no word swallows one: every
+#: unquoted `(` or `)` refuses the command — subshells, process substitution,
+#: function definitions, arithmetic, and zsh glob qualifiers that run code.
+_WORD_END = frozenset(" \t\n;&|<>()")
+
+#: Redirection operators whose effect on a descriptor is modelled, longest first
+#: so `>>|` is never read as `>>`. A heredoc is deliberately absent: its body is
+#: not shell text, and a quote inside it desynchronises every later line. After
+#: `cat <<'EOF'` with a body line `echo "`, the statement between `EOF` and a
+#: second `echo "` RAN in bash and zsh while a scan saw one quoted string.
+_REDIRECT_OPS = sorted(
+    {"<<<", "<>", "<&", "<", ">>|", ">>!", ">>", ">&", ">|", ">!", ">", "&>>", "&>|", "&>!", "&>"},
+    key=len,
+    reverse=True,
+)
+
+#: A glob in a command name: `*`, `?`, or a bracket expression — but not the
+#: `[` and `[[` test commands themselves.
+_GLOB_NAME = re.compile(r"[*?]|\[(?!\[?$)")
+
+#: Directories an absolute prose head may be spelled from. A relative path is
+#: whatever file sits there: `./echo "…"` runs a local script named echo.
+_SYSTEM_BIN_DIRS = frozenset({"/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin"})
+
+
+class _Word(NamedTuple):
+    text: str
+    #: Offsets of each quoted region in the whole command, quotes included.
+    quoted: tuple[tuple[int, int], ...]
+    #: No quote, backslash or `$` anywhere in the word. Glob, brace and tilde
+    #: characters do NOT clear it. That is safe only because every use compares
+    #: a plain word with a fixed name — a pattern cannot equal `echo` — and
+    #: `_ends_analysis` refuses a command name that could glob into one.
+    plain: bool
+
+
+class _Simple(NamedTuple):
+    words: list[_Word]
+    #: (IO number or "", operator, target word), in the order written.
+    redirects: list[tuple[str, str, _Word]]
+    #: The operator that ended this command — `|`, `&&`, `;`, a newline — or "".
+    then: str
+
+
+def _read_word(command: str, i: int) -> tuple[_Word, int] | None:
+    """The shell word starting at *i*, or None when its quoting is not resolvable."""
+    start, n = i, len(command)
+    quoted: list[tuple[int, int]] = []
+    plain = True
+    while i < n and command[i] not in _WORD_END:
+        ch = command[i]
+        if ch == "\\":
+            if i + 1 >= n:
+                return None
+            plain = False
+            i += 2
+        elif ch == "'":
+            # Nothing is special inside single quotes, a backslash included.
+            close = command.find("'", i + 1)
+            if close < 0:
+                return None
+            quoted.append((i, close + 1))
+            plain = False
+            i = close + 1
+        elif ch == '"':
+            j = i + 1
+            while j < n and command[j] != '"':
+                if command[j] == "\\":
+                    j += 2
+                    continue
+                # A substitution can nest quotes of its own, so where this
+                # string ends is no longer something a scan can know.
+                if command[j] == "`" or command.startswith(("$(", "${"), j):
+                    return None
+                j += 1
+            if j >= n:
+                return None
+            quoted.append((i, j + 1))
+            plain = False
+            i = j + 1
+        elif ch == "`" or command.startswith(("$'", '$"'), i):
+            # `$'…'` has escape rules of its own: `echo $'\'' ; <verb> ; echo
+            # $'\''` RAN the verb where POSIX quoting reads it as arguments.
+            return None
+        else:
+            plain = plain and ch != "$"
+            i += 1
+    return _Word(command[start:i], tuple(quoted), plain), i
+
+
+def _lex(command: str) -> list[_Simple] | None:
+    """*command* as its simple commands in order, or None when any part is unmodelled."""
+    simples: list[_Simple] = []
+    words: list[_Word] = []
+    redirects: list[tuple[str, str, _Word]] = []
+    i, n = 0, len(command)
+    while i < n:
+        ch = command[i]
+        if ch in " \t":
+            i += 1
+            continue
+        if command.startswith("\\\n", i):
+            i += 2
+            continue
+        if ch == "#":
+            # A `#` that starts a word opens a comment to the end of the line —
+            # measured in bash, zsh, an interactive zsh with no rc, and bash with
+            # `interactive_comments` off. The newline stays: it ends a statement.
+            end = command.find("\n", i)
+            i = n if end < 0 else end
+            continue
+        if ch in "()`":
+            return None
+        op = ""
+        if ch == "\n":
+            op = ch
+        elif ch == ";":
+            op = ";;" if command.startswith(";;", i) else ch
+        elif command.startswith(("&&", "||", "|&"), i):
+            op = command[i : i + 2]
+        elif ch == "|" or (ch == "&" and not command.startswith("&>", i)):
+            op = ch
+        if op:
+            simples.append(_Simple(words, redirects, op))
+            words, redirects = [], []
+            i += len(op)
+            continue
+        io = ""
+        if ch not in "<>&":
+            read = _read_word(command, i)
+            if read is None:
+                return None
+            word, i = read
+            if not (word.plain and word.text.isdigit() and command[i : i + 1] in ("<", ">")):
+                words.append(word)
+                continue
+            io = word.text
+        redirect = next(
+            (candidate for candidate in _REDIRECT_OPS if command.startswith(candidate, i)), ""
+        )
+        if not redirect:
+            return None
+        i += len(redirect)
+        while i < n and command[i] in " \t":
+            i += 1
+        read = _read_word(command, i)
+        # An operator with no word after it is refused, and this is also what
+        # refuses a heredoc: `<<` is not in `_REDIRECT_OPS`, so it reads as `<`
+        # whose target would start with the second `<`.
+        if read is None or not read[0].text:
+            return None
+        target, i = read
+        redirects.append((io, redirect, target))
+    simples.append(_Simple(words, redirects, ""))
+    return simples
+
+
+def _dequote(text: str) -> str:
+    return text.replace("'", "").replace('"', "").replace("\\", "")
+
+
+def _command_name(simple: _Simple) -> str:
+    """The raw word that names what runs, past assignments and `builtin`/`command`."""
+    prefixed = False
+    for word in simple.words:
+        if not prefixed and _ASSIGN_PREFIX.match(word.text):
+            continue
+        if word.plain and word.text in _COMMAND_PREFIXES:
+            prefixed = True
+            continue
+        if prefixed and word.plain and word.text.startswith("-"):
+            continue
+        return word.text
+    return ""
+
+
+def _ends_analysis(simple: _Simple) -> bool:
+    """True when *simple* changes what the rest of the command means.
+
+    That is a compound-command word or brace group, a name rebinding (see
+    `_UNMODELLED_NAMES`), or a name this cannot read at all. `$cmd` could be
+    any of them, and so could a glob: with a file named `hash` in the directory,
+    `h?sh -p /bin/sh grep` rebinds `grep` in bash and zsh, and `al?as` did the
+    same to `echo` in zsh (PR #1002 review).
+    """
+    name = _command_name(simple)
+    return (
+        "$" in name
+        or name.startswith(("{", "}"))
+        or _GLOB_NAME.search(name) is not None
+        or _dequote(name) in _UNMODELLED_NAMES
+    )
+
+
+def _head(word: _Word) -> str:
+    """The command a plain first word names, or "" when which one is not certain."""
+    if not word.plain:
+        return ""
+    directory, slash, name = word.text.rpartition("/")
+    if not slash or directory in _SYSTEM_BIN_DIRS:
+        return name
+    return ""
+
+
+def _flows_onward(simple: _Simple) -> bool:
+    """True when this command's standard output can reach anything but the
+    terminal or /dev/null.
+
+    THE EXEMPTION IS FOR PROSE THAT IS DISPLAYED OR SEARCHED, NOT PROSE THAT IS
+    SENT. `echo "terraform destroy" | sh` executes it; so does `printf … | bash`
+    and `grep -rn … script.sh | sh`. A redirection counts wherever it is written
+    — before the prose as much as after it — and so does a descriptor duplicated
+    onto a stream that already points at a file: `echo "…" 2>run.sh >&2` staged
+    the script. Plumbing that cannot carry the prose does not count: `2>&1`,
+    `>&2`, `2>err.log` and anything sent to /dev/null leave stdout where it was.
+
+    Upstream only: the last stage of `cat runbook.md | grep -c '…'` sends its
+    output nowhere, so it stays exempt. And a descriptor that has pointed at a
+    file STAYS a file, because zsh's MULTIOS writes `echo "…" >run.sh >/dev/null`
+    to both — the last redirection does not win there.
+    """
+    if simple.then in ("|", "|&"):
+        return True
+    where = {"1": "tty", "2": "tty"}
+
+    def point(fd: str, dest: str) -> None:
+        if where.get(fd) != "file":
+            where[fd] = dest
+
+    for io, op, target in simple.redirects:
+        value = target.text if target.plain else ""
+        dest = "null" if value == "/dev/null" else "file"
+        if op == "<<<":
+            continue
+        if op in ("<", "<>"):
+            if (io or "0") in where:
+                point(io or "0", "null" if op == "<" else dest)
+        elif op in ("<&", ">&"):
+            fd = io or ("0" if op == "<&" else "1")
+            if value in where:
+                point(fd, where[value])
+            elif value == "-":
+                point(fd, "null")
+            elif op == ">&" and not io and value and not value.isdigit():
+                point("1", dest)  # `>&word` is `&>word`
+                point("2", dest)
+            else:
+                point(fd, "file")
+        elif op.startswith("&>"):
+            point("1", dest)
+            point("2", dest)
+        else:
+            point(io or "1", dest)
+    return where["1"] not in ("tty", "null")
+
+
+def _message_regions(simple: _Simple) -> list[tuple[int, int]]:
+    """The quoted regions of *simple* that are a commit message's value.
+
+    Scoped to the VCS verbs and subcommands that TAKE a message, as the secret-read
+    path already is. The regex this replaces accepted `-m` after ANY head, and
+    `bash -c -m "…"` and `sh -c -m "…"` both RAN the "message" it blanked.
+    """
+    words = simple.words
+    at = 0
+    while at < len(words) and _ASSIGN_PREFIX.match(words[at].text):
+        at += 1
+    if at >= len(words) or _head(words[at]) not in _MESSAGE_VERBS:
+        return []
+    tokens = [word.text if word.plain or word.text.startswith("-") else "" for word in words]
+    if not _takes_message(tokens, at):
+        return []
+    attached = tuple(f"{flag}=" for flag in _MESSAGE_FLAGS)
+    regions: list[tuple[int, int]] = []
+    for k in range(at + 1, len(words)):
+        word = words[k]
+        if word.plain and word.text in _MESSAGE_FLAGS:
+            if k + 1 < len(words):
+                regions.extend(words[k + 1].quoted)
+        elif word.text.startswith(attached):
+            regions.extend(word.quoted)
+    return regions
+
+
+def _prose_spans(command: str) -> list[tuple[int, int]]:
+    """Character spans in *command* that are prose rather than execution.
+
+    A quoted region qualifies when the simple command holding it is headed by a
+    command that only prints or searches its arguments, or when it is the value
+    of a commit-message flag — AND that command's output goes nowhere but the
+    terminal. Prose that is DISPLAYED or SEARCHED is inert; prose that is SENT
+    somewhere is not.
+    """
+    simples = _lex(command)
+    if simples is None or any(_ends_analysis(simple) for simple in simples):
+        return []
+    spans: list[tuple[int, int]] = []
+    for simple in simples:
+        if not simple.words or _flows_onward(simple):
+            continue
+        head = _head(simple.words[0])
+        if head in _PROSE_HEADS or head in _PROSE_PATTERN_TOOLS:
+            if head == "printf" and any(word.text.startswith("-v") for word in simple.words[1:]):
+                # `printf -v c "…"; $c` RAN in bash: the text became a command
+                # through the variable, and no verb was left anywhere to see.
+                continue
+            regions = [region for word in simple.words[1:] for region in word.quoted]
+        else:
+            regions = _message_regions(simple)
+        spans.extend(
+            (start, end)
+            for start, end in regions
+            if not _HAS_SUBSTITUTION.search(command, start, end)
+        )
+    return spans
+
+
+def _without_prose(command: str) -> str:
+    """*command* with prose spans blanked to spaces, same length and offsets."""
+    spans = _prose_spans(command)
+    if not spans:
+        return command
+    chars = list(command)
+    for start, end in spans:
+        for i in range(start, end):
+            chars[i] = " "
+    return "".join(chars)
+
+
+# ── #1035: a search tool can run a program ──────────────────────────────────
+# `rg --pre CMD` runs `CMD PATH` per file, so `rg --pre terraform x destroy`
+# runs `terraform destroy` — a verb no deny rule can see, blanked or not. Where
+# the program's arguments come from differs per tool (a PATH, a `%`, a shell),
+# so modelling it would be one fail-open per modelling error. Refusing the flag
+# models nothing. From each tool's --help: rg 14 (`--pre`, `--hostname-bin`),
+# ugrep 7 (`--filter`, `--pager`, `--view`, `--config`/`---`), ag and ack
+# (`--pager`; ack `--ackrc`). ag's getopt_long and ack's Getopt::Long accept
+# an unambiguous prefix (`--pag`); rg and ugrep rejected one when run.
+_SEARCH_EXEC_FLAGS: dict[str, frozenset[str]] = {
+    "rg": frozenset({"pre", "hostname-bin"}),
+    "ag": frozenset({"pager"}),
+    "ack": frozenset({"pager", "ackrc"}),
+    **{
+        name: frozenset({"filter", "pager", "view", "config"})
+        for name in ("grep", "egrep", "fgrep", "ugrep", "ug")
+    },
+}
+_SEARCH_ABBREVIATES = frozenset({"ag", "ack"})
+
+
+#: Heads that run a later word as a command. Their own option grammars are NOT
+#: modelled (`env -C DIR`, `sudo -u USER`, `timeout 5`): every tool name after
+#: one is checked instead, so an option argument spelling a tool name cannot
+#: hide the real one (PR #1037 review).
+_RUNS_A_COMMAND = frozenset(
+    {
+        *_COMMAND_PREFIXES,
+        "env",
+        "exec",
+        "nice",
+        "nohup",
+        "time",
+        "sudo",
+        "doas",
+        "timeout",
+        "xargs",
+        "stdbuf",
+        "setsid",
+        "ionice",
+        "chrt",
+        "taskset",
+        "caffeinate",
+        "unbuffer",
+        "watch",
+    }
+)
+
+
+def _tool_flag(tool: str, words: list[str]) -> str | None:
+    """The exec-capable flag *tool* was given in *words*, or None."""
+    for word in words:
+        if word == "--":
+            return None  # what follows is a pattern or a path
+        if word.startswith("---") and "config" in _SEARCH_EXEC_FLAGS[tool]:
+            return f"{tool} ---"  # ugrep's short spelling of --config
+        if word.startswith("--"):
+            name = word[2:].partition("=")[0]
+            for flag in _SEARCH_EXEC_FLAGS[tool]:
+                if name == flag or (
+                    tool in _SEARCH_ABBREVIATES and len(name) > 1 and flag.startswith(name)
+                ):
+                    return f"{tool} --{flag}"
+    return None
+
+
+def _search_runs_program(command: str) -> str | None:
+    """The search tool in *command* that was given a program to run, or None.
+
+    Only the word in command position counts, so `echo rg --pre x` runs no
+    search tool. Past a wrapper, every tool name is a candidate.
+    """
+    for statement in _statements(command):
+        leaves: list[list[str]] = [[]]
+        for word in statement:
+            if _is_pipe(word):
+                leaves.append([])
+            else:
+                leaves[-1].append(word)
+        for leaf in leaves:
+            at = _verb_index(leaf)
+            if at >= len(leaf):
+                continue
+            names = [word.rsplit("/", 1)[-1] for word in leaf]
+            starts = [at]
+            if names[at] in _RUNS_A_COMMAND:
+                starts = range(at + 1, len(leaf))
+            for k in starts:
+                if names[k] in _SEARCH_EXEC_FLAGS:
+                    found = _tool_flag(names[k], leaf[k + 1 :])
+                    if found:
+                        return found
+    return None
+
+
 # ── Secret-file exposure (PI-893) ───────────────────────────────────────────
 # The scaffold's secret machinery is write/commit-oriented: gitleaks and the
 # pre-commit gate stop you COMMITTING a secret, .gitignore stops you tracking
@@ -407,11 +944,6 @@ _EXPOSURE_SAFE_VERBS = frozenset(
 _PATTERN_FIRST_ARG = frozenset(
     {"grep", "egrep", "fgrep", "rg", "ag", "ack", "sed", "awk", "gawk", "nawk"}
 )
-
-# A commit message is prose, not an access. `git commit -m "docs: describe .env
-# handling"` is the same shape of false positive that the SQL DELETE rule hit —
-# writing about the guarded thing tripping the guard.
-_MESSAGE_ARG = re.compile(r"""(?:-m|-am|--message)[=\s]+(?P<q>['"]).*?(?P=q)""", re.DOTALL)
 
 
 # A command substitution hides a whole command inside another one, and the
@@ -1043,6 +1575,55 @@ def _declares_ambient(config: Path) -> bool:
     return bool(_CONTEXT_AMBIENT_RE.search(text))
 
 
+def _port_root() -> Path | None:
+    """The workspace root the governed repos live under, or None.
+
+    The marker contract's PORT_ROOT rule, re-implemented here rather than
+    shared — the ambient layer's own walker is POSIX shell and cannot import
+    Python, so the two are pinned by the contract's shared marker fixtures
+    (M33-M37), not by common code::
+
+        PORT_ROOT = $PORT_ROOT if set and non-empty, otherwise $HOME/port
+
+    EMPTY IS UNSET. ``PORT_ROOT=`` is someone clearing the variable, never
+    someone naming the root the empty string — and here the wrong reading is
+    worse than inert: ``Path("")`` is ``.``, which would put the stop at this
+    process's cwd and hide a real repo's own config from the walk.
+
+    HOME UNSET (or empty) ⇒ NO ROOT. ``$HOME/port`` would then spell ``/port``,
+    a guess about the machine, and a walk that stops at a guessed path
+    un-governs whatever lives there. ``os.environ`` is read rather than
+    ``Path.home()`` for exactly this: ``Path.home()`` falls back to the password
+    database when HOME is unset and would invent the default the contract says
+    not to.
+
+    THE DEFAULT IS PER OS. Only the POSIX one is decided and the Windows one
+    is still open, so off POSIX an exported PORT_ROOT counts but nothing is
+    defaulted.
+
+    Trailing slashes need no code: pathlib drops them at construction, so
+    ``~/port/`` and ``~/port`` are one Path before the equality test. Resolved
+    for the same reason ``start`` is — the stop compares physical paths, and a
+    symlinked spelling of the root must not walk past it. A root that does not
+    exist keeps its spelling, which is correct rather than merely tolerable: a
+    directory that is not there is no ancestor of any cwd.
+
+    Read at CALL time, never cached at import: the shared fixture runner loads
+    this module once and sets the environment per case.
+    """
+    exported = os.environ.get("PORT_ROOT") or ""
+    if exported:
+        root = Path(exported)
+    else:
+        home = os.environ.get("HOME") or ""
+        if not home or os.name != "posix":
+            return None
+        root = Path(home) / "port"
+    with contextlib.suppress(OSError, RuntimeError):
+        root = root.resolve()
+    return root
+
+
 def _find_config(start: Path) -> Path | None:
     """Walk up from *start* to the project's .agents/config.yaml, if any.
 
@@ -1078,6 +1659,17 @@ def _find_config(start: Path) -> Path | None:
     attack: project-init run once in the wrong cwd scaffolds one there. Paths
     outside $HOME are untouched and still walk to ``/``. Resolved first, because
     the stop is an equality test and ``~/.`` names the same directory as ``~``.
+
+    ``PORT_ROOT`` (the marker contract; ``_port_root``) — the walk ALSO stops
+    before the workspace root the repos live under. Same hazard one level down,
+    and a likelier one: the operator is told to create that directory and to
+    put root instruction files in it, and one ``.agents/config.yaml`` there
+    would supply ``safety.allow`` to every repo beneath it. Two stops, not one
+    replacing the other: the root defaults UNDER $HOME, so the $HOME stop still
+    decides every path outside the workspace. And an UNSET PORT_ROOT is not an
+    opt-out: the variable is routinely left unset, so a stop that held only for
+    an exported value would be off exactly where it is needed. The default is
+    stopped at just as an exported value is.
     """
     # RuntimeError as well as OSError, and the difference is measurable rather
     # than defensive (PR #927 review): `Path.resolve()` raises RuntimeError on a
@@ -1094,8 +1686,11 @@ def _find_config(start: Path) -> Path | None:
         home: Path | None = Path.home().resolve()
     except (RuntimeError, OSError):
         home = None  # no home to stop before; inventing one would be a guess
+    port_root = _port_root()
     for candidate in (start, *start.parents):
-        if candidate == home:
+        # BEFORE examining either root, not at it: a session whose cwd IS the
+        # root resolves exactly like one beneath it (M30, M36).
+        if candidate in (home, port_root):
             break
         agents = candidate / ".agents"
         config = agents / "config.yaml"
@@ -1293,8 +1888,15 @@ def evaluate(
     """Return the hook verdict for *command*, or None to let it through."""
     if any(p.search(command) for p in allow):
         return None
+    # Computed once, not per rule: 20-odd rules over the same string.
+    prose_free = _without_prose(command)
     for pattern, label in DENY_RULES:
         if pattern.search(command):
+            # #965: the verb is real only if it survives blanking the prose. A
+            # rule that matches ONLY inside a commit message or a grep pattern
+            # was reading documentation, not an operation.
+            if not pattern.search(prose_free):
+                continue
             return _verdict(
                 f"prod_guard: '{label}' is a destructive operation. "
                 "If this is intentional and safe, add a matching regex to "
@@ -1304,6 +1906,16 @@ def evaluate(
                 permission_mode,
                 problems,
             )
+    runner = _search_runs_program(command)
+    if runner is not None:
+        return _verdict(
+            f"prod_guard: '{runner}' makes a search tool run another program, "
+            "which no deny rule can inspect. Run that program directly so it is "
+            "checked, add a matching regex to safety.allow in .agents/config.yaml, "
+            "or run the command yourself.",
+            permission_mode,
+            problems,
+        )
     exposure = _exposes_secret(command)
     if exposure is not None:
         return _verdict(
@@ -1360,4 +1972,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] in (["-h"], ["--help"]):  # --help does no work (#992)
+        print((__doc__ or "").strip())
+        sys.exit(0)
     sys.exit(main())

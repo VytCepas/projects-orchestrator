@@ -1,7 +1,9 @@
 ---
 description: Python environment, tooling, and test conventions
-globs: ["**/*.py", "pyproject.toml", "uv.lock"]
-alwaysApply: false
+paths:
+  - "**/*.py"
+  - "pyproject.toml"
+  - "uv.lock"
 ---
 
 ## Python environment

@@ -46,7 +46,10 @@ jobs:
 
           # Map a body "Type" value (either the create_issue.sh type keyword —
           # feat/fix/chore/docs/test — or the label name itself) to the canonical
-          # type label.
+          # type label. spike and debt/tech-debt are LABEL-only types: a spike
+          # does not branch and tech-debt branches as fix/ or chore/, so the
+          # keyword alphabet (create_issue.sh, start_issue.sh, branch names) does
+          # not carry them.
           map_type_label() {
             case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
             feat | feature) echo "feature" ;;

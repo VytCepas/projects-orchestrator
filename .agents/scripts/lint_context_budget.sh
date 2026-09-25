@@ -9,6 +9,12 @@
 #   CONTEXT_BUDGET_LINES (default 200) — root CLAUDE.md / AGENTS.md
 #   SKILL_BUDGET_LINES   (default 500) — .agents/skills/*/SKILL.md
 
+case "${1-}" in
+-h | --help) # the header above is the help; nothing else runs (#992)
+  sed -n '2,/^[^#]/s/^# \{0,1\}//p' "$0"
+  exit 0
+  ;;
+esac
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"

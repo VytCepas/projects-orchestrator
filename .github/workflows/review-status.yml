@@ -8,14 +8,29 @@ name: Review status
 # refuses self-approval and the bot reviewers (Copilot, Codex) submit COMMENTED,
 # never APPROVED — so the check was permanently pending and every merge became an
 # `--admin` override. The gate now asks the question an agent workflow can
-# actually answer: has a review landed, and are its comments resolved?
+# actually answer: has a review OF THE HEAD COMMIT landed, and are its comments
+# resolved?
+#
+# PI-981: "of the head commit" is the half that was missing. A review used to
+# count for ever, so once one had landed and its threads were resolved, every
+# later push went green on commits nobody had reviewed. A review now counts only
+# for the commit it names: a formal review by its `commit_id`, a comment-form
+# Codex review by its "Reviewed commit:" line. After a push the check waits for
+# a review of the new head, and an `@codex review` comment asks for one.
+#
+# PI-1003: and it must be SOMEONE ELSE'S review. GitHub records a reply to a
+# review thread as a formal COMMENTED review, by the replier, on the head the
+# reply was written against. The review protocol asks the author to answer every
+# comment, so the author's own reply landed as "the review of the head" on a
+# commit no reviewer had seen: push, reply, resolve, green.
 #
 # Status mapping (first match wins):
-#   CHANGES_REQUESTED          → failure  ("Changes requested")
-#   no review yet              → pending  ("Awaiting review")
-#   unresolved review threads  → failure  ("N unresolved review comment(s)")
-#   APPROVED                   → success  ("Approved")
-#   reviewed, nothing open     → success  ("Reviewed — no open comments")
+#   CHANGES_REQUESTED             → failure  ("Changes requested")
+#   no review of the head commit  → pending  ("Awaiting review of <sha>")
+#     — by anyone other than the PR author
+#   unresolved review threads     → failure  ("N unresolved review comment(s)")
+#   APPROVED                      → success  ("Approved")
+#   head reviewed, nothing open   → success  ("Reviewed — no open comments")
 #
 # A failure is not a dead end: it is what drives monitor_pr.sh's review cycle
 # (exit 2 → address comments → resolve threads → push → re-run).
@@ -73,10 +88,22 @@ jobs:
           SHA=$(gh pr view "$PR_NUMBER" --repo "$REPO" \
             --json headRefOid -q '.headRefOid')
 
+          # The PR author, read from the API for the same reason and compared
+          # against the formal reviews below (PI-1003). REST, not `gh pr view
+          # --json author`: these logins are compared with the REST reviews'
+          # `.user.login`, and GraphQL spells a bot's login without the `[bot]`
+          # suffix REST gives it (`copilot-pull-request-reviewer` vs
+          # `copilot-pull-request-reviewer[bot]`, measured 2026-09-17), so a
+          # bot-authored PR would compare unequal for ever and the filter would
+          # quietly stop filtering. `pulls/{n}` is listed under "Pull requests:
+          # read" for installation tokens, like `pulls/{n}/reviews` below, so
+          # this costs the job no extra scope.
+          AUTHOR=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.user.login')
+
           DECISION=$(gh pr view "$PR_NUMBER" --repo "$REPO" \
             --json reviewDecision -q '.reviewDecision // ""')
-          # Review count and thread state come from ONE hand-written GraphQL
-          # query, deliberately not from `gh pr view --json reviews`.
+          # Reviews and thread state come from hand-written queries, deliberately
+          # not from `gh pr view --json reviews`.
           #
           # gh expands its `reviews` field to a selection that includes
           # reviews.nodes[].commit, and reading a commit object needs
@@ -95,18 +122,15 @@ jobs:
           # every run in a public repo, red on all six review events across
           # three PRs in a private one, from the byte-identical file.
           #
-          # Asking for reviews.totalCount needs only pull-requests:read, keeps
-          # the token narrow, and costs one fewer API round-trip.
-          REVIEW_DATA=$(gh api graphql \
-            -F owner="$OWNER" -F repo="$REPO_NAME" -F number="$PR_NUMBER" -f query='
-              query($owner:String!, $repo:String!, $number:Int!) {
-                repository(owner:$owner, name:$repo) {
-                  pullRequest(number:$number) {
-                    reviews(first:1) { totalCount }
-                    reviewThreads(first:100) { nodes { isResolved } }
-                  }
-                }
-              }')
+          # FORMAL REVIEWS ARE READ FROM REST, BECAUSE REST NAMES THE COMMIT AS A
+          # STRING (PI-981). Tying a review to the head needs the commit it was
+          # made on. GraphQL only offers that as the Commit object above, which is
+          # the contents:read trap. REST `pulls/{n}/reviews` carries `commit_id` as
+          # a plain field, and GitHub lists that endpoint under "Pull requests:
+          # read" for installation tokens, so the head check costs this job no
+          # extra scope. Falsifier: a review event on a PRIVATE repo failing this
+          # step with "Resource not accessible by integration".
+          #
           # A CODEX REVIEW ARRIVES BY TWO DIFFERENT DOORS AND ONLY ONE OF THEM
           # IS A REVIEW. Codex posts a formal pull request review when it picks
           # the PR up automatically on `opened`, but a review asked for with an
@@ -139,7 +163,7 @@ jobs:
           # review" on a PR that was reviewed. That is the original bug wearing a
           # different hat — a review that happened, invisible to the count — and a
           # bigger page size cannot fix it because there is no size that is always
-          # enough. Raised in review on #233.
+          # enough.
           #
           # `--paginate` walks every page; it needs an `$endCursor` variable and
           # `pageInfo { hasNextPage endCursor }` in the query, and it emits one
@@ -149,6 +173,23 @@ jobs:
           # body today, and a match anchored to byte zero turns a stray newline
           # into a lost review. It loosens nothing — the author check is what
           # carries the security, and only the connector can write that login.
+          #
+          # ONLY A REVIEW OF THE HEAD COUNTS (PI-981). The connector writes
+          # `**Reviewed commit:** `<sha prefix>`` into both of its review forms,
+          # so the prefix is matched against the head SHA. A comment with no such
+          # line counts for nothing: if the connector ever stops writing it, the
+          # check sits at "Awaiting review of <sha>", which is loud. Counting it
+          # anyway would be the silent direction, a green over an unreviewed head.
+          #
+          # AND NOT WHEN THE CONNECTOR IS THE PR AUTHOR (PI-1003, raised in review
+          # on #1004). The login check above is what keeps this leg honest, but on
+          # a PR the connector itself opened it stops being a check on somebody
+          # else: a requested `Codex Review:` comment would then be the author
+          # reviewing their own head, the same hole the formal leg just closed.
+          # The two logins are spelled differently on purpose — GraphQL gives a
+          # bot's login bare, REST appends `[bot]` — so the REST author is
+          # rtrimstr'd before the comparison. An unreadable author counts no
+          # comment-form review either, for the reason given below.
           CODEX_REVIEWS=$(gh api graphql --paginate \
             -F owner="$OWNER" -F repo="$REPO_NAME" -F number="$PR_NUMBER" -f query='
               query($owner:String!, $repo:String!, $number:Int!, $endCursor:String) {
@@ -161,14 +202,61 @@ jobs:
                   }
                 }
               }' \
-            | jq -s '[.[].data.repository.pullRequest.comments.nodes[]
+            | jq -s --arg sha "$SHA" --arg author "$AUTHOR" \
+                '[.[].data.repository.pullRequest.comments.nodes[]
                       | select(.author.login == "chatgpt-codex-connector")
+                      | select($author != "" and ($author | rtrimstr("[bot]")) != .author.login)
                       | select(.body | sub("^[[:space:]]+"; "")
-                               | ascii_downcase | startswith("codex review:"))]
+                               | ascii_downcase | startswith("codex review:"))
+                      | select(.body
+                               | capture("Reviewed commit:[*]*[[:space:]]*`(?<c>[0-9a-fA-F]{7,40})`")
+                               | (.c | ascii_downcase) as $c
+                               | ($sha | ascii_downcase | startswith($c)))]
                      | length')
-          REVIEWS=$(printf '%s' "$REVIEW_DATA" \
-            | jq '.data.repository.pullRequest.reviews.totalCount')
-          REVIEWS=$((REVIEWS + CODEX_REVIEWS))
+          # Formal reviews, tied to the head by `commit_id` (the REST note above).
+          # Only the ACTIVE submitted states count (#1036): PENDING has reviewed
+          # nothing yet, and DISMISSED was revoked — it stays in the REST list and
+          # this job re-runs on `dismissed`, so excluding only PENDING kept it.
+          #
+          # THE AUTHOR'S OWN REVIEWS COUNT FOR NOTHING (PI-1003). A reply to a
+          # review thread is recorded as a formal COMMENTED review — empty body,
+          # the replier as its user, the head it was written against as its
+          # commit_id. Measured on #1000: the author's reply 22s after pushing
+          # 313d6ef became a review OF 313d6ef, two minutes before the reviewer
+          # got to that commit. Nothing is lost by dropping them: GitHub refuses
+          # self-approval, so an author's review is always COMMENTED.
+          #
+          # An unreadable author (`$author == ""`) counts NO formal review rather
+          # than every one of them: the filter degrading to a no-op is the silent
+          # direction, and "Awaiting review of <sha>" is the loud one.
+          # `--paginate` emits one JSON array per page, hence `-s` and `.[][]`.
+          FORMAL_REVIEWS=$(gh api --paginate "repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
+            | jq -s --arg sha "$SHA" --arg author "$AUTHOR" \
+                '[.[][] | select(.commit_id == $sha
+                                 and (.state | IN("APPROVED", "CHANGES_REQUESTED", "COMMENTED"))
+                                 and $author != "" and .user.login != $author)]
+                     | length')
+          # THREADS ARE SAMPLED LAST, AND THE ORDER IS THE CORRECTNESS ARGUMENT.
+          # This query used to run BEFORE the pagination above. `--paginate`
+          # walks pages sequentially, so a review published while the walk is in
+          # flight can be seen by a later page while `reviewThreads` still holds
+          # the pre-review state — the count says "a review landed", the thread
+          # state says "nothing unresolved", and the run posts SUCCESS over
+          # findings that exist. These runs are not serialized either, so the
+          # stale one can then overwrite the status a review-comment-triggered
+          # run published. Sampling threads after BOTH review counts cannot invert
+          # that: any review either count saw has already produced its threads.
+          # Raised in review on #986.
+          REVIEW_DATA=$(gh api graphql \
+            -F owner="$OWNER" -F repo="$REPO_NAME" -F number="$PR_NUMBER" -f query='
+              query($owner:String!, $repo:String!, $number:Int!) {
+                repository(owner:$owner, name:$repo) {
+                  pullRequest(number:$number) {
+                    reviewThreads(first:100) { nodes { isResolved } }
+                  }
+                }
+              }')
+          REVIEWS=$((FORMAL_REVIEWS + CODEX_REVIEWS))
           UNRESOLVED=$(printf '%s' "$REVIEW_DATA" \
             | jq '[.data.repository.pullRequest.reviewThreads.nodes[]
                    | select(.isResolved == false)] | length')
@@ -176,7 +264,7 @@ jobs:
           if [ "$DECISION" = "CHANGES_REQUESTED" ]; then
             STATE="failure"; DESCRIPTION="Changes requested"
           elif [ "$REVIEWS" -eq 0 ]; then
-            STATE="pending"; DESCRIPTION="Awaiting review"
+            STATE="pending"; DESCRIPTION="Awaiting review of $(printf '%.7s' "$SHA")"
           elif [ "$UNRESOLVED" -gt 0 ]; then
             STATE="failure"; DESCRIPTION="$UNRESOLVED unresolved review comment(s)"
           elif [ "$DECISION" = "APPROVED" ]; then

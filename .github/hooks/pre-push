@@ -65,7 +65,7 @@ done
 # damage is worse than the red: the tests write to the developer's INDEX, which
 # is where a pile of phantom staged deletions came from. A gate that cannot pass
 # when it runs is a gate people learn to push past with --no-verify, which is the
-# one thing it exists to prevent (CONSTITUTION 2.11).
+# one thing it exists to prevent.
 # Fast local gate before the push leaves the machine: run `just fast-ci`
 # (lint + parallel tests) — deliberately lighter than the full `just ci` so the
 # push stays fast. CI re-runs the full gate (typecheck/coverage/audit + more),
