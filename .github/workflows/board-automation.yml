@@ -111,8 +111,18 @@ jobs:
         env:
           ISSUE_NUM: ${{ steps.context.outputs.issue }}
           TARGET_STATUS: ${{ steps.context.outputs.status }}
+          HAS_PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN != '' }}
         run: |
           set -euo pipefail
+
+          # No PROJECT_TOKEN means no board was set up for this repo (setup step
+          # 2 above), and every scaffold writes a default board number, so the
+          # token is the only honest "a board is configured" signal. Skip, but
+          # say so where the run summary shows it rather than only in the log.
+          if [ "$HAS_PROJECT_TOKEN" != "true" ]; then
+            echo "::notice title=Board sync skipped::PROJECT_TOKEN is not set, so no board is configured for this repo."
+            exit 0
+          fi
 
           PROJECT_DATA=$(gh api graphql -f query='
             query($owner: String!, $number: Int!) {
@@ -166,14 +176,16 @@ jobs:
           # (and an org errors on the user(...) path); gh exits non-zero whenever
           # the response carries an `errors` array, even though valid data.user /
           # data.organization is still on stdout. Tolerate that so the jq fallback
-          # below can select whichever path applies. Total failures leave
-          # PROJECT_DATA empty -> PROJECT_ID empty -> graceful skip. (PI-207)
+          # below can select whichever path applies. (PI-207)
           PROJECT=$(echo "$PROJECT_DATA" | jq -c '.data.user.projectV2 // .data.organization.projectV2 // empty' 2>/dev/null || true)
           PROJECT_ID=$(echo "$PROJECT" | jq -r '.id // empty')
 
+          # A token is set, so a board is meant to be synced, and it cannot be
+          # reached. This used to log "Skipping project sync" and pass, so a
+          # board that had stopped syncing looked the same as one that synced.
           if [ -z "$PROJECT_ID" ]; then
-            echo "Skipping project sync: project not found or PROJECT_TOKEN lacks access"
-            exit 0
+            echo "::error title=Board sync failed::GitHub Project #$PROJECT_NUMBER is not reachable with PROJECT_TOKEN: the project does not exist under $OWNER, or the token lacks the project scope or has expired. Fix the token or github_project_number in .agents/config.yaml."
+            exit 1
           fi
 
           ITEM_ID=$(echo "$PROJECT" | jq -r --argjson n "$ISSUE_NUM" '(.items.nodes // [])[] | select(.content.number == $n) | .id')

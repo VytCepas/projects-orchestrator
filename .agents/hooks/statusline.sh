@@ -5,6 +5,12 @@
 # transcript, so this surfaces context-window % and cache-hit rate at zero
 # token cost. Fail-open: any parse error prints a minimal placeholder.
 
+case "${1-}" in
+-h | --help) # the header above is the help; nothing else runs (#992)
+  sed -n '2,/^[^#]/s/^# \{0,1\}//p' "$0"
+  exit 0
+  ;;
+esac
 set -u
 
 # Resolve the Python interpreter through the canonical helper (PI-361).

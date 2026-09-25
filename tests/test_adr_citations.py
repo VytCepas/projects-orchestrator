@@ -63,6 +63,7 @@ _EXEMPT: dict[str, str] = {
 }
 
 _UPGRADE_BASES = (".agents/.upgrade-base.json", ".claude/.upgrade-base.json")
+_PROJECTION = ".claude/.projection.json"
 _DESCRIPTOR = ".agents/config.yaml"
 _GOLDEN_DESCRIPTORS = (
     "tests/fixtures/project_init/config.v1.yaml",
@@ -118,6 +119,12 @@ def _managed() -> dict[str, set[str]]:
     for base in _UPGRADE_BASES:
         for path, body in json.loads((_ROOT / base).read_text(encoding="utf-8")).items():
             managed.setdefault(path, set()).update(body.splitlines())
+    # `.claude/` is project-init's projection of `.agents/`, recorded in
+    # `.projection.json`: a projected copy carries its source's rendered lines.
+    projection = json.loads((_ROOT / _PROJECTION).read_text(encoding="utf-8"))
+    for rel in projection["paths"]:
+        if (source := f".agents/{rel}") in managed:
+            managed.setdefault(f".claude/{rel}", set()).update(managed[source])
     return managed
 
 

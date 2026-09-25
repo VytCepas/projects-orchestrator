@@ -1,7 +1,8 @@
 ---
 description: Hook reference — what each hook does and how to invoke manually
-globs: [".agents/settings.json", ".agents/hooks/**"]
-alwaysApply: false
+paths:
+  - ".agents/settings.json"
+  - ".agents/hooks/**"
 ---
 
 ## Hooks in this project

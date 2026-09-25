@@ -9,6 +9,12 @@
 # Composable with create_issue.sh:
 #   .agents/scripts/create_issue.sh feat "Add OAuth login" | xargs -I{} .agents/scripts/start_issue.sh {} feat
 
+case "${1-}" in
+-h | --help) # the header above is the help; nothing else runs (#992)
+  sed -n '2,/^[^#]/s/^# \{0,1\}//p' "$0"
+  exit 0
+  ;;
+esac
 set -euo pipefail
 
 # This script hard-requires the GitHub CLI (PI-362).
