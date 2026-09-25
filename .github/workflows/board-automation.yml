@@ -260,7 +260,9 @@ jobs:
 
             option_id=$(echo "$PROJECT" | jq -r --arg f "$field_name" --arg o "$option_name" '(.fields.nodes // [])[] | select(.name == $f) | (.options // [])[] | select(.name == $o) | .id')
             if [ -z "$option_id" ]; then
-              echo "Skipping missing project option: $field_name=$option_name"
+              # A warning, not a log line: the value is set on the issue but the board
+              # cannot show it until the option exists (#1016).
+              echo "::warning title=Board option missing::Skipping missing project option: $field_name=$option_name. Add the option to the board's '$field_name' field (setup_github.sh adds missing Type options)."
               return 0
             fi
 

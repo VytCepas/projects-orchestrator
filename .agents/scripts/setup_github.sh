@@ -198,6 +198,16 @@ fi
 echo ""
 echo "Provisioning GitHub Project board fields..."
 
+# The board's Type vocabulary as name:COLOR — the one list the create mutation,
+# the existing-field option sync and the manual-setup hint all read. It must
+# match the TYPE_LABEL selector in board-automation.yml (test-guarded, #1016).
+TYPE_OPTIONS="feature:BLUE bug:RED chore:GRAY documentation:PURPLE test:YELLOW spike:ORANGE tech-debt:PINK"
+option_names() {
+  local o out=""
+  for o in $1; do out="${out:+$out, }${o%%:*}"; done
+  printf '%s' "$out"
+}
+
 # Single source of truth for the board number (PI #556): the PROJECT_NUMBER env
 # var overrides; otherwise read github_project_number from .agents/config.yaml
 # (shared with board-automation.yml / create_issue.sh); default 1. Account-scoped
@@ -217,15 +227,26 @@ fi
 # Query the project board with gh's built-in gojq (-q) instead of an external
 # jq, so the script has no jq dependency (PI-362). Two short round-trips on a
 # one-time admin script is negligible.
+#
+# One owner kind per request: a query naming both user() and organization()
+# always carries a NOT_FOUND error for one of them, and on any GraphQL error gh
+# exits 1 and prints the raw body, ignoring -q (#1016). __OWNER__ is filled in
+# with user, then organization; only a successful request's output is kept.
+owner_graphql() {
+  local query="$1" kind out
+  shift
+  for kind in user organization; do
+    if out=$(gh api graphql -f query="${query//__OWNER__/$kind}" "$@" 2>/dev/null); then
+      printf '%s\n' "$out"
+      return 0
+    fi
+  done
+  return 1
+}
+
 PROJECT_QUERY='
   query($owner: String!, $number: Int!) {
-    user(login: $owner) {
-      projectV2(number: $number) {
-        id
-        fields(first: 50) { nodes { ... on ProjectV2SingleSelectField { name } } }
-      }
-    }
-    organization(login: $owner) {
+    __OWNER__(login: $owner) {
       projectV2(number: $number) {
         id
         fields(first: 50) { nodes { ... on ProjectV2SingleSelectField { name } } }
@@ -233,10 +254,9 @@ PROJECT_QUERY='
     }
   }'
 
-PROJECT_ID=$(gh api graphql -f query="$PROJECT_QUERY" \
+PROJECT_ID=$(owner_graphql "$PROJECT_QUERY" \
   -f owner="$OWNER" -F number="$PROJECT_NUMBER" \
-  -q '(.data.user.projectV2 // .data.organization.projectV2 // {}).id // empty' \
-  2>/dev/null || echo '')
+  -q '(.data.user.projectV2 // .data.organization.projectV2 // {}).id // empty' || true)
 
 if [ -z "$PROJECT_ID" ]; then
   echo "WARNING: Project #$PROJECT_NUMBER not found for $REPO." >&2
@@ -245,19 +265,90 @@ if [ -z "$PROJECT_ID" ]; then
   echo "  • Size         — options: XS, S, M, L, XL" >&2
   echo "  • Agent ready  — options: Yes, No" >&2
   echo "  • Confidence   — options: high, medium, low, unknown" >&2
-  echo "  • Type         — options: feature, bug, chore, documentation, test" >&2
+  echo "  • Type         — options: $(option_names "$TYPE_OPTIONS")" >&2
   echo "  Settings: $WEB_BASE/users/$OWNER/projects/$PROJECT_NUMBER/settings/fields" >&2
 else
-  EXISTING_FIELDS=$(gh api graphql -f query="$PROJECT_QUERY" \
+  EXISTING_FIELDS=$(owner_graphql "$PROJECT_QUERY" \
     -f owner="$OWNER" -F number="$PROJECT_NUMBER" \
-    -q '((.data.user.projectV2 // .data.organization.projectV2).fields.nodes // [])[] | .name // empty' \
-    2>/dev/null || echo '')
+    -q '((.data.user.projectV2 // .data.organization.projectV2).fields.nodes // [])[] | .name // empty' || true)
+
+  FIELD_QUERY='
+    query($owner: String!, $number: Int!, $name: String!) {
+      __OWNER__(login: $owner) { projectV2(number: $number) { field(name: $name) {
+        ... on ProjectV2SingleSelectField { id options { id name color description } } } } }
+    }'
+  # One line, no double quotes: it is embedded verbatim in a JSON request body.
+  UPDATE_OPTIONS_MUTATION='mutation($fieldId: ID!, $opts: [ProjectV2SingleSelectFieldOptionInput!]) { updateProjectV2Field(input: { fieldId: $fieldId, singleSelectOptions: $opts }) { projectV2Field { ... on ProjectV2SingleSelectField { options { id } } } } }'
+  # Emits: field id / missing names / existing ids / full option list as JSON.
+  # __WANT__ is replaced with the spec's options (script constants, not input).
+  # shellcheck disable=SC2016 # jq program, not shell expansion
+  OPTIONS_PLAN_JQ='((.data.user.projectV2 // .data.organization.projectV2 // {}).field // {}) as $f
+    | [($f.options // [])[] | {id, name, color, description}] as $have
+    | [[__WANT__][] | .name as $n | select(any($have[]; .name == $n) | not)] as $miss
+    | "\($f.id // "")\n\([$miss[].name] | join(" "))\n\([$have[].id] | join(" "))\n\($have + $miss | tojson)"'
+
+  # Add the spec's options that an EXISTING single-select field lacks (#1016).
+  # updateProjectV2Field's singleSelectOptions overwrites the whole list, and an
+  # option keeps its identity (and every item's value) only when its id is sent
+  # back — GitHub GraphQL reference, ProjectV2SingleSelectFieldOptionInput.id.
+  # So every existing option is re-sent with its id, and the result is checked.
+  # Board options absent from the spec are kept, deliberately: never removed.
+  ensure_single_select_options() {
+    local field_name="$1" spec="$2" want="" o plan field_id missing old_ids opts
+    for o in $spec; do
+      want="${want:+$want,}{\"name\":\"${o%%:*}\",\"color\":\"${o#*:}\",\"description\":\"\"}"
+    done
+    plan=$(owner_graphql "$FIELD_QUERY" -f owner="$OWNER" \
+      -F number="$PROJECT_NUMBER" -f name="$field_name" \
+      -q "${OPTIONS_PLAN_JQ/__WANT__/$want}" || true)
+    field_id=$(printf '%s\n' "$plan" | sed -n 1p)
+    missing=$(printf '%s\n' "$plan" | sed -n 2p)
+    old_ids=$(printf '%s\n' "$plan" | sed -n 3p)
+    opts=$(printf '%s\n' "$plan" | sed -n 4p)
+    if ! printf '%s' "$field_id" | grep -Eq '^[A-Za-z0-9_-]+$' || [ -z "$opts" ]; then
+      echo "  WARNING: could not read the options of '$field_name' — add any missing ones manually:" >&2
+      echo "    expected: $(option_names "$spec")" >&2
+      echo "    $WEB_BASE/users/$OWNER/projects/$PROJECT_NUMBER/settings/fields" >&2
+      return 0
+    fi
+    if [ -z "$missing" ]; then
+      echo "  '$field_name' already has every option"
+      return 0
+    fi
+    local body after id lost=""
+    body=$(mktemp)
+    printf '{"query":"%s","variables":{"fieldId":"%s","opts":%s}}' \
+      "$UPDATE_OPTIONS_MUTATION" "$field_id" "$opts" >"$body"
+    if ! after=$(gh api graphql --input "$body" \
+      -q '[.data.updateProjectV2Field.projectV2Field.options[]?.id] | join(" ")' 2>&1); then
+      rm -f "$body"
+      echo "  WARNING: could not add options to '$field_name' ($missing) — add them manually:" >&2
+      [ -n "$after" ] && echo "    reason: $after" >&2
+      echo "    $WEB_BASE/users/$OWNER/projects/$PROJECT_NUMBER/settings/fields" >&2
+      return 0
+    fi
+    rm -f "$body"
+    for id in $old_ids; do
+      case " $after " in *" $id "*) ;; *) lost="$lost $id" ;; esac
+    done
+    if [ -n "$lost" ]; then
+      echo "  WARNING: '$field_name' option ids changed after the update:$lost" >&2
+      echo "    items that used them may have lost their $field_name value — check the board." >&2
+    else
+      echo "  Added to '$field_name': $missing"
+    fi
+  }
 
   ensure_single_select_field() {
     local field_name="$1"
     local mutation="$2"
+    local spec="${3:-}"
     if printf '%s\n' "$EXISTING_FIELDS" | grep -Fxq "$field_name"; then
-      echo "  '$field_name' already exists — skipping"
+      if [ -n "$spec" ]; then
+        ensure_single_select_options "$field_name" "$spec"
+      else
+        echo "  '$field_name' already exists — skipping"
+      fi
       return 0
     fi
     # Capture stderr instead of discarding it (PI #556 minor): a swallowed
@@ -334,19 +425,19 @@ else
       }) { projectV2Field { ... on ProjectV2SingleSelectField { id } } }
     }'
 
-  ensure_single_select_field "Type" '
-    mutation($projectId: ID!) {
+  TYPE_OPTIONS_GRAPHQL=""
+  for o in $TYPE_OPTIONS; do
+    TYPE_OPTIONS_GRAPHQL="$TYPE_OPTIONS_GRAPHQL
+          { name: \"${o%%:*}\", color: ${o#*:}, description: \"\" }"
+  done
+  ensure_single_select_field "Type" "
+    mutation(\$projectId: ID!) {
       createProjectV2Field(input: {
-        projectId: $projectId
+        projectId: \$projectId
         dataType: SINGLE_SELECT
-        name: "Type"
-        singleSelectOptions: [
-          { name: "feature",       color: BLUE,   description: "" }
-          { name: "bug",           color: RED,    description: "" }
-          { name: "chore",         color: GRAY,   description: "" }
-          { name: "documentation", color: PURPLE, description: "" }
-          { name: "test",          color: YELLOW, description: "" }
+        name: \"Type\"
+        singleSelectOptions: [$TYPE_OPTIONS_GRAPHQL
         ]
       }) { projectV2Field { ... on ProjectV2SingleSelectField { id } } }
-    }'
+    }" "$TYPE_OPTIONS"
 fi
