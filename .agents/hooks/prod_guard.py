@@ -417,6 +417,13 @@ _UNMODELLED_NAMES = frozenset(
         "hash",
         "source",
         ".",
+        # #1035: `enable -n echo` (bash), `disable echo` and `autoload echo`
+        # (zsh) hand `echo` to a PATH binary or a function; a DEBUG `trap`
+        # runs code before every later command. Each RAN a payload.
+        "enable",
+        "disable",
+        "autoload",
+        "trap",
     }
 )
 
@@ -750,6 +757,101 @@ def _without_prose(command: str) -> str:
         for i in range(start, end):
             chars[i] = " "
     return "".join(chars)
+
+
+# ── #1035: a search tool can run a program ──────────────────────────────────
+# `rg --pre CMD` runs `CMD PATH` per file, so `rg --pre terraform x destroy`
+# runs `terraform destroy` — a verb no deny rule can see, blanked or not. Where
+# the program's arguments come from differs per tool (a PATH, a `%`, a shell),
+# so modelling it would be one fail-open per modelling error. Refusing the flag
+# models nothing. From each tool's --help: rg 14 (`--pre`, `--hostname-bin`),
+# ugrep 7 (`--filter`, `--pager`, `--view`, `--config`/`---`), ag and ack
+# (`--pager`; ack `--ackrc`). ag's getopt_long and ack's Getopt::Long accept
+# an unambiguous prefix (`--pag`); rg and ugrep rejected one when run.
+_SEARCH_EXEC_FLAGS: dict[str, frozenset[str]] = {
+    "rg": frozenset({"pre", "hostname-bin"}),
+    "ag": frozenset({"pager"}),
+    "ack": frozenset({"pager", "ackrc"}),
+    **{
+        name: frozenset({"filter", "pager", "view", "config"})
+        for name in ("grep", "egrep", "fgrep", "ugrep", "ug")
+    },
+}
+_SEARCH_ABBREVIATES = frozenset({"ag", "ack"})
+
+
+#: Heads that run a later word as a command. Their own option grammars are NOT
+#: modelled (`env -C DIR`, `sudo -u USER`, `timeout 5`): every tool name after
+#: one is checked instead, so an option argument spelling a tool name cannot
+#: hide the real one (PR #1037 review).
+_RUNS_A_COMMAND = frozenset(
+    {
+        *_COMMAND_PREFIXES,
+        "env",
+        "exec",
+        "nice",
+        "nohup",
+        "time",
+        "sudo",
+        "doas",
+        "timeout",
+        "xargs",
+        "stdbuf",
+        "setsid",
+        "ionice",
+        "chrt",
+        "taskset",
+        "caffeinate",
+        "unbuffer",
+        "watch",
+    }
+)
+
+
+def _tool_flag(tool: str, words: list[str]) -> str | None:
+    """The exec-capable flag *tool* was given in *words*, or None."""
+    for word in words:
+        if word == "--":
+            return None  # what follows is a pattern or a path
+        if word.startswith("---") and "config" in _SEARCH_EXEC_FLAGS[tool]:
+            return f"{tool} ---"  # ugrep's short spelling of --config
+        if word.startswith("--"):
+            name = word[2:].partition("=")[0]
+            for flag in _SEARCH_EXEC_FLAGS[tool]:
+                if name == flag or (
+                    tool in _SEARCH_ABBREVIATES and len(name) > 1 and flag.startswith(name)
+                ):
+                    return f"{tool} --{flag}"
+    return None
+
+
+def _search_runs_program(command: str) -> str | None:
+    """The search tool in *command* that was given a program to run, or None.
+
+    Only the word in command position counts, so `echo rg --pre x` runs no
+    search tool. Past a wrapper, every tool name is a candidate.
+    """
+    for statement in _statements(command):
+        leaves: list[list[str]] = [[]]
+        for word in statement:
+            if _is_pipe(word):
+                leaves.append([])
+            else:
+                leaves[-1].append(word)
+        for leaf in leaves:
+            at = _verb_index(leaf)
+            if at >= len(leaf):
+                continue
+            names = [word.rsplit("/", 1)[-1] for word in leaf]
+            starts = [at]
+            if names[at] in _RUNS_A_COMMAND:
+                starts = range(at + 1, len(leaf))
+            for k in starts:
+                if names[k] in _SEARCH_EXEC_FLAGS:
+                    found = _tool_flag(names[k], leaf[k + 1 :])
+                    if found:
+                        return found
+    return None
 
 
 # ── Secret-file exposure (PI-893) ───────────────────────────────────────────
@@ -1804,6 +1906,16 @@ def evaluate(
                 permission_mode,
                 problems,
             )
+    runner = _search_runs_program(command)
+    if runner is not None:
+        return _verdict(
+            f"prod_guard: '{runner}' makes a search tool run another program, "
+            "which no deny rule can inspect. Run that program directly so it is "
+            "checked, add a matching regex to safety.allow in .agents/config.yaml, "
+            "or run the command yourself.",
+            permission_mode,
+            problems,
+        )
     exposure = _exposes_secret(command)
     if exposure is not None:
         return _verdict(

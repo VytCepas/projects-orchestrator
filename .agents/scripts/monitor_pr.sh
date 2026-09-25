@@ -461,8 +461,9 @@ _has_review_activity() {
   formal=0
   codex=0
   if [ -n "$author" ]; then
+    # Active submitted states only: a DISMISSED review was revoked (#1036).
     formal=$(gh api --paginate "repos/$owner/$repo/pulls/$PR_NUMBER/reviews" \
-      --jq ".[] | select(.commit_id == \"$head\" and .state != \"PENDING\") | .user.login" \
+      --jq ".[] | select(.commit_id == \"$head\" and (.state | IN(\"APPROVED\", \"CHANGES_REQUESTED\", \"COMMENTED\"))) | .user.login" \
       2>/dev/null | grep -cvxF -- "$author") || formal=0
     codex=$(gh api graphql --paginate \
       -F owner="$owner" -F repo="$repo" -F number="$PR_NUMBER" -f query='

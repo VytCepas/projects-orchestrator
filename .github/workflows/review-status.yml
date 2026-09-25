@@ -214,7 +214,9 @@ jobs:
                                | ($sha | ascii_downcase | startswith($c)))]
                      | length')
           # Formal reviews, tied to the head by `commit_id` (the REST note above).
-          # PENDING is a review not yet submitted, so it has reviewed nothing.
+          # Only the ACTIVE submitted states count (#1036): PENDING has reviewed
+          # nothing yet, and DISMISSED was revoked — it stays in the REST list and
+          # this job re-runs on `dismissed`, so excluding only PENDING kept it.
           #
           # THE AUTHOR'S OWN REVIEWS COUNT FOR NOTHING (PI-1003). A reply to a
           # review thread is recorded as a formal COMMENTED review — empty body,
@@ -230,7 +232,8 @@ jobs:
           # `--paginate` emits one JSON array per page, hence `-s` and `.[][]`.
           FORMAL_REVIEWS=$(gh api --paginate "repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
             | jq -s --arg sha "$SHA" --arg author "$AUTHOR" \
-                '[.[][] | select(.commit_id == $sha and .state != "PENDING"
+                '[.[][] | select(.commit_id == $sha
+                                 and (.state | IN("APPROVED", "CHANGES_REQUESTED", "COMMENTED"))
                                  and $author != "" and .user.login != $author)]
                      | length')
           # THREADS ARE SAMPLED LAST, AND THE ORDER IS THE CORRECTNESS ARGUMENT.
