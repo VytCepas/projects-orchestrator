@@ -12,10 +12,11 @@ The command on PATH runs uv's copy of the checkout, never the tree, and
 ``--version`` does not move between releases (#191), so a pull without a
 reinstall used to leave a stale build that nothing reported.
 
-The layout is uv's own. ``uv tool dir`` holds one env per tool,
-``<env>/uv-receipt.toml`` records the source and entrypoints, and the package
-sits in ``<env>/lib/python3.X/site-packages``. The tree-to-wheel mapping is read
-from pyproject's hatch config, never restated here.
+The layout is uv's own. ``uv tool dir`` holds one env per tool, and
+``<env>/uv-receipt.toml`` records the source and entrypoints. Where the env keeps
+its packages and scripts is asked of the env's own interpreter, so no platform
+layout is assumed. The tree-to-wheel mapping and the metadata a build must carry
+are read from pyproject, never restated here.
 
 Exit codes: 0 ok, 1 refused, failed or drifted, 2 usage. Stdlib only.
 """
@@ -23,18 +24,30 @@ Exit codes: 0 ok, 1 refused, failed or drifted, 2 usage. Stdlib only.
 from __future__ import annotations
 
 import argparse
+import filecmp
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
+import sysconfig
 import tomllib
+from email.parser import Parser
 from pathlib import Path
-from typing import TextIO
+from typing import Any, TextIO
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TOOL = "projects-orchestrator"
 _BASE = "main"
 _SESSION = "inside a Claude Code session: run `just install --apply` from a terminal"
+_ENV_PATHS = (
+    "import json, sysconfig; "
+    "print(json.dumps({k: sysconfig.get_path(k) for k in ('purelib', 'scripts')}))"
+)
+_REQ = re.compile(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[([^\]]*)\])?([^;]*)(?:;(.*))?$")
+_EXTRA = re.compile(r"^(?:\((.*)\)and)?extra=='([^']*)'$")
+_HATCH_VERSION = re.compile(r"(?im)^(__version__|VERSION) *= *(['\"])v?(?P<version>.+?)\2")
 
 
 class RefusedError(Exception):
@@ -92,10 +105,9 @@ def blob_ids(paths: list[Path]) -> list[str]:
     return ids
 
 
-def wheel_layout(root: Path) -> list[tuple[str, str]]:
+def wheel_layout(project_toml: dict[str, Any]) -> list[tuple[str, str]]:
     """Return (tree prefix, site-packages prefix) pairs from pyproject's hatch wheel config."""
-    data = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
-    wheel = data.get("tool", {}).get("hatch", {}).get("build", {}).get("targets", {})
+    wheel = project_toml.get("tool", {}).get("hatch", {}).get("build", {}).get("targets", {})
     wheel = wheel.get("wheel", {})
     pairs = [(pkg, Path(pkg).name) for pkg in wheel.get("packages", [])]
     pairs += [(str(src), str(dst)) for src, dst in wheel.get("force-include", {}).items()]
@@ -104,9 +116,9 @@ def wheel_layout(root: Path) -> list[tuple[str, str]]:
     return pairs
 
 
-def expected_files(root: Path, commit: str) -> dict[str, tuple[str, str]]:
+def expected_files(project_toml: dict[str, Any], commit: str) -> dict[str, tuple[str, str]]:
     """Map each installed path the commit should produce to (blob id, tree path)."""
-    layout = wheel_layout(root)
+    layout = wheel_layout(project_toml)
     out = _git("ls-tree", "-r", "-z", "--full-tree", commit, "--", *(src for src, _ in layout))
     files: dict[str, tuple[str, str]] = {}
     for entry in filter(None, out.split("\0")):
@@ -122,12 +134,21 @@ def expected_files(root: Path, commit: str) -> dict[str, tuple[str, str]]:
     return files
 
 
-def site_packages(env: Path) -> Path:
-    """Return the tool env's single site-packages directory."""
-    found = sorted(env.glob("lib/python3*/site-packages"))
-    if len(found) != 1:
-        raise RefusedError(f"expected one site-packages under {env}, found {len(found)}")
-    return found[0]
+def env_paths(env: Path) -> tuple[Path, Path]:
+    """Return the tool env's (purelib, scripts), as its own interpreter reports them.
+
+    Exact on every platform: no ``lib/python3*`` or ``bin`` guessed here.
+    """
+    found = _run([_uv(), "python", "find", str(env)])
+    if found.returncode != 0 or not found.stdout.strip():
+        raise RefusedError(f"`uv python find {env}` failed: {found.stderr.strip()}")
+    argv = [found.stdout.strip(), "-I", "-B", "-c", _ENV_PATHS]
+    proc = _run(argv)
+    try:
+        paths = json.loads(proc.stdout)
+        return Path(paths["purelib"]), Path(paths["scripts"])
+    except (ValueError, KeyError, TypeError) as exc:
+        raise RefusedError(f"{argv[0]} did not report its paths: {proc.stderr.strip()}") from exc
 
 
 def installed_files(site: Path, tops: set[str]) -> dict[str, str]:
@@ -142,7 +163,14 @@ def installed_files(site: Path, tops: set[str]) -> dict[str, str]:
     return {path.relative_to(site).as_posix(): i for path, i in zip(paths, ids, strict=True)}
 
 
-def receipt_problems(env: Path) -> list[str]:
+def _same_entry(link: Path, want: Path) -> bool:
+    """True when *link* is *want* through a symlink, or a byte-identical copy (Windows)."""
+    if not link.exists() or not want.exists():
+        return False
+    return link.resolve() == want.resolve() or filecmp.cmp(link, want, shallow=False)
+
+
+def receipt_problems(env: Path, scripts: Path) -> list[str]:
     """Check the receipt names this checkout and its entrypoint links into the env."""
     receipt = env / "uv-receipt.toml"
     if not receipt.is_file():
@@ -156,9 +184,142 @@ def receipt_problems(env: Path) -> list[str]:
             f"source: installed from {source or reqs}, not this checkout ({_REPO_ROOT})"
         )
     for ep in tool.get("entrypoints", []):
-        link, want = Path(ep.get("install-path", "")), env / "bin" / ep.get("name", "")
-        if not link.exists() or link.resolve() != want.resolve():
-            problems.append(f"entrypoint: {link} does not resolve to {want}")
+        link = Path(ep.get("install-path", ""))
+        if not _same_entry(link, scripts / link.name):
+            problems.append(f"entrypoint: {link} does not resolve to {scripts / link.name}")
+    return problems
+
+
+def path_problems(scripts: Path) -> list[str]:
+    """Check the ``_TOOL`` that PATH selects is the tool env's, and name any shadow."""
+    dirs = os.environ.get("PATH", "").split(os.pathsep)
+    if sys.prefix != sys.base_prefix:  # under `uv run`, this repo's own venv is first on PATH
+        own = Path(sysconfig.get_path("scripts")).resolve()
+        dirs = [d for d in dirs if d and Path(d).resolve() != own]
+    found = shutil.which(_TOOL, path=os.pathsep.join(dirs))
+    if found is None:
+        return [f"PATH: no {_TOOL} on PATH"]
+    want = scripts / Path(found).name
+    if not _same_entry(Path(found), want):
+        return [f"PATH: {_TOOL} runs {found}, which shadows {want}"]
+    return []
+
+
+def _norm(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name.strip()).lower()
+
+
+def _specs(spec: str) -> str:
+    return ",".join(sorted(s for s in "".join(spec.split()).split(",") if s))
+
+
+def _req_key(req: str, extra: str = "") -> str:
+    """Normalise one requirement as PEP 503/508 compare it, for either side of the diff."""
+    match = _REQ.match(req)
+    if match is None:
+        return f"unparsed {req!r}"
+    name, extras, spec, marker = match.groups()
+    extras_n = ",".join(sorted(_norm(e) for e in (extras or "").split(",") if e.strip()))
+    marker_n = "".join((marker or "").split()).replace('"', "'")
+    return f"{_norm(name)}[{extras_n}]{_specs(spec)}; {marker_n}; extra={extra}"
+
+
+def _installed_req_key(value: str) -> str:
+    """Normalise a Requires-Dist line, splitting off the ``extra == '...'`` the backend adds."""
+    req, _, marker = value.partition(";")
+    match = _EXTRA.match("".join(marker.split()).replace('"', "'"))
+    if match is None:
+        return _req_key(value)
+    inner, extra = match.groups()
+    return _req_key(f"{req};{inner}" if inner else req, _norm(extra))
+
+
+def _dynamic_version(project_toml: dict[str, Any], commit: str) -> str:
+    """Read a hatch ``path`` version source at *commit*, with hatch's default pattern."""
+    source = project_toml.get("tool", {}).get("hatch", {}).get("version", {}).get("path")
+    if not source:
+        return "(dynamic, not a hatch path source)"
+    match = _HATCH_VERSION.search(_git("show", f"{commit}:{source}"))
+    return match.group("version") if match else f"(no version in {source})"
+
+
+def _expected_metadata(project_toml: dict[str, Any], commit: str) -> dict[str, set[str]]:
+    project = project_toml.get("project", {})
+    extras = project.get("optional-dependencies", {})
+    reqs = {_req_key(r) for r in project.get("dependencies", [])}
+    for extra, deps in extras.items():
+        reqs |= {_req_key(r, _norm(extra)) for r in deps}
+    if "version" in project.get("dynamic", []):
+        version = _dynamic_version(project_toml, commit)
+    else:
+        version = str(project.get("version", ""))
+    python = project.get("requires-python")
+    return {
+        "Name": {_norm(project.get("name", ""))},
+        "Version": {version},
+        "Requires-Python": {_specs(python)} if python else set(),
+        "Provides-Extra": {_norm(e) for e in extras},
+        "Requires-Dist": reqs,
+    }
+
+
+def _entry_points(project_toml: dict[str, Any]) -> set[str]:
+    project = project_toml.get("project", {})
+    groups = {"console_scripts": project.get("scripts", {})}
+    groups["gui_scripts"] = project.get("gui-scripts", {})
+    groups.update(project.get("entry-points", {}))
+    return {
+        f"[{group}] {name} = {''.join(str(value).split())}"
+        for group, points in groups.items()
+        for name, value in points.items()
+    }
+
+
+def _installed_entry_points(text: str) -> set[str]:
+    found: set[str] = set()
+    group = ""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("[") and line.endswith("]"):
+            group = line[1:-1].strip()
+        elif group and "=" in line and not line.startswith(("#", ";")):
+            name, value = line.split("=", 1)
+            found.add(f"[{group}] {name.strip()} = {''.join(value.split())}")
+    return found
+
+
+def metadata_problems(site: Path, project_toml: dict[str, Any], commit: str) -> list[str]:
+    """Diff the installed dist-info (version, requirements, entry points) against pyproject."""
+    name = re.sub(r"[-_.]+", "_", project_toml.get("project", {}).get("name", "")).lower()
+    dists = sorted(site.glob(f"{name}-*.dist-info"))
+    if len(dists) != 1:
+        return [f"metadata: expected one {name}-*.dist-info in {site}, found {len(dists)}"]
+    meta = Parser().parsestr((dists[0] / "METADATA").read_text(encoding="utf-8"))
+    installed = {
+        "Name": {_norm(v) for v in meta.get_all("Name", [])},
+        "Version": set(meta.get_all("Version", [])),
+        "Requires-Python": {_specs(v) for v in meta.get_all("Requires-Python", [])},
+        "Provides-Extra": {_norm(v) for v in meta.get_all("Provides-Extra", [])},
+        "Requires-Dist": {_installed_req_key(v) for v in meta.get_all("Requires-Dist", [])},
+    }
+    points = dists[0] / "entry_points.txt"
+    have = {
+        **installed,
+        "entry point": _installed_entry_points(
+            points.read_text(encoding="utf-8") if points.is_file() else ""
+        ),
+    }
+    want = {**_expected_metadata(project_toml, commit), "entry point": _entry_points(project_toml)}
+    problems = [
+        f"metadata: {k} {v} is in pyproject, not installed"
+        for k in want
+        for v in sorted(want[k] - have[k])
+    ]
+    problems += [
+        f"metadata: {k} {v} is installed, not in pyproject"
+        for k in want
+        for v in sorted(have[k] - want[k])
+    ]
     return problems
 
 
@@ -167,9 +328,12 @@ def check(env: Path) -> tuple[list[str], int]:
     if not env.is_dir():
         return [f"not installed: {env} does not exist (run `just install --apply`)"], 0
     head = _git("rev-parse", "HEAD")
-    expected = expected_files(_REPO_ROOT, head)
-    installed = installed_files(site_packages(env), {p.split("/", 1)[0] for p in expected})
-    drift = receipt_problems(env)
+    project_toml = tomllib.loads(_git("show", f"{head}:pyproject.toml"))
+    expected = expected_files(project_toml, head)
+    site, scripts = env_paths(env)
+    installed = installed_files(site, {p.split("/", 1)[0] for p in expected})
+    drift = receipt_problems(env, scripts) + path_problems(scripts)
+    drift += metadata_problems(site, project_toml, head)
     for dest, (sha, src) in sorted(expected.items()):
         if dest not in installed:
             drift.append(f"missing: {dest} (tree: {src})")

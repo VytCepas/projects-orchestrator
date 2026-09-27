@@ -26,13 +26,14 @@ just install --apply    # uv tool install --reinstall <this checkout>, then --ch
 projects-orchestrator --version
 ```
 
-`just install` with no flag writes nothing, and exits 1 when `--apply` would
-refuse, unless the only reason is a Claude Code session. `--apply` installs only
-from the main worktree, on a clean `main` in sync with `origin/main` (it fetches
-first), and not from inside a Claude Code session. A branch or an uncommitted edit is
-code nobody reviewed, and uv records the source path in its receipt, so a linked
-worktree's path would outlive its branch. After installing, `--apply` runs the
-check below and fails if the build does not match `HEAD`.
+`just install` with no flag writes nothing, and never downloads a Python to run
+itself. It exits 1 when `--apply` would refuse, unless the only reason is a
+Claude Code session. `--apply` installs only from the main worktree, on a clean
+`main` in sync with `origin/main` (it fetches first), and not from inside a
+Claude Code session. A branch or an uncommitted edit is code nobody reviewed,
+and uv records the source path in its receipt, so a linked worktree's path would
+outlive its branch. After installing, `--apply` runs the check below and fails if
+the build does not match `HEAD`.
 
 `uv tool install` builds a copy of the checkout into its own environment. The
 command on your `PATH` runs that copy, never the working tree. See the next
@@ -63,8 +64,18 @@ just install --check
 
 This compares the installed package files with the checkout's `HEAD` and exits 1
 on drift, naming each file: `modified`, `missing`, or `not in tree`. It also
-fails when uv's receipt names another checkout, or when the entrypoint on `PATH`
-does not resolve into the tool's environment. It compares against `HEAD`, not
+fails when:
+
+- uv's receipt names another checkout, or its entrypoint link is broken;
+- the `projects-orchestrator` your `PATH` selects is not the one in the tool's
+  environment, naming the one that shadows it. The project venv that `uv run`
+  puts first on `PATH` is ignored, since a shell does not run it;
+- the installed metadata differs from what `HEAD`'s `pyproject.toml` declares:
+  the version, `Requires-Python`, the dependencies and the entry points. A change
+  to `pyproject.toml` alone is drift too.
+
+The tool environment's own interpreter reports where its packages and scripts
+live, so no platform layout is assumed. The check compares against `HEAD`, not
 the working tree, so an uncommitted edit is not drift but a pull without a
 reinstall is. `--version` cannot tell you this: it does not move between
 releases.
