@@ -79,8 +79,8 @@ def _commit(repo: Path, message: str) -> None:
     _git(repo, "commit", "-q", "-m", message)
 
 
-@pytest.fixture
-def box(tmp_path: Path) -> Box:
+def _make_box(tmp_path: Path, object_format: str = "sha1") -> Box:
+    fmt = f"--object-format={object_format}"
     origin = tmp_path / "origin.git"
     repo = tmp_path / "checkout"
     (repo / "src" / _PKG).mkdir(parents=True)
@@ -90,8 +90,8 @@ def box(tmp_path: Path) -> Box:
     (repo / ".agents" / "scripts").mkdir(parents=True)
     shutil.copy2(_SCRIPT, repo / ".agents" / "scripts" / "install_tool.py")
     shutil.copy2(_REPO / "justfile", repo / "justfile")
-    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True)
-    _git(repo.parent, "init", "-q", "-b", "main", str(repo))
+    subprocess.run(["git", "init", "-q", "--bare", fmt, "-b", "main", str(origin)], check=True)
+    _git(repo.parent, "init", "-q", fmt, "-b", "main", str(repo))
     _git(repo, "config", "user.email", "test@example.com")
     _git(repo, "config", "user.name", "Test")
     _commit(repo, "init")
@@ -112,6 +112,16 @@ def box(tmp_path: Path) -> Box:
     return Box(
         repo, origin, tmp_path / "tools", tmp_path / "bin", fake / "uv", tmp_path / "uv.log", env
     )
+
+
+@pytest.fixture
+def box(tmp_path: Path) -> Box:
+    return _make_box(tmp_path)
+
+
+@pytest.fixture
+def sha256_box(tmp_path: Path) -> Box:
+    return _make_box(tmp_path, "sha256")
 
 
 def _script(box: Box, *args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -422,6 +432,24 @@ def test_install_check_compares_head_not_the_working_tree(box: Box) -> None:
     _install_faithfully(box)
     (box.repo / "src" / _PKG / "cli.py").write_text("# uncommitted edit\n")
     assert _script(box, "--check").returncode == 0
+
+
+def test_install_check_passes_on_a_faithful_install_in_a_sha256_repository(
+    sha256_box: Box,
+) -> None:
+    # git computes the blob ids, so they follow the repository's object format.
+    _install_faithfully(sha256_box)
+    assert _script(sha256_box, "--check").returncode == 0
+
+
+def test_install_check_names_a_modified_installed_file_in_a_sha256_repository(
+    sha256_box: Box,
+) -> None:
+    _install_faithfully(sha256_box)
+    (sha256_box.site / "cli.py").write_text("# edited in place\n")
+    assert _items(_script(sha256_box, "--check").stderr) == [
+        f"modified: {_PKG}/cli.py (tree: src/{_PKG}/cli.py)"
+    ]
 
 
 def test_install_check_ignores_bytecode_caches(box: Box) -> None:

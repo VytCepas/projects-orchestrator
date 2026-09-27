@@ -23,7 +23,6 @@ Exit codes: 0 ok, 1 refused, failed or drifted, 2 usage. Stdlib only.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import os
 import shutil
 import subprocess
@@ -71,9 +70,26 @@ def _uv_dir(*extra: str) -> Path:
     return Path(proc.stdout.strip())
 
 
-def blob_id(data: bytes) -> str:
-    """Return the git blob id of *data*, so installed bytes compare with ``git ls-tree``."""
-    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()  # noqa: S324 — git's id, not security
+def blob_ids(paths: list[Path]) -> list[str]:
+    """Return each file's git blob id, in order, from the repo's own ``hash-object``.
+
+    ``--no-filters`` hashes the installed bytes as they are: with filters, an
+    attribute such as ``*.sh text eol=lf`` turns a CRLF copy back into a match.
+    """
+    if not paths:
+        return []
+    argv = ["git", "-C", str(_REPO_ROOT), "hash-object", "--no-filters", "--stdin-paths"]
+    proc = subprocess.run(  # noqa: S603 — fixed argv, no shell
+        argv,
+        input="".join(f"{path}\n" for path in paths),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    ids = proc.stdout.split()
+    if proc.returncode != 0 or len(ids) != len(paths):
+        raise RefusedError(f"git hash-object failed: {proc.stderr.strip()}")
+    return ids
 
 
 def wheel_layout(root: Path) -> list[tuple[str, str]]:
@@ -116,13 +132,14 @@ def site_packages(env: Path) -> Path:
 
 def installed_files(site: Path, tops: set[str]) -> dict[str, str]:
     """Map each installed package file (bytecode caches excluded) to its blob id."""
-    files: dict[str, str] = {}
-    for top in sorted(tops):
-        for path in sorted((site / top).rglob("*")):
-            if "__pycache__" in path.parts or not path.is_file():
-                continue
-            files[path.relative_to(site).as_posix()] = blob_id(path.read_bytes())
-    return files
+    paths = [
+        path
+        for top in sorted(tops)
+        for path in sorted((site / top).rglob("*"))
+        if "__pycache__" not in path.parts and path.is_file()
+    ]
+    ids = blob_ids(paths)
+    return {path.relative_to(site).as_posix(): i for path, i in zip(paths, ids, strict=True)}
 
 
 def receipt_problems(env: Path) -> list[str]:
