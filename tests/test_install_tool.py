@@ -196,6 +196,35 @@ def test_install_dry_run_lists_what_apply_would_refuse(box: Box) -> None:
     ]
 
 
+def test_install_dry_run_exits_0_on_a_clean_synced_main(box: Box) -> None:
+    assert _script(box).returncode == 0
+
+
+def test_install_dry_run_exits_1_when_apply_would_refuse(box: Box) -> None:
+    # A caller that plans on the dry run must see the refusal before anything is written.
+    _git(box.repo, "checkout", "-q", "-b", "feat/x")
+    assert _script(box).returncode == 1
+
+
+def test_install_dry_run_exits_0_when_a_session_is_the_only_reason(box: Box) -> None:
+    # Dry runs are expected inside a session, and deploy checks for one itself.
+    box.env["CLAUDECODE"] = "1"
+    assert _script(box).returncode == 0
+
+
+def test_install_dry_run_still_lists_a_session_as_a_reason(box: Box) -> None:
+    box.env["CLAUDECODE"] = "1"
+    assert _items(_script(box).stdout) == [
+        "inside a Claude Code session: run `just install --apply` from a terminal"
+    ]
+
+
+def test_install_dry_run_exits_1_when_a_session_is_not_the_only_reason(box: Box) -> None:
+    box.env["CLAUDECODE"] = "1"
+    _git(box.repo, "checkout", "-q", "-b", "feat/x")
+    assert _script(box).returncode == 1
+
+
 def test_just_install_with_no_flag_is_the_dry_run(box: Box) -> None:
     done = subprocess.run(
         ["just", "install"], cwd=box.repo, env=box.env, capture_output=True, text=True, check=False
@@ -257,7 +286,11 @@ def _in_a_session(box: Box) -> None:
 _REFUSALS = {
     "branch": (_on_a_branch, "on 'feat/x', not main"),
     "detached": (_detached, "on 'detached HEAD', not main"),
-    "dirty": (_dirty, "uncommitted changes would be installed unreviewed:"),
+    # Porcelain's leading space is kept: " M", not "M".
+    "dirty": (
+        _dirty,
+        f"uncommitted changes would be installed unreviewed:\n       M src/{_PKG}/cli.py",
+    ),
     "untracked": (_untracked, "uncommitted changes would be installed unreviewed:\n      ?? src/"),
     "ahead": (_ahead, "not in sync with origin/main (ahead 1, behind 0)"),
     "behind": (_behind, "not in sync with origin/main (ahead 0, behind 1)"),

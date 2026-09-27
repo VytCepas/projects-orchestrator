@@ -2,7 +2,8 @@
 """Install this checkout as the machine's ``projects-orchestrator`` uv tool, or check it (#317).
 
 ``just install`` is a dry run. It prints the source, commit, target and command,
-and writes nothing. ``just install --apply`` runs ``uv tool install --reinstall
+and writes nothing. It exits 1 when ``--apply`` would refuse, unless the only
+reason is a Claude Code session. ``just install --apply`` runs ``uv tool install --reinstall
 <repo>``, and only from a clean ``main`` in sync with ``origin/main``.
 ``just install --check`` compares the installed package files with HEAD and
 exits 1 on drift, naming each file.
@@ -34,6 +35,7 @@ from typing import TextIO
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TOOL = "projects-orchestrator"
 _BASE = "main"
+_SESSION = "inside a Claude Code session: run `just install --apply` from a terminal"
 
 
 class RefusedError(Exception):
@@ -48,11 +50,11 @@ def _git_proc(*args: str) -> subprocess.CompletedProcess[str]:
     return _run(["git", "-C", str(_REPO_ROOT), *args])
 
 
-def _git(*args: str) -> str:
+def _git(*args: str, strip: bool = True) -> str:
     proc = _git_proc(*args)
     if proc.returncode != 0:
         raise RefusedError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
-    return proc.stdout.strip()
+    return proc.stdout.strip() if strip else proc.stdout
 
 
 def _uv() -> str:
@@ -164,7 +166,7 @@ def apply_problems(*, fetch: bool) -> list[str]:
     """Return every reason ``--apply`` must refuse; empty means it may install."""
     problems: list[str] = []
     if os.environ.get("CLAUDECODE"):
-        problems.append("inside a Claude Code session: run `just install --apply` from a terminal")
+        problems.append(_SESSION)
     git_dir = Path(_git("rev-parse", "--path-format=absolute", "--git-dir"))
     common = Path(_git("rev-parse", "--path-format=absolute", "--git-common-dir"))
     if git_dir.resolve() != common.resolve():
@@ -172,7 +174,8 @@ def apply_problems(*, fetch: bool) -> list[str]:
     name = _git_proc("symbolic-ref", "--short", "-q", "HEAD").stdout.strip() or "detached HEAD"
     if name != _BASE:
         problems.append(f"on '{name}', not {_BASE}: an unmerged branch is unreviewed text")
-    dirty = _git("status", "--porcelain", "--untracked-files=all").splitlines()
+    # Unstripped: porcelain's first column is a space for an unstaged change.
+    dirty = _git("status", "--porcelain", "--untracked-files=all", strip=False).splitlines()
     if dirty:
         shown = "\n      ".join(dirty[:10] + (["..."] if len(dirty) > 10 else []))
         problems.append(f"uncommitted changes would be installed unreviewed:\n      {shown}")
@@ -213,7 +216,9 @@ def _dry_run(env: Path, install: list[str]) -> int:
         _report(problems, "  --apply would refuse:", stream=sys.stdout)
     else:
         print(f"  --apply would proceed (origin/{_BASE} as of the last fetch; --apply fetches)")
-    return 0
+    # Non-zero so a caller planning on the dry run stops early. A session alone is only
+    # a note: dry runs are expected inside one, and deploy checks for a session itself.
+    return 1 if any(p != _SESSION for p in problems) else 0
 
 
 def _apply(env: Path, install: list[str]) -> int:

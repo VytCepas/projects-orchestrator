@@ -26,9 +26,10 @@ just install --apply    # uv tool install --reinstall <this checkout>, then --ch
 projects-orchestrator --version
 ```
 
-`just install` with no flag writes nothing. `--apply` installs only from the
-main worktree, on a clean `main` in sync with `origin/main` (it fetches first),
-and not from inside a Claude Code session. A branch or an uncommitted edit is
+`just install` with no flag writes nothing, and exits 1 when `--apply` would
+refuse, unless the only reason is a Claude Code session. `--apply` installs only
+from the main worktree, on a clean `main` in sync with `origin/main` (it fetches
+first), and not from inside a Claude Code session. A branch or an uncommitted edit is
 code nobody reviewed, and uv records the source path in its receipt, so a linked
 worktree's path would outlive its branch. After installing, `--apply` runs the
 check below and fails if the build does not match `HEAD`.

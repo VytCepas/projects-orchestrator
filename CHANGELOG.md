@@ -14,7 +14,8 @@ version's only source. `tests/test_version.py` fails when they disagree.
 
 - `just install`, the one install route for the tool itself. With no flag it is
   a dry run that prints the source, commit, target and command, and what
-  `--apply` would refuse. `--apply` runs `uv tool install --reinstall` on the
+  `--apply` would refuse; it exits 1 when `--apply` would refuse, unless the
+  only reason is a Claude Code session. `--apply` runs `uv tool install --reinstall` on the
   checkout, only from the main worktree on a clean `main` in sync with
   `origin/main`, then checks the result. `--check` compares the installed package
   files with `HEAD` and exits 1 on drift, naming each file, so a pull without a
