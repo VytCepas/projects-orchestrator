@@ -148,3 +148,12 @@ code-map:
 contract-freshness:
     uv run python .agents/scripts/check_contract_freshness.py
 
+
+# install THIS tool onto the machine from this checkout (#317). A dry run by
+# default: it prints the plan and the gates and installs nothing. --apply runs
+# `uv tool install --reinstall` only from a clean main in sync with origin/main;
+# --check diffs the installed build against HEAD and exits 1 on drift.
+[doc("install this tool from the checkout: dry run, --apply or --check (#317)")]
+[positional-arguments]
+install *args:
+    uv run --no-project python .agents/scripts/install_tool.py "$@"

@@ -10,6 +10,16 @@ version's only source. `tests/test_version.py` fails when they disagree.
 
 ## [Unreleased]
 
+### Added
+
+- `just install`, the one install route for the tool itself. With no flag it is
+  a dry run that prints the source, commit, target and command, and what
+  `--apply` would refuse. `--apply` runs `uv tool install --reinstall` on the
+  checkout, only from the main worktree on a clean `main` in sync with
+  `origin/main`, then checks the result. `--check` compares the installed package
+  files with `HEAD` and exits 1 on drift, naming each file, so a pull without a
+  reinstall is no longer invisible (#317).
+
 ### Changed
 
 - The fleet root defaults to `PORT_ROOT`, not the checkout's parent. With no

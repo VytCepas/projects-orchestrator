@@ -20,9 +20,18 @@ this repository.
 
 ```sh
 git clone https://github.com/VytCepas/projects-orchestrator.git
-uv tool install ./projects-orchestrator
+cd projects-orchestrator
+just install            # dry run: source, commit, target, command, and what --apply would refuse
+just install --apply    # uv tool install --reinstall <this checkout>, then --check
 projects-orchestrator --version
 ```
+
+`just install` with no flag writes nothing. `--apply` installs only from the
+main worktree, on a clean `main` in sync with `origin/main` (it fetches first),
+and not from inside a Claude Code session. A branch or an uncommitted edit is
+code nobody reviewed, and uv records the source path in its receipt, so a linked
+worktree's path would outlive its branch. After installing, `--apply` runs the
+check below and fails if the build does not match `HEAD`.
 
 `uv tool install` builds a copy of the checkout into its own environment. The
 command on your `PATH` runs that copy, never the working tree. See the next
@@ -32,19 +41,32 @@ section for what that means.
 
 ```sh
 git -C projects-orchestrator pull --ff-only
-uv tool install --reinstall ./projects-orchestrator
-projects-orchestrator --version
+just install --apply
 ```
 
-**`--reinstall` is not optional.** A merged fix is not a deployed fix. Pulling
+**The reinstall is not optional.** A merged fix is not a deployed fix. Pulling
 updates the checkout, but the installed copy keeps running the old code until it
 is rebuilt. So `git log` shows the fix, the tests pass, and the command on your
-`PATH` still behaves as before. Check `--version` after reinstalling. Between
-releases the version does not move, so also confirm the fix's behaviour.
+`PATH` still behaves as before. `just install --apply` always passes
+`--reinstall`, so uv rebuilds even when the version has not moved.
 
 No state migration is needed in either direction. The cache is versioned, and a
 build refuses to overwrite a newer build's file rather than discarding it (see
 [Operate the orchestrator's own state](operations.md#migrating-between-versions)).
+
+## Check the installed build
+
+```sh
+just install --check
+```
+
+This compares the installed package files with the checkout's `HEAD` and exits 1
+on drift, naming each file: `modified`, `missing`, or `not in tree`. It also
+fails when uv's receipt names another checkout, or when the entrypoint on `PATH`
+does not resolve into the tool's environment. It compares against `HEAD`, not
+the working tree, so an uncommitted edit is not drift but a pull without a
+reinstall is. `--version` cannot tell you this: it does not move between
+releases.
 
 ## What changed between versions
 
