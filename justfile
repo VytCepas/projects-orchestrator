@@ -156,4 +156,4 @@ contract-freshness:
 [doc("install this tool from the checkout: dry run, --apply or --check (#317)")]
 [positional-arguments]
 install *args:
-    uv run --no-project --no-python-downloads python .agents/scripts/install_tool.py "$@"
+    uv run --no-python-downloads python .agents/scripts/install_tool.py "$@"

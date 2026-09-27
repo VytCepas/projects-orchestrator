@@ -26,9 +26,10 @@ just install --apply    # uv tool install --reinstall <this checkout>, then --ch
 projects-orchestrator --version
 ```
 
-`just install` with no flag writes nothing, and never downloads a Python to run
-itself. It exits 1 when `--apply` would refuse, unless the only reason is a
-Claude Code session. `--apply` installs only from the main worktree, on a clean
+`just install` with no flag installs nothing and never downloads a Python. It
+runs in the checkout's own dev environment, so `uv run` may sync that first. It
+exits 1 when `--apply` would refuse, unless the only reason is a Claude Code
+session. `--apply` installs only from the main worktree, on a clean
 `main` in sync with `origin/main` (it fetches first), and not from inside a
 Claude Code session. A branch or an uncommitted edit is code nobody reviewed,
 and uv records the source path in its receipt, so a linked worktree's path would

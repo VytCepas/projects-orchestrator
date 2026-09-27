@@ -319,6 +319,13 @@ def test_just_install_runs_uv_without_python_downloads(box: Box) -> None:
     assert "--no-python-downloads" in runs[0]
 
 
+def test_just_install_runs_the_script_in_the_project_venv(box: Box) -> None:
+    # `--no-project` sets no Python floor, so uv may pick an interpreter with no tomllib.
+    subprocess.run(["just", "install"], cwd=box.repo, env=box.env, capture_output=True, check=False)
+    runs = [line.split() for line in box.log.read_text().splitlines() if line.startswith("run ")]
+    assert "--no-project" not in runs[0]
+
+
 def test_just_install_passes_the_script_exit_code_through(box: Box) -> None:
     done = subprocess.run(
         ["just", "install", "--bogus"], cwd=box.repo, env=box.env, capture_output=True, check=False
@@ -597,7 +604,7 @@ def test_install_check_reports_a_dependency_only_heads_pyproject_has(box: Box) -
     _install_faithfully(box)
     _change_pyproject(box, '["pyyaml>=6.0"]', '["pyyaml>=6.0", "rich>=13"]')
     assert _items(_script(box, "--check").stderr) == [
-        "metadata: Requires-Dist rich[]>=13; ; extra= is in pyproject, not installed"
+        "metadata: dependency rich>=13 is in pyproject, not installed"
     ]
 
 
@@ -605,9 +612,9 @@ def test_install_check_reports_a_console_script_head_changed(box: Box) -> None:
     _install_faithfully(box)
     _change_pyproject(box, '"projects_orchestrator.cli:main"', '"projects_orchestrator.cli:run"')
     assert _items(_script(box, "--check").stderr) == [
-        "metadata: entry point [console_scripts] projects-orchestrator ="
+        "metadata: console script projects-orchestrator ="
         " projects_orchestrator.cli:run is in pyproject, not installed",
-        "metadata: entry point [console_scripts] projects-orchestrator ="
+        "metadata: console script projects-orchestrator ="
         " projects_orchestrator.cli:main is installed, not in pyproject",
     ]
 
@@ -616,8 +623,7 @@ def test_install_check_reports_a_version_only_heads_pyproject_bumped(box: Box) -
     _install_faithfully(box)
     _change_pyproject(box, 'version = "0.0.0"', 'version = "0.0.1"')
     assert _items(_script(box, "--check").stderr) == [
-        "metadata: Version 0.0.1 is in pyproject, not installed",
-        "metadata: Version 0.0.0 is installed, not in pyproject",
+        "metadata: Version installed 0.0.0, pyproject says 0.0.1",
     ]
 
 
@@ -642,8 +648,7 @@ def test_install_check_reports_a_dynamic_version_head_bumped(box: Box) -> None:
     (box.repo / "src" / _PKG / "__init__.py").write_text('__version__ = "0.0.1"\n')
     _commit(box.repo, "bump")
     assert _items(_script(box, "--check").stderr) == [
-        "metadata: Version 0.0.1 is in pyproject, not installed",
-        "metadata: Version 0.0.0 is installed, not in pyproject",
+        "metadata: Version installed 0.0.0, pyproject says 0.0.1",
         f"modified: {_PKG}/__init__.py (tree: src/{_PKG}/__init__.py)",
     ]
 

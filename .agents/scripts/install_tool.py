@@ -3,8 +3,8 @@
 
 ``just install`` is a dry run. It prints the source, commit, target and command,
 and writes nothing. It exits 1 when ``--apply`` would refuse, unless the only
-reason is a Claude Code session. ``just install --apply`` runs ``uv tool install --reinstall
-<repo>``, and only from a clean ``main`` in sync with ``origin/main``.
+reason is a Claude Code session. ``just install --apply`` runs ``uv tool install
+--reinstall <repo>``, and only from a clean ``main`` in sync with ``origin/main``.
 ``just install --check`` compares the installed package files with HEAD and
 exits 1 on drift, naming each file.
 
@@ -243,82 +243,93 @@ def _dynamic_version(project_toml: dict[str, Any], commit: str) -> str:
     return match.group("version") if match else f"(no version in {source})"
 
 
-def _expected_metadata(project_toml: dict[str, Any], commit: str) -> dict[str, set[str]]:
+# A side of the metadata diff: single fields as (normalised, original), and the
+# rest as normalised key -> the original text a drift line prints.
+_Side = tuple[dict[str, tuple[str, str]], dict[str, str]]
+_EP_KIND = {"console_scripts": "console script", "gui_scripts": "gui script"}
+
+
+def _entry_point(group: str, name: str, value: str) -> tuple[str, str]:
+    kind = _EP_KIND.get(group, f"entry point [{group}]")
+    return (
+        f"[{group}] {name.strip()} = {''.join(value.split())}",
+        f"{kind} {name.strip()} = {value.strip()}",
+    )
+
+
+def _pyproject_side(project_toml: dict[str, Any], commit: str) -> _Side:
     project = project_toml.get("project", {})
-    extras = project.get("optional-dependencies", {})
-    reqs = {_req_key(r) for r in project.get("dependencies", [])}
-    for extra, deps in extras.items():
-        reqs |= {_req_key(r, _norm(extra)) for r in deps}
     if "version" in project.get("dynamic", []):
         version = _dynamic_version(project_toml, commit)
     else:
         version = str(project.get("version", ""))
-    python = project.get("requires-python")
-    return {
-        "Name": {_norm(project.get("name", ""))},
-        "Version": {version},
-        "Requires-Python": {_specs(python)} if python else set(),
-        "Provides-Extra": {_norm(e) for e in extras},
-        "Requires-Dist": reqs,
+    name, python = project.get("name", ""), project.get("requires-python", "")
+    singles = {
+        "Name": (_norm(name), name),
+        "Version": (version, version),
+        "Requires-Python": (_specs(python), python),
     }
-
-
-def _entry_points(project_toml: dict[str, Any]) -> set[str]:
-    project = project_toml.get("project", {})
+    rest = {_req_key(r): f"dependency {r}" for r in project.get("dependencies", [])}
+    for extra, deps in project.get("optional-dependencies", {}).items():
+        rest[f"extra {_norm(extra)}"] = f"extra {extra}"
+        rest |= {_req_key(r, _norm(extra)): f"dependency {r} (extra {extra})" for r in deps}
     groups = {"console_scripts": project.get("scripts", {})}
     groups["gui_scripts"] = project.get("gui-scripts", {})
     groups.update(project.get("entry-points", {}))
-    return {
-        f"[{group}] {name} = {''.join(str(value).split())}"
-        for group, points in groups.items()
-        for name, value in points.items()
+    for group, points in groups.items():
+        rest |= dict(_entry_point(group, n, str(v)) for n, v in points.items())
+    return singles, rest
+
+
+def _installed_side(dist: Path) -> _Side:
+    meta = Parser().parsestr((dist / "METADATA").read_text(encoding="utf-8"))
+    name, version = meta.get("Name", ""), meta.get("Version", "")
+    python = meta.get("Requires-Python", "")
+    singles = {
+        "Name": (_norm(name), name),
+        "Version": (version, version),
+        "Requires-Python": (_specs(python), python),
     }
-
-
-def _installed_entry_points(text: str) -> set[str]:
-    found: set[str] = set()
+    rest = {_installed_req_key(v): f"dependency {v}" for v in meta.get_all("Requires-Dist", [])}
+    rest |= {f"extra {_norm(e)}": f"extra {e}" for e in meta.get_all("Provides-Extra", [])}
+    points = dist / "entry_points.txt"
     group = ""
-    for raw in text.splitlines():
+    for raw in (points.read_text(encoding="utf-8") if points.is_file() else "").splitlines():
         line = raw.strip()
         if line.startswith("[") and line.endswith("]"):
             group = line[1:-1].strip()
         elif group and "=" in line and not line.startswith(("#", ";")):
-            name, value = line.split("=", 1)
-            found.add(f"[{group}] {name.strip()} = {''.join(value.split())}")
-    return found
+            rest |= dict([_entry_point(group, *line.split("=", 1))])
+    return singles, rest
 
 
 def metadata_problems(site: Path, project_toml: dict[str, Any], commit: str) -> list[str]:
-    """Diff the installed dist-info (version, requirements, entry points) against pyproject."""
+    """Diff the installed dist-info (version, requirements, entry points) against pyproject.
+
+    Compared normalised, as the build backend rewrites names, quotes and specifier
+    order; reported in the original spelling, one line per difference.
+    """
     name = re.sub(r"[-_.]+", "_", project_toml.get("project", {}).get("name", "")).lower()
     dists = sorted(site.glob(f"{name}-*.dist-info"))
     if len(dists) != 1:
         return [f"metadata: expected one {name}-*.dist-info in {site}, found {len(dists)}"]
-    meta = Parser().parsestr((dists[0] / "METADATA").read_text(encoding="utf-8"))
-    installed = {
-        "Name": {_norm(v) for v in meta.get_all("Name", [])},
-        "Version": set(meta.get_all("Version", [])),
-        "Requires-Python": {_specs(v) for v in meta.get_all("Requires-Python", [])},
-        "Provides-Extra": {_norm(v) for v in meta.get_all("Provides-Extra", [])},
-        "Requires-Dist": {_installed_req_key(v) for v in meta.get_all("Requires-Dist", [])},
-    }
-    points = dists[0] / "entry_points.txt"
-    have = {
-        **installed,
-        "entry point": _installed_entry_points(
-            points.read_text(encoding="utf-8") if points.is_file() else ""
-        ),
-    }
-    want = {**_expected_metadata(project_toml, commit), "entry point": _entry_points(project_toml)}
+    (want_one, want), (have_one, have) = (
+        _pyproject_side(project_toml, commit),
+        _installed_side(dists[0]),
+    )
     problems = [
-        f"metadata: {k} {v} is in pyproject, not installed"
-        for k in want
-        for v in sorted(want[k] - have[k])
+        f"metadata: {field} installed {have_one[field][1] or '(none)'}, "
+        f"pyproject says {want_one[field][1] or '(none)'}"
+        for field in want_one
+        if want_one[field][0] != have_one[field][0]
     ]
     problems += [
-        f"metadata: {k} {v} is installed, not in pyproject"
-        for k in want
-        for v in sorted(have[k] - want[k])
+        f"metadata: {want[k]} is in pyproject, not installed"
+        for k in sorted(want.keys() - have.keys())
+    ]
+    problems += [
+        f"metadata: {have[k]} is installed, not in pyproject"
+        for k in sorted(have.keys() - want.keys())
     ]
     return problems
 
