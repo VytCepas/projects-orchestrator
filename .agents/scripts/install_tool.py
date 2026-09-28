@@ -53,10 +53,24 @@ _REQ = re.compile(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[([^\]]*)\])?([^;]*)(?
 _EXTRA = re.compile(r"^(?:\((.*)\)and)?extra=='([^']*)'$")
 _FILE_MODES = ("100644", "100755")  # git's regular files; a symlink or submodule has no exec bit
 _HATCH_VERSION = re.compile(r"(?im)^(__version__|VERSION) *= *(['\"])v?(?P<version>.+?)\2")
+# `git ls-files -v` tags a plain entry H, skip-worktree S, and assume-unchanged in lower case.
+_HIDDEN = {"S": "skip-worktree", "h": "assume-unchanged", "s": "skip-worktree, assume-unchanged"}
 
 
 class RefusedError(Exception):
     """A precondition failed. The message says which one, and how to fix it."""
+
+
+class UnreadableError(Exception):
+    """An installed dist-info file is missing or unreadable. The message names it and why."""
+
+
+def _dist_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        why = "not UTF-8" if isinstance(exc, UnicodeDecodeError) else exc.strerror or repr(exc)
+        raise UnreadableError(f"{path.parent.name}/{path.name} cannot be read ({why})") from exc
 
 
 def _run(argv: list[str], env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -207,7 +221,12 @@ def record_tops(dists: list[Path]) -> tuple[set[str], list[str]]:
         if not record.is_file():
             problems.append(f"record: {dist.name} has no RECORD, so what it installed is unknown")
             continue
-        for row in csv.reader(io.StringIO(record.read_text(encoding="utf-8"))):
+        try:
+            text = _dist_text(record)
+        except UnreadableError as exc:
+            problems.append(f"record: {exc}, so what it installed is unknown")
+            continue
+        for row in csv.reader(io.StringIO(text)):
             path = PurePosixPath(row[0]) if row else None
             if path is None or path.is_absolute() or not path.parts:
                 continue
@@ -350,7 +369,7 @@ def _pyproject_side(project_toml: dict[str, Any], commit: str) -> _Side:
 
 
 def _installed_side(dist: Path) -> _Side:
-    meta = Parser().parsestr((dist / "METADATA").read_text(encoding="utf-8"))
+    meta = Parser().parsestr(_dist_text(dist / "METADATA"))
     name, version = meta.get("Name", ""), meta.get("Version", "")
     python = meta.get("Requires-Python", "")
     singles = {
@@ -362,7 +381,7 @@ def _installed_side(dist: Path) -> _Side:
     rest |= {f"extra {_norm(e)}": f"extra {e}" for e in meta.get_all("Provides-Extra", [])}
     points = dist / "entry_points.txt"
     group = ""
-    for raw in (points.read_text(encoding="utf-8") if points.is_file() else "").splitlines():
+    for raw in (_dist_text(points) if points.exists() else "").splitlines():
         line = raw.strip()
         if line.startswith("[") and line.endswith("]"):
             group = line[1:-1].strip()
@@ -381,10 +400,11 @@ def metadata_problems(site: Path, project_toml: dict[str, Any], commit: str) -> 
     dists = _dists(site, project_toml)
     if len(dists) != 1:
         return [f"metadata: expected one {name}-*.dist-info in {site}, found {len(dists)}"]
-    (want_one, want), (have_one, have) = (
-        _pyproject_side(project_toml, commit),
-        _installed_side(dists[0]),
-    )
+    want_one, want = _pyproject_side(project_toml, commit)
+    try:
+        have_one, have = _installed_side(dists[0])
+    except UnreadableError as exc:
+        return [f"metadata: {exc}, so the installed metadata is not compared"]
     problems = [
         f"metadata: {field} installed {have_one[field][1] or '(none)'}, "
         f"pyproject says {want_one[field][1] or '(none)'}"
@@ -449,6 +469,16 @@ def apply_problems(*, fetch: bool) -> list[str]:
     if dirty:
         shown = "\n      ".join(dirty[:10] + (["..."] if len(dirty) > 10 else []))
         problems.append(f"uncommitted changes would be installed unreviewed:\n      {shown}")
+    # status skips a skip-worktree or assume-unchanged file; uv builds it (project-init#1047).
+    entries = _git("ls-files", "-v", "-z", strip=False).split("\0")
+    hidden = [f"{_HIDDEN.get(e[0], e[0])}: {e[2:]}" for e in entries if e and e[0] != "H"]
+    if hidden:
+        shown = "\n      ".join(hidden[:10] + (["..."] if len(hidden) > 10 else []))
+        problems.append(
+            "files git status skips would be installed unreviewed. Clear each flag with "
+            "`git update-index --no-skip-worktree -- <file>` or "
+            f"`git update-index --no-assume-unchanged -- <file>`, one call per flag:\n      {shown}"
+        )
     if fetch:
         proc = _git_proc("fetch", "--quiet", "origin", _BASE)
         if proc.returncode != 0:

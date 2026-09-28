@@ -32,7 +32,9 @@ exits 1 when `--apply` would refuse, unless the only reason is a Claude Code
 session. `--apply` installs only from the main worktree, on a clean
 `main` in sync with `origin/main` (it fetches first), and not from inside a
 Claude Code session. A branch or an uncommitted edit is code nobody reviewed,
-and uv records the source path in its receipt, so a linked worktree's path would
+and so is an edit that a `skip-worktree` or `assume-unchanged` flag hides from
+`git status`: `--apply` names those files and the command that clears each
+flag. uv records the source path in its receipt, so a linked worktree's path would
 outlive its branch. After installing, `--apply` runs the check below and fails if
 the build does not match `HEAD`.
 
@@ -67,7 +69,9 @@ This compares the installed package files, and their executable bits, with the
 checkout's `HEAD` and exits 1 on drift, naming each file: `modified`, `missing`,
 `mode`, or `not in tree`. It reads the files `HEAD` maps into the wheel and every
 file the installed build's `RECORD` lists, so one that a dropped mapping left
-behind is drift too, as is an install with no `RECORD`. It also fails when:
+behind is drift too, as is an install with no `RECORD`. A dist-info file that is
+missing or unreadable is one drift line, and the other comparisons still run.
+It also fails when:
 
 - uv's receipt names another checkout, or its entrypoint link is broken;
 - the `projects-orchestrator` your `PATH` selects is not the one in the tool's

@@ -435,6 +435,28 @@ def _in_a_session(box: Box) -> None:
     box.env["CLAUDECODE"] = "1"
 
 
+# ls-files -v label -> the update-index flags that set it. Set one call per flag:
+# update-index applies only one of the two when both are given in one call.
+_HIDING = {
+    "skip-worktree": ("--skip-worktree",),
+    "assume-unchanged": ("--assume-unchanged",),
+    "skip-worktree, assume-unchanged": ("--skip-worktree", "--assume-unchanged"),
+}
+_HIDDEN_REFUSAL = (
+    "files git status skips would be installed unreviewed. Clear each flag with "
+    "`git update-index --no-skip-worktree -- <file>` or "
+    "`git update-index --no-assume-unchanged -- <file>`, one call per flag:"
+)
+
+
+def _hide(box: Box, label: str) -> None:
+    """Edit a packaged file that git status no longer checks (project-init#1047 review)."""
+    for flag in _HIDING[label]:
+        _git(box.repo, "update-index", flag, f"src/{_PKG}/cli.py")
+    (box.repo / "src" / _PKG / "cli.py").write_text("def main() -> int:\n    return 1\n")
+    assert _git(box.repo, "status", "--porcelain", "--untracked-files=all") == ""
+
+
 _REFUSALS = {
     "branch": (_on_a_branch, "on 'feat/x', not main"),
     "detached": (_detached, "on 'detached HEAD', not main"),
@@ -448,6 +470,13 @@ _REFUSALS = {
     "behind": (_behind, "not in sync with origin/main (ahead 0, behind 1)"),
     "no-origin": (_no_origin, "cannot fetch origin/main"),
     "session": (_in_a_session, "inside a Claude Code session"),
+    **{
+        label: (
+            lambda box, label=label: _hide(box, label),
+            f"{_HIDDEN_REFUSAL}\n      {label}: src/{_PKG}/cli.py",
+        )
+        for label in _HIDING
+    },
 }
 
 
@@ -475,6 +504,30 @@ def test_install_apply_refusal_names_the_reason(box: Box, scenario: str) -> None
     setup, reason = _REFUSALS[scenario]
     setup(box)
     assert f"    - {reason}" in _refusal_text(_script(box, "--apply").stderr)
+
+
+@pytest.mark.parametrize("label", sorted(_HIDING))
+def test_install_dry_run_exits_1_on_an_edit_git_status_skips(box: Box, label: str) -> None:
+    _hide(box, label)
+    assert _script(box).returncode == 1
+
+
+@pytest.mark.parametrize("label", sorted(_HIDING))
+def test_install_dry_run_lists_an_edit_git_status_skips(box: Box, label: str) -> None:
+    _hide(box, label)
+    shown = f"    - {_HIDDEN_REFUSAL}\n      {label}: src/{_PKG}/cli.py\n"
+    assert shown in _script(box).stdout
+
+
+@pytest.mark.parametrize("label", sorted(_HIDING))
+def test_install_apply_names_the_commands_that_clear_the_flags(box: Box, label: str) -> None:
+    # Run as the refusal says, one call per flag; status then sees the edit.
+    _hide(box, label)
+    for flag in _HIDING[label]:
+        _git(box.repo, "update-index", f"--no-{flag[2:]}", "--", f"src/{_PKG}/cli.py")
+    assert _items(_script(box, "--apply").stderr) == [
+        "uncommitted changes would be installed unreviewed:"
+    ]
 
 
 def _linked_worktree(box: Box) -> Path:
@@ -690,6 +743,42 @@ def test_install_check_names_an_install_without_a_record(box: Box) -> None:
     (box.site.parent / f"{_PKG}-0.0.0.dist-info" / "RECORD").unlink()
     assert _items(_script(box, "--check").stderr) == [
         f"record: {_PKG}-0.0.0.dist-info has no RECORD, so what it installed is unknown"
+    ]
+
+
+_DIST = f"{_PKG}-0.0.0.dist-info"
+_UNCOMPARED = ", so the installed metadata is not compared"
+
+
+@pytest.mark.parametrize(
+    ("name", "damage", "line"),
+    [
+        ("METADATA", None, f"{_DIST}/METADATA cannot be read (No such file or directory)"),
+        ("METADATA", b"\xff\xfe", f"{_DIST}/METADATA cannot be read (not UTF-8)"),
+        ("entry_points.txt", b"\xff", f"{_DIST}/entry_points.txt cannot be read (not UTF-8)"),
+        ("RECORD", b"\xff", f"{_DIST}/RECORD cannot be read (not UTF-8)"),
+    ],
+    ids=["no-metadata", "binary-metadata", "binary-entry-points", "binary-record"],
+)
+def test_install_check_reports_an_unreadable_dist_info_file_and_carries_on(
+    box: Box, name: str, damage: bytes | None, line: str
+) -> None:
+    # One drift line, never a traceback, and the file comparison still runs (#318 review).
+    _install_faithfully(box)
+    path = box.site.parent / _DIST / name
+    if damage is None:
+        path.unlink()
+    else:
+        path.write_bytes(damage)
+    (box.site / "cli.py").write_text("# edited in place\n")
+    first = (
+        f"record: {line}, so what it installed is unknown"
+        if name == "RECORD"
+        else f"metadata: {line}{_UNCOMPARED}"
+    )
+    assert _items(_script(box, "--check").stderr) == [
+        first,
+        f"modified: {_PKG}/cli.py (tree: src/{_PKG}/cli.py)",
     ]
 
 
