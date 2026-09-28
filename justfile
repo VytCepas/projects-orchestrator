@@ -153,7 +153,10 @@ contract-freshness:
 # default: it prints the plan and the gates and installs nothing. --apply runs
 # `uv tool install --reinstall` only from a clean main in sync with origin/main;
 # --check diffs the installed build against HEAD and exits 1 on drift.
+# --no-project: the script is stdlib only, and a project run syncs .venv first
+# (creates it, installs, reaches the index), so the dry run would not be read-only.
+# --python keeps the floor the project set: tomllib needs 3.11.
 [doc("install this tool from the checkout: dry run, --apply or --check (#317)")]
 [positional-arguments]
 install *args:
-    uv run --no-python-downloads python .agents/scripts/install_tool.py "$@"
+    uv run --no-python-downloads --no-project --python '>=3.11' python .agents/scripts/install_tool.py "$@"

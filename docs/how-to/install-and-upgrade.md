@@ -26,8 +26,8 @@ just install --apply    # uv tool install --reinstall <this checkout>, then --ch
 projects-orchestrator --version
 ```
 
-`just install` with no flag installs nothing and never downloads a Python. It
-runs in the checkout's own dev environment, so `uv run` may sync that first. It
+`just install` with no flag writes nothing and needs no network: it never
+downloads a Python and never syncs the checkout's dev environment. It
 exits 1 when `--apply` would refuse, unless the only reason is a Claude Code
 session. `--apply` installs only from the main worktree, on a clean
 `main` in sync with `origin/main` (it fetches first), and not from inside a

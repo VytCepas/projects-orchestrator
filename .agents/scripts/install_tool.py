@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import filecmp
+import io
 import json
 import os
 import re
@@ -32,6 +33,7 @@ import shutil
 import subprocess
 import sys
 import sysconfig
+import tarfile
 import tomllib
 from email.parser import Parser
 from pathlib import Path
@@ -103,6 +105,26 @@ def blob_ids(paths: list[Path]) -> list[str]:
     if proc.returncode != 0 or len(ids) != len(paths):
         raise RefusedError(f"git hash-object failed: {proc.stderr.strip()}")
     return ids
+
+
+def checkout_bytes(commit: str, pathspecs: list[str]) -> dict[str, bytes]:
+    """Map each file under *pathspecs* to the bytes a checkout of *commit* writes.
+
+    ``git archive`` applies checkout's eol conversion and filters, so a text file
+    that ``core.autocrlf`` made CRLF on disk, and so in the wheel, matches its LF
+    blob here, while a CRLF copy of an ``eol=lf`` file still does not.
+    """
+    argv = ["git", "-C", str(_REPO_ROOT), "archive", "--format=tar", commit, "--", *pathspecs]
+    proc = subprocess.run(argv, capture_output=True, check=False)  # noqa: S603 — fixed argv
+    if proc.returncode != 0:
+        raise RefusedError(f"git archive failed: {proc.stderr.decode(errors='replace').strip()}")
+    files: dict[str, bytes] = {}
+    with tarfile.open(fileobj=io.BytesIO(proc.stdout)) as tar:
+        for member in tar:
+            data = tar.extractfile(member) if member.isfile() else None
+            if data is not None:
+                files[member.name] = data.read()
+    return files
 
 
 def wheel_layout(project_toml: dict[str, Any]) -> list[tuple[str, str]]:
@@ -345,10 +367,14 @@ def check(env: Path) -> tuple[list[str], int]:
     installed = installed_files(site, {p.split("/", 1)[0] for p in expected})
     drift = receipt_problems(env, scripts) + path_problems(scripts)
     drift += metadata_problems(site, project_toml, head)
-    for dest, (sha, src) in sorted(expected.items()):
+    # Not the blob is not yet modified: a CRLF checkout (core.autocrlf) builds CRLF files.
+    suspect = {dest for dest, (sha, _) in expected.items() if installed.get(dest, sha) != sha}
+    layout = [src for src, _ in wheel_layout(project_toml)]
+    checkout = checkout_bytes(head, layout) if suspect else {}
+    for dest, (_, src) in sorted(expected.items()):
         if dest not in installed:
             drift.append(f"missing: {dest} (tree: {src})")
-        elif installed[dest] != sha:
+        elif dest in suspect and checkout.get(src) != (site / dest).read_bytes():
             drift.append(f"modified: {dest} (tree: {src})")
     drift += [f"not in tree: {dest}" for dest in sorted(set(installed) - set(expected))]
     return drift, len(expected)

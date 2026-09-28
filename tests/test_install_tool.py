@@ -22,6 +22,7 @@ _REPO = Path(__file__).resolve().parents[1]
 _SCRIPT = _REPO / ".agents" / "scripts" / "install_tool.py"
 _PKG = "projects_orchestrator"
 _TOOL = "projects-orchestrator"
+_REAL_UV = shutil.which("uv")  # read before any test puts the fake first on PATH
 
 # argv logged per call. `run` drops uv's own flags and runs the script; `python
 # find <env>` names the env's interpreter the way uv does; `tool
@@ -319,11 +320,63 @@ def test_just_install_runs_uv_without_python_downloads(box: Box) -> None:
     assert "--no-python-downloads" in runs[0]
 
 
-def test_just_install_runs_the_script_in_the_project_venv(box: Box) -> None:
-    # `--no-project` sets no Python floor, so uv may pick an interpreter with no tomllib.
+def test_just_install_asks_uv_for_a_python_with_tomllib(box: Box) -> None:
+    # `--no-project` sets no Python floor, so the recipe states the script's own.
     subprocess.run(["just", "install"], cwd=box.repo, env=box.env, capture_output=True, check=False)
     runs = [line.split() for line in box.log.read_text().splitlines() if line.startswith("run ")]
-    assert "--no-project" not in runs[0]
+    assert runs[0][runs[0].index("--python") + 1] == ">=3.11"
+
+
+def _offline_real_uv(box: Box, tmp_path: Path) -> None:
+    """The real uv first on PATH, offline, with an empty cache: a sync can only fail."""
+    assert _REAL_UV
+    dirs = [str(Path(_REAL_UV).parent), str(Path(sys.executable).parent), box.env["PATH"]]
+    box.env |= {
+        "PATH": os.pathsep.join(dirs),
+        "UV_OFFLINE": "1",
+        "UV_CACHE_DIR": str(tmp_path / "empty-uv-cache"),
+    }
+
+
+_NEEDS_JUST_AND_UV = pytest.mark.skipif(
+    shutil.which("just") is None or _REAL_UV is None, reason="just or uv missing"
+)
+_READ_ONLY_MODES = pytest.mark.parametrize(
+    ("args", "ran"),
+    [((), "DRY RUN, nothing written"), (("--check",), "not installed:")],
+    ids=["dry-run", "check"],
+)
+
+
+def _just_install(box: Box, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["just", "install", *args],
+        cwd=box.repo,
+        env=box.env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+
+
+@_NEEDS_JUST_AND_UV
+@pytest.mark.parametrize("args", [(), ("--check",)], ids=["dry-run", "check"])
+def test_just_install_creates_no_venv(box: Box, tmp_path: Path, args: tuple[str, ...]) -> None:
+    # A project `uv run` syncs first: it creates .venv and installs into it.
+    _offline_real_uv(box, tmp_path)
+    _just_install(box, *args)
+    assert not (box.repo / ".venv").exists()
+
+
+@_NEEDS_JUST_AND_UV
+@_READ_ONLY_MODES
+def test_just_install_runs_offline_from_a_fresh_checkout(
+    box: Box, tmp_path: Path, args: tuple[str, ...], ran: str
+) -> None:
+    _offline_real_uv(box, tmp_path)
+    done = _just_install(box, *args)
+    assert ran in done.stdout + done.stderr
 
 
 def test_just_install_passes_the_script_exit_code_through(box: Box) -> None:
@@ -530,6 +583,54 @@ def test_install_check_names_a_modified_installed_file_in_a_sha256_repository(
     _install_faithfully(sha256_box)
     (sha256_box.site / "cli.py").write_text("# edited in place\n")
     assert _items(_script(sha256_box, "--check").stderr) == [
+        f"modified: {_PKG}/cli.py (tree: src/{_PKG}/cli.py)"
+    ]
+
+
+def _autocrlf_checkout(box: Box) -> None:
+    """Git for Windows' defaults: `* text=auto` committed, core.autocrlf=true, a fresh checkout.
+
+    The wheel copies the working tree, so it is CRLF while the committed blobs are LF.
+    """
+    (box.repo / ".gitattributes").write_text("* text=auto\n*.sh text eol=lf\n")
+    (box.repo / "src" / _PKG / "hook.sh").write_text("#!/bin/sh\necho hi\n")
+    _commit(box.repo, "text=auto")
+    _git(box.repo, "push", "-q", "origin", "main")
+    _git(box.repo, "config", "core.autocrlf", "true")
+    for rel in _git(box.repo, "ls-files").splitlines():
+        (box.repo / rel).unlink()
+    _git(box.repo, "checkout", "--", ".")
+    assert b"\r\n" in (box.repo / "src" / _PKG / "cli.py").read_bytes()
+    assert b"\r\n" not in (box.repo / "src" / _PKG / "hook.sh").read_bytes()
+
+
+def test_install_check_passes_an_install_built_from_a_crlf_checkout(box: Box) -> None:
+    _autocrlf_checkout(box)
+    _install_faithfully(box)
+    assert _items(_script(box, "--check").stderr) == []
+
+
+def test_install_apply_verifies_an_install_from_a_crlf_checkout(box: Box) -> None:
+    _autocrlf_checkout(box)
+    assert _script(box, "--apply").returncode == 0
+
+
+def test_install_check_still_names_crlf_in_an_eol_lf_file_under_autocrlf(box: Box) -> None:
+    # A checkout writes `*.sh text eol=lf` as LF even here, so CRLF is not its form.
+    _autocrlf_checkout(box)
+    _install_faithfully(box)
+    hook = box.site / "hook.sh"
+    hook.write_bytes(hook.read_bytes().replace(b"\n", b"\r\n"))
+    assert _items(_script(box, "--check").stderr) == [
+        f"modified: {_PKG}/hook.sh (tree: src/{_PKG}/hook.sh)"
+    ]
+
+
+def test_install_check_still_names_an_edit_under_autocrlf(box: Box) -> None:
+    _autocrlf_checkout(box)
+    _install_faithfully(box)
+    (box.site / "cli.py").write_bytes(b"def main() -> int:\r\n    return 1\r\n")
+    assert _items(_script(box, "--check").stderr) == [
         f"modified: {_PKG}/cli.py (tree: src/{_PKG}/cli.py)"
     ]
 
