@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from projects_orchestrator import testfleet
 from projects_orchestrator.__main__ import main
 from projects_orchestrator.testfleet import parse_summary
 from tests.conftest import make_project
@@ -101,6 +102,77 @@ def test_a_repo_without_a_test_recipe_is_skipped_not_failed(
     rows = _rows(out)
     assert rows["delta"] == ["-", "-", "-", "skip"], out
     assert rows["eps"] == ["-", "-", "-", "skip"], out
+
+
+def test_a_just_that_cannot_list_the_recipes_is_red_not_skipped(
+    fleet_dir: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PR #320 review: `just` absent (127) must not read as "no test recipe"."""
+    _repo(fleet_dir, "alpha", "echo alpha: 3 passed, 0 failed")
+    empty = tmp_path / "empty-bin"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+    rc, out = _run(fleet_dir, capsys=capsys)
+    assert rc == 1, out
+    assert _rows(out)["alpha"] == ["?", "?", "-", "fail"], out
+    assert "just --summary" in out and "127" in out, out
+
+
+def test_a_malformed_justfile_is_red_not_skipped(
+    fleet_dir: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """PR #320 review: a justfile `just` cannot parse declares a gate it cannot run."""
+    (_repo(fleet_dir, "broken", None) / "justfile").write_text(
+        "test\n    @echo x\n", encoding="utf-8"
+    )
+    rc, out = _run(fleet_dir, capsys=capsys)
+    assert rc == 1, out
+    assert _rows(out)["broken"] == ["?", "?", "-", "fail"], out
+
+
+def test_a_hung_recipe_listing_is_red_not_skipped(
+    fleet_dir: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PR #320 review: a `just --summary` that times out is a failure too."""
+    _repo(fleet_dir, "alpha", "echo alpha: 3 passed, 0 failed")
+    bin_dir = tmp_path / "hang-bin"
+    bin_dir.mkdir()
+    hang = bin_dir / "just"
+    hang.write_text("#!/bin/sh\nexec sleep 30\n", encoding="utf-8")
+    hang.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setattr(testfleet, "_RECIPE_TIMEOUT", 1.0)
+    rc, out = _run(fleet_dir, capsys=capsys)
+    assert rc == 1, out
+    assert _rows(out)["alpha"] == ["?", "?", "-", "fail"], out
+    assert "timed out" in out, out
+
+
+def test_the_last_summary_line_across_both_streams_is_the_count(
+    fleet_dir: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """PR #320 review: the last line printed decides, whichever stream carried it."""
+    _repo(
+        fleet_dir,
+        "late-err",
+        "echo part: 1 passed, 0 failed; echo late-err: 1 passed, 2 failed >&2",
+    )
+    _repo(
+        fleet_dir,
+        "late-out",
+        "echo part: 9 passed, 9 failed >&2; echo late-out: 3 passed, 0 failed",
+    )
+    rc, out = _run(fleet_dir, capsys=capsys)
+    assert rc == 1, out
+    rows = _rows(out)
+    assert rows["late-err"] == ["1", "2", "0", "fail"], out
+    assert rows["late-out"] == ["3", "0", "0", "pass"], out
 
 
 def test_the_last_summary_line_is_the_count(

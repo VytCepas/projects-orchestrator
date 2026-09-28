@@ -3,10 +3,13 @@
 Scaffolded by project-init (PI-1044) and refreshed by ``project-init upgrade``; put
 your own fixtures in ``tests/conftest.py``, which pytest loads beside this one.
 
-Rule 1: every test runs with HOME, the XDG dirs, CLAUDE_CONFIG_DIR and TMPDIR
-inside a throwaway directory of its own, so no test reads or writes the real
-home and a verdict never depends on who ran it. Toolchain caches (uv, cargo,
-rustup, go, bun) keep their real locations: they hold content, not
+Rule 1: no test reads or writes the real home, so a verdict never depends on who
+ran it. HOME (with Windows' USERPROFILE, HOMEDRIVE and HOMEPATH), the XDG dirs
+and CLAUDE_CONFIG_DIR move to a throwaway directory when pytest imports this
+file: before it collects a test module or runs a fixture of any scope. Every test
+then gets a directory of its own, TMPDIR included; TMPDIR moves per test only,
+because pytest keeps its own temporary directories under it. Toolchain caches
+(uv, cargo, rustup, go, bun) keep their real locations: they hold content, not
 configuration, and a cold cache would turn every ``uv run`` into a download.
 
 Rule 3: every run ends with ``<project>: N passed, M failed`` (an error counts
@@ -16,8 +19,10 @@ exit code is unchanged: 0 all passed, 1 a test failed, 5 nothing collected.
 
 from __future__ import annotations
 
+import atexit
 import os
 import re
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -27,9 +32,6 @@ import pytest
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
-
-# Read once, at import: before any test has redirected HOME.
-_REAL_HOME = Path.home()
 
 
 def _toolchain_env(real_home: Path, env: Mapping[str, str]) -> dict[str, str]:
@@ -53,30 +55,66 @@ def _toolchain_env(real_home: Path, env: Mapping[str, str]) -> dict[str, str]:
     }
 
 
+def _home_env(root: Path) -> dict[str, Path]:
+    """The home and config variables, each pointed inside *root*."""
+    home = root / "home"
+    return {
+        "HOME": home,
+        # Windows: Path.home() reads USERPROFILE, then HOMEDRIVE + HOMEPATH, never HOME.
+        "USERPROFILE": home,
+        "XDG_CONFIG_HOME": home / ".config",
+        "XDG_DATA_HOME": home / ".local" / "share",
+        "XDG_CACHE_HOME": home / ".cache",
+        "XDG_STATE_HOME": home / ".local" / "state",
+        "CLAUDE_CONFIG_DIR": root / "claude-config",
+    }
+
+
+def _redirect(env: Mapping[str, Path], patch: pytest.MonkeyPatch) -> None:
+    """Create each directory in *env* and point its variable at it."""
+    for name, path in env.items():
+        path.mkdir(parents=True, exist_ok=True)
+        patch.setenv(name, str(path))
+    home = env["HOME"]
+    patch.setenv("HOMEDRIVE", home.drive)
+    patch.setenv("HOMEPATH", str(home)[len(home.drive) :])
+
+
+def _hermetic_session() -> tuple[pytest.MonkeyPatch, Path]:
+    """Move home for the whole run, reading the real one first for the toolchain caches."""
+    patch = pytest.MonkeyPatch()
+    root = Path(tempfile.mkdtemp(prefix="test-contract-"))
+    # pytest_unconfigure removes it; this covers a run that never configures (--version).
+    atexit.register(shutil.rmtree, root, ignore_errors=True)
+    for name, value in _toolchain_env(Path.home(), os.environ).items():
+        if name not in os.environ:
+            patch.setenv(name, value)
+    _redirect(_home_env(root), patch)
+    return patch, root
+
+
+# At import, not in pytest_configure: pytest imports tests/conftest.py before
+# configure, and test modules at collection. xdist workers inherit the moved home
+# and the real toolchain paths, then move to a home of their own.
+_SESSION_PATCH, _SESSION_ROOT = _hermetic_session()
+
+
+def pytest_unconfigure() -> None:
+    """Give the process its environment back and remove the run's home."""
+    _SESSION_PATCH.undo()
+    shutil.rmtree(_SESSION_ROOT, ignore_errors=True)
+
+
 @pytest.fixture(autouse=True)
 def _test_contract_hermetic_home(
     tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # A dir of its own, not tmp_path: a test that lists its tmp_path must not find these in it.
     root = tmp_path_factory.mktemp("hermetic")
-    for name, value in _toolchain_env(_REAL_HOME, os.environ).items():
-        if name not in os.environ:
-            monkeypatch.setenv(name, value)
-    home = root / "home"
-    redirected = {
-        "HOME": home,
-        "XDG_CONFIG_HOME": home / ".config",
-        "XDG_DATA_HOME": home / ".local" / "share",
-        "XDG_CACHE_HOME": home / ".cache",
-        "XDG_STATE_HOME": home / ".local" / "state",
-        "CLAUDE_CONFIG_DIR": root / "claude-config",
-        "TMPDIR": root / "tmp",
-    }
-    for name, path in redirected.items():
-        path.mkdir(parents=True, exist_ok=True)
-        monkeypatch.setenv(name, str(path))
+    env = {**_home_env(root), "TMPDIR": root / "tmp"}
+    _redirect(env, monkeypatch)
     # tempfile caches its dir on first use, so the variable alone would not move it.
-    monkeypatch.setattr(tempfile, "tempdir", str(redirected["TMPDIR"]))
+    monkeypatch.setattr(tempfile, "tempdir", str(env["TMPDIR"]))
 
 
 def _suite_name(config: pytest.Config) -> str:

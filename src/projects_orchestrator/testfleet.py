@@ -8,10 +8,13 @@ its total, never twice.
 
 A repo passes when its ``just test`` exits 0 and counts no failure. A non-zero
 exit, a counted failure under a zero exit, a timeout, or a runner that could not
-start is a failure. A repo with no ``test`` recipe is skipped, never failed: an
-ungoverned repo declares no gate, and inventing a red for it is the false
-positive that gets a check switched off. A missing summary line leaves the
-counts unknown (``?``) and lets the exit code decide.
+start is a failure. A repo with no justfile, or whose clean ``just --summary``
+lists no ``test`` recipe, is skipped, never failed: an ungoverned repo declares
+no gate, and inventing a red for it is the false positive that gets a check
+switched off. A justfile ``just --summary`` cannot list (``just`` missing, a
+parse error, a timeout) is a failure: no tests ran, and a skip would read green.
+A missing summary line leaves the counts unknown (``?``) and lets the exit code
+decide. The summary line is the last one printed on either stream.
 
 Registered as the check ``fleet-test``; every line it prints carries
 ``[check:fleet-test]``, so an alert resolves to its registry row.
@@ -22,6 +25,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 from projects_orchestrator.descriptor import ProjectDescriptor
 from projects_orchestrator.pool import map_ordered
@@ -80,14 +84,30 @@ def parse_summary(output: str) -> tuple[str, int, int] | None:
     return suite, int(passed), int(failed)
 
 
-def _has_test_recipe(descriptor: ProjectDescriptor, run: Runner) -> tuple[bool, str]:
-    """Whether the repo's justfile defines ``test``; the reason when it cannot say."""
+def _has_justfile(path: Path) -> bool:
+    """Whether *path* holds a justfile under a name ``just`` looks for."""
+    try:
+        return any(entry.name.lower() in {"justfile", ".justfile"} for entry in path.iterdir())
+    except OSError:
+        # expected: an unreadable dir is `just`'s to fail on, as a failure, never a skip
+        return True
+
+
+def _preflight(descriptor: ProjectDescriptor, run: Runner) -> tuple[str, str] | None:
+    """``(status, detail)`` when the repo's ``just test`` is not run; ``None`` to run it."""
+    if not _has_justfile(descriptor.path):
+        return SKIP, "no justfile"
     listed = run("just --summary", cwd=descriptor.path, timeout=_RECIPE_TIMEOUT)
+    if listed.timed_out:
+        return FAIL, f"`just --summary` timed out after {_RECIPE_TIMEOUT:.0f}s"
     if listed.error:
-        return False, listed.error
+        return FAIL, f"`just --summary` could not start: {listed.error}"
     if listed.returncode != 0:
-        return False, "no justfile"
-    return "test" in listed.stdout.split(), "no `test` recipe"
+        first_error = listed.stderr.strip().splitlines()[:1]
+        return FAIL, ": ".join([f"`just --summary` exited {listed.returncode}", *first_error])
+    if "test" not in listed.stdout.split():
+        return SKIP, "no `test` recipe"
+    return None
 
 
 def _verdict(
@@ -120,11 +140,14 @@ def run_repo(
     Returns:
         The repo's row.
     """
-    present, why = _has_test_recipe(descriptor, run)
-    if not present:
-        return FleetTestRow(descriptor.name, SKIP, None, None, None, why)
-    result = run("just test", cwd=descriptor.path, timeout=timeout)
-    summary = parse_summary(result.stdout) or parse_summary(result.stderr)
+    stopped = _preflight(descriptor, run)
+    if stopped is not None:
+        status, why = stopped
+        return FleetTestRow(descriptor.name, status, None, None, None, why)
+    # One stream, in the order it was written: the last summary line printed is the
+    # count, whichever stream carried it.
+    result = run("just test 2>&1", cwd=descriptor.path, timeout=timeout)
+    summary = parse_summary(result.stdout)
     status, detail = _verdict(result, summary, timeout)
     return FleetTestRow(
         repo=descriptor.name,
