@@ -63,14 +63,17 @@ build refuses to overwrite a newer build's file rather than discarding it (see
 just install --check
 ```
 
-This compares the installed package files with the checkout's `HEAD` and exits 1
-on drift, naming each file: `modified`, `missing`, or `not in tree`. It also
-fails when:
+This compares the installed package files, and their executable bits, with the
+checkout's `HEAD` and exits 1 on drift, naming each file: `modified`, `missing`,
+`mode`, or `not in tree`. It reads the files `HEAD` maps into the wheel and every
+file the installed build's `RECORD` lists, so one that a dropped mapping left
+behind is drift too, as is an install with no `RECORD`. It also fails when:
 
 - uv's receipt names another checkout, or its entrypoint link is broken;
 - the `projects-orchestrator` your `PATH` selects is not the one in the tool's
-  environment, naming the one that shadows it. The project venv that `uv run`
-  puts first on `PATH` is ignored, since a shell does not run it;
+  environment, naming the one that shadows it. The venv directory that `uv run`
+  itself puts first on `PATH` is ignored, since a shell does not run it, but a
+  venv you had activated still counts;
 - the installed metadata differs from what `HEAD`'s `pyproject.toml` declares:
   the version, `Requires-Python`, the dependencies and the entry points. A change
   to `pyproject.toml` alone is drift too.

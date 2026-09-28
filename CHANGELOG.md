@@ -18,7 +18,7 @@ version's only source. `tests/test_version.py` fails when they disagree.
   only reason is a Claude Code session. `--apply` runs `uv tool install --reinstall` on the
   checkout, only from the main worktree on a clean `main` in sync with
   `origin/main`, then checks the result. `--check` compares the installed package
-  files with `HEAD` and exits 1 on drift, naming each file, so a pull without a
+  files and their executable bits with `HEAD` and exits 1 on drift, naming each file, so a pull without a
   reinstall is no longer invisible. It also fails on installed metadata that
   differs from `HEAD`'s `pyproject.toml`, and on a `projects-orchestrator` earlier
   on `PATH` that shadows the tool (#317).

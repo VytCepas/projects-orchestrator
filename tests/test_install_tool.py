@@ -27,8 +27,9 @@ _REAL_UV = shutil.which("uv")  # read before any test puts the fake first on PAT
 # argv logged per call. `run` drops uv's own flags and runs the script; `python
 # find <env>` names the env's interpreter the way uv does; `tool
 # install` builds a real venv (FAKE_UV_LAYOUT=windows: a Lib/ + Scripts/ one whose
-# interpreter reports those paths), copies the package, and writes the dist-info a
-# build of the fixture pyproject would. FAKE_UV_CORRUPT makes the copy differ.
+# interpreter reports those paths), copies the package with its modes, and writes
+# the dist-info a build of the fixture pyproject would, RECORD included.
+# FAKE_UV_CORRUPT makes the copy differ.
 _FAKE_UV = """#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_UV_LOG"
 if [ "$1" = run ]; then
@@ -68,6 +69,9 @@ EOF
     "Requires-Dist: textual>=0.86; extra == 'tui'" > "$dist/METADATA"
   printf '%s\\n' '[console_scripts]' 'projects-orchestrator = projects_orchestrator.cli:main' \\
     > "$dist/entry_points.txt"
+  # uv's RECORD: each installed file relative to site-packages, the script outside it.
+  (cd "$site" && find projects_orchestrator "${dist##*/}" -type f) | sed 's/$/,,/' > "$dist/RECORD"
+  printf '../../../bin/projects-orchestrator,,\\n' >> "$dist/RECORD"
   printf '#!/bin/sh\\n' > "$scripts/projects-orchestrator"; chmod +x "$scripts/projects-orchestrator"
   ln -sf "$scripts/projects-orchestrator" "$UV_TOOL_BIN_DIR/projects-orchestrator"
   printf '[tool]\\nrequirements = [{ name = "projects-orchestrator", directory = "%s" }]\\n' "$4" > "$env/uv-receipt.toml"
@@ -133,6 +137,8 @@ def _make_box(tmp_path: Path, object_format: str = "sha1") -> Box:
     (repo / "src" / _PKG).mkdir(parents=True)
     (repo / "src" / _PKG / "__init__.py").write_text('__version__ = "0.0.0"\n')
     (repo / "src" / _PKG / "cli.py").write_text("def main() -> int:\n    return 0\n")
+    (repo / "src" / _PKG / "run.sh").write_text("#!/bin/sh\necho run\n")
+    (repo / "src" / _PKG / "run.sh").chmod(0o755)  # a 100755 blob the install must keep
     (repo / "pyproject.toml").write_text(_PYPROJECT)
     (repo / ".agents" / "scripts").mkdir(parents=True)
     shutil.copy2(_SCRIPT, repo / ".agents" / "scripts" / "install_tool.py")
@@ -148,7 +154,8 @@ def _make_box(tmp_path: Path, object_format: str = "sha1") -> Box:
     fake.mkdir()
     (fake / "uv").write_text(_FAKE_UV)
     (fake / "uv").chmod(0o755)
-    env = {k: v for k, v in os.environ.items() if k not in {"CLAUDECODE", "VIRTUAL_ENV"}}
+    skip = {"CLAUDECODE", "VIRTUAL_ENV", "UV_RUN_RECURSION_DEPTH"}  # set by a `uv run pytest`
+    env = {k: v for k, v in os.environ.items() if k not in skip}
     # The sandbox bin dir, and no real `projects-orchestrator` (the developer's, or
     # the test venv's) for the PATH check to find instead.
     rest = [d for d in os.environ["PATH"].split(os.pathsep) if not (Path(d) / _TOOL).exists()]
@@ -635,6 +642,57 @@ def test_install_check_still_names_an_edit_under_autocrlf(box: Box) -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    ("name", "mode", "want"),
+    [
+        ("run.sh", 0o644, "installed 644, tree 100755"),
+        ("cli.py", 0o755, "installed 755, tree 100644"),
+    ],
+    ids=["exec-bit-dropped", "exec-bit-added"],
+)
+def test_install_check_names_an_installed_file_whose_exec_bit_differs(
+    box: Box, name: str, mode: int, want: str
+) -> None:
+    # The same blob with another exec bit: a scaffold copies a file's exec bit along.
+    _install_faithfully(box)
+    (box.site / name).chmod(mode)
+    assert _items(_script(box, "--check").stderr) == [
+        f"mode: {_PKG}/{name} {want} (tree: src/{_PKG}/{name})"
+    ]
+
+
+def test_install_check_names_an_exec_bit_only_head_changed(box: Box) -> None:
+    _install_faithfully(box)
+    _git(box.repo, "update-index", "--chmod=-x", f"src/{_PKG}/run.sh")
+    _git(box.repo, "commit", "-q", "-m", "run.sh is not executable")
+    assert _items(_script(box, "--check").stderr) == [
+        f"mode: {_PKG}/run.sh installed 755, tree 100644 (tree: src/{_PKG}/run.sh)"
+    ]
+
+
+def test_install_check_names_what_the_installed_record_owns(box: Box) -> None:
+    # A build from before HEAD dropped a wheel mapping left files HEAD never names.
+    _install_faithfully(box)
+    site = box.site.parent
+    (site / "retired_pkg").mkdir()
+    (site / "retired_pkg" / "old.py").write_text("stale\n")
+    (site / "retired.py").write_text("stale\n")
+    record = site / f"{_PKG}-0.0.0.dist-info" / "RECORD"
+    record.write_text(record.read_text() + "retired_pkg/old.py,,\nretired.py,,\n")
+    assert _items(_script(box, "--check").stderr) == [
+        "not in tree: retired.py",
+        "not in tree: retired_pkg/old.py",
+    ]
+
+
+def test_install_check_names_an_install_without_a_record(box: Box) -> None:
+    _install_faithfully(box)
+    (box.site.parent / f"{_PKG}-0.0.0.dist-info" / "RECORD").unlink()
+    assert _items(_script(box, "--check").stderr) == [
+        f"record: {_PKG}-0.0.0.dist-info has no RECORD, so what it installed is unknown"
+    ]
+
+
 def test_install_check_ignores_bytecode_caches(box: Box) -> None:
     _install_faithfully(box)
     (box.site / "__pycache__").mkdir()
@@ -680,15 +738,54 @@ def test_install_check_names_a_command_on_path_that_shadows_the_tool(
     ]
 
 
-def test_install_check_ignores_the_venv_uv_run_puts_first_on_path(box: Box, tmp_path: Path) -> None:
-    # `uv run` runs the script in the project's venv and prepends that venv's bin,
-    # whose dev entrypoint is not what a shell runs.
-    _install_faithfully(box)
-    venv = tmp_path / "devvenv"
+def _venv_with_the_tool(venv: Path) -> Path:
     subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(venv)], check=True)
-    stub = _stub(venv / "bin")
-    box.env["PATH"] = f"{stub.parent}{os.pathsep}{box.env['PATH']}"
-    assert _script(box, "--check", python=str(venv / "bin" / "python")).returncode == 0
+    return _stub(venv / "bin")
+
+
+def _uv_run_check(box: Box, cwd: Path, *, nested: bool = False) -> subprocess.CompletedProcess[str]:
+    """`--check` the way the recipe runs it: under the real `uv run --no-project`."""
+    assert _REAL_UV
+    run = [_REAL_UV, "run", "--no-python-downloads", "--no-project", "--python", ">=3.11"]
+    script = box.repo / ".agents" / "scripts" / "install_tool.py"
+    return subprocess.run(
+        [*run, *(run if nested else []), "python", str(script), "--check"],
+        cwd=cwd,
+        env=box.env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+
+
+@pytest.mark.skipif(_REAL_UV is None, reason="uv missing")
+@pytest.mark.parametrize("nested", [False, True], ids=["uv-run", "uv-run-in-uv-run"])
+def test_install_check_ignores_the_venv_uv_run_puts_first_on_path(
+    box: Box, tmp_path: Path, nested: bool
+) -> None:
+    # `uv run` finds the cwd's .venv, never activated, and prepends its bin to PATH:
+    # its dev entrypoint is not what a shell runs.
+    _install_faithfully(box)
+    _venv_with_the_tool(tmp_path / "work" / ".venv")
+    done = _uv_run_check(box, tmp_path / "work", nested=nested)
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
+@pytest.mark.skipif(_REAL_UV is None, reason="uv missing")
+def test_install_check_names_the_tool_in_a_venv_the_caller_activated(
+    box: Box, tmp_path: Path
+) -> None:
+    # An activated venv was first on the shell's PATH before `uv run` prepended it again.
+    _install_faithfully(box)
+    stub = _venv_with_the_tool(tmp_path / "active")
+    box.env |= {
+        "VIRTUAL_ENV": str(tmp_path / "active"),
+        "PATH": f"{stub.parent}{os.pathsep}{box.env['PATH']}",
+    }
+    assert _items(_uv_run_check(box, tmp_path).stderr) == [
+        f"PATH: {_TOOL} runs {stub}, which shadows {box.scripts / _TOOL}"
+    ]
 
 
 def test_install_check_reports_the_tool_missing_from_path(box: Box) -> None:
