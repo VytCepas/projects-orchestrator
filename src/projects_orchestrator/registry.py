@@ -37,6 +37,10 @@ from projects_orchestrator.descriptor import (
 _log = logging.getLogger(__name__)
 
 FLEET_FILENAME = "fleet.yaml"
+#: Prefix of the warning `_scan_root` appends for an unreadable root — a stable
+#: marker a caller can match on to tell "a root could not be scanned" apart
+#: from every other discovery warning, without re-parsing the free text (#320).
+SCAN_ROOT_ERROR = "cannot scan root "
 
 
 @dataclass(frozen=True)
@@ -339,7 +343,7 @@ def _scan_root(root: Path, config: FleetConfig, warnings: list[str]) -> list[Pat
     try:
         entries = sorted(p for p in root.iterdir() if p.is_dir())
     except OSError as exc:
-        warnings.append(f"cannot scan root {root}: {exc}")
+        warnings.append(f"{SCAN_ROOT_ERROR}{root}: {exc}")
         return []
     return [p for p in entries if not _excluded(p.name, config.exclude)]
 

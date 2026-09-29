@@ -537,6 +537,17 @@ Start, stop, and watch long-running project processes.
 - `def stop` — Terminate a project's supervised process; never raises.
 - `def logs` — Return the tail of a project's captured run output; never raises.
 
+### `projects_orchestrator/testfleet.py`
+
+Run every fleet repo's ``just test`` and report one row per repo (#316).
+
+- `class FleetTestRow` — One repo's ``just test``.
+- `def parse_summary` — Return the last contract summary line in *output* as ``(suite, passed, failed)``.
+- `def run_repo` — Run one repo's ``just test`` and read its summary line; never raises.
+- `def run_fleet` — Run ``just test`` in every repo, in fleet order.
+- `def exit_code` — 0 when no repo failed, else 1.
+- `def render` — The table: a header, one row per repo, and the fleet total; every line stamped.
+
 ### `projects_orchestrator/tui.py`
 
 Textual TUI: fleet table, per-project detail, and the command controller.

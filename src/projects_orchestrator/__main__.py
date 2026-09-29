@@ -114,6 +114,7 @@ from projects_orchestrator.pool import map_ordered
 from projects_orchestrator.registry import (
     FLEET_FILENAME,
     FLEET_ROOT_ENV,
+    SCAN_ROOT_ERROR,
     Fleet,
     FleetConfig,
     default_fleet_config,
@@ -127,6 +128,12 @@ from projects_orchestrator.supervisor import liveness_check
 from projects_orchestrator.supervisor import logs as run_logs
 from projects_orchestrator.supervisor import start as run_start
 from projects_orchestrator.supervisor import stop as run_stop
+from projects_orchestrator.testfleet import CHECK_ID as FLEET_TEST_ID
+from projects_orchestrator.testfleet import DEFAULT_TIMEOUT as FLEET_TEST_TIMEOUT
+from projects_orchestrator.testfleet import STAMP as FLEET_TEST_STAMP
+from projects_orchestrator.testfleet import exit_code as fleet_test_exit
+from projects_orchestrator.testfleet import render as render_fleet_test
+from projects_orchestrator.testfleet import run_fleet
 from projects_orchestrator.upgrade import UpgradeRow, upgrade_plan
 
 _log = logging.getLogger(__name__)
@@ -374,6 +381,46 @@ def _cmd_checks(args: argparse.Namespace) -> int:
         suffix = f" — {result.detail}" if result.detail else ""
         cached_mark = " (cached)" if reused else ""
         print(f"{result.project} {result.task}: {result.status}{cached_mark}{suffix}")
+    return rc
+
+
+def _cmd_test_fleet(args: argparse.Namespace) -> int:
+    """Run every repo's `just test` (the test contract); exit 1 when any repo fails (#316)."""
+    # Not _discover(): every line this check prints carries its id, warnings included.
+    fleet = discover(_fleet_config(args))
+    # A root that could not be scanned may hide projects nobody ran `just test`
+    # against: a healthy sibling root filling `selected` must never let that gap
+    # read as green (#320 review).
+    unscanned = [w for w in fleet.warnings if w.startswith(SCAN_ROOT_ERROR)]
+    # An explicit `projects:` entry discover() dropped — missing, unreadable,
+    # refused, or not a project-init project — checked structurally (configured
+    # paths against admitted descriptors), never by matching a warning's text:
+    # the fix above only recognized the `cannot scan root` prefix, so a dropped
+    # explicit entry (warned e.g. "not a project-init project: ...") tested
+    # every OTHER repo and still exited 0 (#320 review).
+    admitted = {d.path.resolve() for d in fleet.descriptors}
+    dropped = sorted({p.resolve() for p in fleet.config.projects} - admitted, key=str)
+    for warning in fleet.warnings:
+        print(f"{FLEET_TEST_STAMP} warning: {warning}", file=sys.stderr)
+    for entry in dropped:
+        print(f"{FLEET_TEST_STAMP} configured but not tested: {entry}", file=sys.stderr)
+    selected = list(fleet.descriptors)
+    if args.project:
+        selected = [d for d in selected if d.name == args.project]
+        if not selected:
+            print(f"{FLEET_TEST_STAMP} unknown project: {args.project}")
+            return 2
+    if not selected:
+        # An empty fleet is not a green one: "nothing failed" would be a vacuous pass.
+        print(f"{FLEET_TEST_STAMP} no projects discovered — nothing was tested")
+        return 2
+    rows = run_fleet(selected, timeout=args.timeout, jobs=args.jobs)
+    rc = 1 if (fleet_test_exit(rows) or unscanned or dropped) else 0
+    if args.json:
+        _emit_json({"check": FLEET_TEST_ID, "exit": rc, "rows": [asdict(row) for row in rows]})
+        return rc
+    for line in render_fleet_test(rows):
+        print(line)
     return rc
 
 
@@ -1690,6 +1737,12 @@ def _build_parser() -> argparse.ArgumentParser:
         ("projects", "list discovered projects", _cmd_projects, True),
         ("status", "fleet git health (table) or one project", _cmd_status, True),
         ("checks", "run each project's declared gates", _cmd_checks, True),
+        (
+            "test-fleet",
+            "run every repo's `just test` and report passed/failed/exit per repo",
+            _cmd_test_fleet,
+            True,
+        ),
         ("memory", "search all project memories", _cmd_memory, True),
         (
             "capabilities",
@@ -1790,6 +1843,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.choices["status"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["checks"].add_argument("project", nargs="?", help="limit to one project")
+    _add_test_fleet_arguments(sub)
     sub.choices["capabilities"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["capabilities"].add_argument(
         "--kind",
@@ -1895,6 +1949,23 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.choices["memory"].add_argument("query", nargs="+", help="text to search for")
     _add_serve_arguments(sub)
     return parser
+
+
+def _add_test_fleet_arguments(
+    sub: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    """Attach `test-fleet`'s project filter, per-repo timeout and parallelism."""
+    test_fleet_sp = sub.choices["test-fleet"]
+    test_fleet_sp.add_argument("project", nargs="?", help="limit to one project")
+    test_fleet_sp.add_argument(
+        "--timeout",
+        type=float,
+        default=FLEET_TEST_TIMEOUT,
+        help=f"seconds before a repo's run is killed (default {FLEET_TEST_TIMEOUT:.0f})",
+    )
+    test_fleet_sp.add_argument(
+        "--jobs", type=int, default=1, help="repos run at once (default 1: suites fan out already)"
+    )
 
 
 def _add_watch_arguments(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:

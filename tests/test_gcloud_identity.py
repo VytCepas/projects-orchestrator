@@ -17,11 +17,15 @@ from projects_orchestrator.gcloud_identity import (
     gcloud_env,
 )
 
-_DEFAULT = Path.home() / ".config" / "gcloud" / "identities" / "tools"
+
+def _default() -> Path:
+    # Read at call time, under the test's own HOME: a module-level Path.home() is
+    # the real home, read before the hermetic fixture redirects it (#316).
+    return Path.home() / ".config" / "gcloud" / "identities" / "tools"
 
 
 def test_gcloud_config_dir_defaults_to_the_broad_identity() -> None:
-    assert gcloud_config_dir({}) == _DEFAULT
+    assert gcloud_config_dir({}) == _default()
 
 
 def test_gcloud_config_dir_honours_the_override() -> None:
@@ -30,7 +34,7 @@ def test_gcloud_config_dir_honours_the_override() -> None:
 
 def test_gcloud_config_dir_treats_an_empty_override_as_unset() -> None:
     # An empty variable is an unset one, not a request to use the process cwd.
-    assert gcloud_config_dir({CONFIG_DIR_ENV: ""}) == _DEFAULT
+    assert gcloud_config_dir({CONFIG_DIR_ENV: ""}) == _default()
 
 
 def test_gcloud_env_pins_the_config_dir() -> None:

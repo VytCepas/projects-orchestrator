@@ -41,6 +41,12 @@ convention = "google"
 # >10 usually means the function wants splitting.
 max-complexity = 10
 
+[lint.isort]
+# The root conftest.py (the test contract) makes ruff resolve `conftest` to itself
+# and call it first-party, which re-sorts every test importing a helper from
+# tests/conftest.py. Pinned where it sorted before the contract existed.
+known-third-party = ["conftest"]
+
 [lint.per-file-ignores]
 # Test names are self-describing; docstring enforcement adds noise not value.
 # S: plain `assert` and fixture-only secrets are the point of a test, not a
