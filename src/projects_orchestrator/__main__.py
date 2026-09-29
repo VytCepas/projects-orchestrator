@@ -415,7 +415,12 @@ def _cmd_test_fleet(args: argparse.Namespace) -> int:
         print(f"{FLEET_TEST_STAMP} no projects discovered — nothing was tested")
         return 2
     rows = run_fleet(selected, timeout=args.timeout, jobs=args.jobs)
-    rc = 1 if (fleet_test_exit(rows) or unscanned or dropped) else 0
+    # Fleet-completeness gaps (unscanned, dropped) are about repos that never
+    # ran at all — real for an unfiltered run, but by the time --project has
+    # matched a name here, that project was admitted and scanned, so an
+    # unrelated gap elsewhere must not fail it (#323).
+    incomplete = not args.project and (unscanned or dropped)
+    rc = 1 if (fleet_test_exit(rows) or incomplete) else 0
     if args.json:
         _emit_json({"check": FLEET_TEST_ID, "exit": rc, "rows": [asdict(row) for row in rows]})
         return rc

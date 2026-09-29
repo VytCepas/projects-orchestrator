@@ -9,19 +9,28 @@ LOCALAPPDATA), the XDG dirs and CLAUDE_CONFIG_DIR move to a throwaway directory
 when pytest imports this file: before it collects a test module or runs a
 fixture of any scope. Every test then gets a directory of its own, TMPDIR
 included; TMPDIR moves per test only, because pytest keeps its own temporary
-directories under it. Toolchain caches (uv, cargo, rustup, go, bun) keep their
-real locations: they hold content, not configuration, and a cold cache would
-turn every ``uv run`` into a download. CARGO_HOME and RUSTUP_HOME are the two
-exceptions that cannot just point at the real thing: cargo has no separate env
-var for its cache the way UV_CACHE_DIR splits from uv's config, so CARGO_HOME
-governs config.toml and credentials.toml (real registry tokens) as well as the
-registry/git download caches, and rustup keeps settings.toml (the default
-toolchain and other mutable preferences) directly under RUSTUP_HOME beside its
-toolchains/downloads caches. The test run's CARGO_HOME and RUSTUP_HOME (set
-once per session, in ``_hermetic_session``) are therefore their own throwaway
-directories, with only the download caches — registry/ and git/ for Cargo,
-toolchains/ and downloads/ for rustup — symlinked back to the real ones:
-config and credentials are absent from them.
+directories under it. Toolchain *caches* (uv, cargo, rustup, go, bun) keep
+their real locations: they hold content, not configuration, and a cold cache
+would turn every ``uv run`` into a download. CARGO_HOME, RUSTUP_HOME,
+UV_TOOL_DIR and UV_PYTHON_INSTALL_DIR are the always-isolated exceptions,
+for two different reasons. Cargo has no separate env var for its cache the
+way UV_CACHE_DIR splits from uv's config, so CARGO_HOME governs config.toml
+and credentials.toml (real registry tokens) as well as the registry/git
+download caches, and rustup keeps settings.toml (the default toolchain and
+other mutable preferences) directly under RUSTUP_HOME beside its
+toolchains/downloads caches. UV_TOOL_DIR and UV_PYTHON_INSTALL_DIR are not a
+config/cache split at all: a ``uv tool install`` or ``uv python install``
+writes a real tool or interpreter under them, so they are install roots, not
+a cache, and UV_CACHE_DIR alone keeps uv's real download-cache location. The
+test run's CARGO_HOME and RUSTUP_HOME (set once per session, in
+``_hermetic_session``) are therefore their own throwaway directories, with
+only the download caches — registry/ and git/ for Cargo, toolchains/ and
+downloads/ for rustup — symlinked back to the real ones: config and
+credentials are absent from them. UV_TOOL_DIR and UV_PYTHON_INSTALL_DIR get
+their own throwaway directories the same way, unsymlinked: nothing installed
+during a test run belongs on the real machine at all. All four are isolated
+even when a runner's shell has already exported one of them — the other
+toolchain vars instead leave a runner's own pre-set value alone.
 
 Rule 3: every run ends with ``<project>: N passed, M failed`` (an error counts
 as failed, a skip as neither), the line a fleet runner adds up, printed after
@@ -86,9 +95,8 @@ def _rustup_home(root: Path, real_home: Path) -> str:
 
 
 def _toolchain_env(real_home: Path, env: Mapping[str, str], root: Path) -> dict[str, str]:
-    """Each toolchain's cache and install dirs as the real home places them today."""
+    """Each toolchain's cache dir as the real home places it, install roots under *root*."""
     cache = Path(env.get("XDG_CACHE_HOME") or real_home / ".cache")
-    data = Path(env.get("XDG_DATA_HOME") or real_home / ".local" / "share")
     go_cache = (
         real_home / "Library" / "Caches" / "go-build"
         if sys.platform == "darwin"
@@ -96,8 +104,11 @@ def _toolchain_env(real_home: Path, env: Mapping[str, str], root: Path) -> dict[
     )
     return {
         "UV_CACHE_DIR": str(cache / "uv"),
-        "UV_PYTHON_INSTALL_DIR": str(data / "uv" / "python"),
-        "UV_TOOL_DIR": str(data / "uv" / "tools"),
+        # Install roots, not a cache: a `uv … install` writes a real tool or
+        # interpreter here, so it goes under the throwaway root, not the real
+        # data dir (#323).
+        "UV_PYTHON_INSTALL_DIR": str(root / "uv" / "python"),
+        "UV_TOOL_DIR": str(root / "uv" / "tools"),
         "CARGO_HOME": _cargo_home(root, real_home),
         "RUSTUP_HOME": _rustup_home(root, real_home),
         "GOPATH": str(real_home / "go"),
@@ -136,10 +147,12 @@ def _redirect(env: Mapping[str, Path], patch: pytest.MonkeyPatch) -> None:
 
 
 # CARGO_HOME and RUSTUP_HOME hold mutable config, credentials or preferences
-# (not just a cache), so a pre-existing export of either must still be
-# replaced with the isolated one below — unlike the other toolchain vars,
-# which a runner's own override is left alone (#1056 review).
-_ALWAYS_ISOLATED = {"CARGO_HOME", "RUSTUP_HOME"}
+# (not just a cache); UV_TOOL_DIR and UV_PYTHON_INSTALL_DIR are install roots
+# a test can write real tools/interpreters into. None of the four is a cache,
+# so a pre-existing export of any must still be replaced with the isolated one
+# below — unlike the other toolchain vars, which a runner's own override is
+# left alone (#1056 review, #323).
+_ALWAYS_ISOLATED = {"CARGO_HOME", "RUSTUP_HOME", "UV_TOOL_DIR", "UV_PYTHON_INSTALL_DIR"}
 
 
 def _hermetic_session() -> tuple[pytest.MonkeyPatch, Path]:

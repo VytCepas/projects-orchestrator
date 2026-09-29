@@ -299,6 +299,55 @@ def test_a_dropped_explicit_project_fails_the_fleet_even_with_a_healthy_sibling(
     assert _rows(captured.out)["alpha"][-1] == "pass", captured.out
 
 
+def test_filtered_run_ignores_an_unrelated_unscanned_root(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#323: a sibling root discover() could not scan must not fail a run
+    filtered to a project whose own root scanned fine."""
+    healthy = tmp_path / "healthy"
+    _repo(healthy, "alpha", "echo alpha: 1 passed, 0 failed")
+    missing = tmp_path / "missing"
+    fleet_file = tmp_path / "fleet.yaml"
+    fleet_file.write_text(f"roots:\n  - {healthy}\n  - {missing}\n", encoding="utf-8")
+    rc = main(["test-fleet", "--fleet", str(fleet_file), "alpha"])
+    captured = capsys.readouterr()
+    assert rc == 0, captured.out + captured.err
+    assert set(_rows(captured.out)) == {"alpha"}
+
+
+def test_filtered_run_ignores_an_unrelated_dropped_project(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#323: an unrelated dropped `projects:` entry must not fail a run
+    filtered to a project that was admitted."""
+    roots = tmp_path / "roots"
+    _repo(roots, "alpha", "echo alpha: 1 passed, 0 failed")
+    not_a_project = tmp_path / "not-a-project"
+    not_a_project.mkdir()
+    fleet_file = tmp_path / "fleet.yaml"
+    fleet_file.write_text(
+        f"roots:\n  - {roots}\nprojects:\n  - {not_a_project}\n", encoding="utf-8"
+    )
+    rc = main(["test-fleet", "--fleet", str(fleet_file), "alpha"])
+    captured = capsys.readouterr()
+    assert rc == 0, captured.out + captured.err
+    assert set(_rows(captured.out)) == {"alpha"}
+
+
+def test_filtered_run_still_fails_when_its_own_project_never_scanned(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#323: scoping fleet-completeness to the selection must not hide a gap
+    in the selection itself — its own root failing to scan means it was never
+    discovered, so filtering by its name still fails the run."""
+    missing = tmp_path / "missing"
+    fleet_file = tmp_path / "fleet.yaml"
+    fleet_file.write_text(f"roots:\n  - {missing}\n", encoding="utf-8")
+    rc = main(["test-fleet", "--fleet", str(fleet_file), "alpha"])
+    captured = capsys.readouterr()
+    assert rc != 0, captured.out + captured.err
+
+
 def test_one_project_by_name(fleet_dir: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _repo(fleet_dir, "alpha", "echo alpha: 3 passed, 0 failed")
     _repo(fleet_dir, "beta", "echo beta: 1 passed, 2 failed; exit 1")
