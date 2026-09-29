@@ -9,8 +9,10 @@ remembers — and **put an agent to work on what it finds**.
 
 ## Install
 
-Not on PyPI yet. Install from a checkout with `uv tool install`, and reinstall
-after every pull: [Install and upgrade the orchestrator itself](docs/how-to/install-and-upgrade.md).
+Not on PyPI yet. Install from a checkout with `just install --apply` (without
+the flag it is a dry run), reinstall after every pull, and `just install --check`
+reports a build that no longer matches the checkout:
+[Install and upgrade the orchestrator itself](docs/how-to/install-and-upgrade.md).
 Changes per release are in [CHANGELOG.md](CHANGELOG.md).
 
 ## Usage
