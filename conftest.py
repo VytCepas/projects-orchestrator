@@ -4,19 +4,24 @@ Scaffolded by project-init (PI-1044) and refreshed by ``project-init upgrade``; 
 your own fixtures in ``tests/conftest.py``, which pytest loads beside this one.
 
 Rule 1: no test reads or writes the real home, so a verdict never depends on who
-ran it. HOME (with Windows' USERPROFILE, HOMEDRIVE and HOMEPATH), the XDG dirs
-and CLAUDE_CONFIG_DIR move to a throwaway directory when pytest imports this
-file: before it collects a test module or runs a fixture of any scope. Every test
-then gets a directory of its own, TMPDIR included; TMPDIR moves per test only,
-because pytest keeps its own temporary directories under it. Toolchain caches
-(uv, cargo, rustup, go, bun) keep their real locations: they hold content, not
-configuration, and a cold cache would turn every ``uv run`` into a download.
-CARGO_HOME is the one exception that cannot just point at the real thing: cargo
-has no separate env var for its cache the way UV_CACHE_DIR splits from uv's
-config, so CARGO_HOME governs config.toml and credentials.toml (real registry
-tokens) as well as the registry/git download caches. A test's CARGO_HOME is
-therefore its own throwaway directory, with registry/ and git/ symlinked back
-to the real cache — content is reused, config and credentials are not.
+ran it. HOME (with Windows' USERPROFILE, HOMEDRIVE, HOMEPATH, APPDATA and
+LOCALAPPDATA), the XDG dirs and CLAUDE_CONFIG_DIR move to a throwaway directory
+when pytest imports this file: before it collects a test module or runs a
+fixture of any scope. Every test then gets a directory of its own, TMPDIR
+included; TMPDIR moves per test only, because pytest keeps its own temporary
+directories under it. Toolchain caches (uv, cargo, rustup, go, bun) keep their
+real locations: they hold content, not configuration, and a cold cache would
+turn every ``uv run`` into a download. CARGO_HOME and RUSTUP_HOME are the two
+exceptions that cannot just point at the real thing: cargo has no separate env
+var for its cache the way UV_CACHE_DIR splits from uv's config, so CARGO_HOME
+governs config.toml and credentials.toml (real registry tokens) as well as the
+registry/git download caches, and rustup keeps settings.toml (the default
+toolchain and other mutable preferences) directly under RUSTUP_HOME beside its
+toolchains/downloads caches. The test run's CARGO_HOME and RUSTUP_HOME (set
+once per session, in ``_hermetic_session``) are therefore their own throwaway
+directories, with only the download caches — registry/ and git/ for Cargo,
+toolchains/ and downloads/ for rustup — symlinked back to the real ones:
+config and credentials are absent from them.
 
 Rule 3: every run ends with ``<project>: N passed, M failed`` (an error counts
 as failed, a skip as neither), the line a fleet runner adds up, printed after
@@ -44,16 +49,36 @@ if TYPE_CHECKING:
 
 
 def _cargo_home(root: Path, real_home: Path) -> str:
-    """A throwaway CARGO_HOME with the real registry/git *caches* symlinked in.
+    """The test run's CARGO_HOME: only the real registry/git *caches* symlinked in.
 
-    config.toml and credentials.toml never exist under it, so a test cannot read
-    the real ones. A symlink that cannot be made (no privilege on Windows without
-    Developer Mode) is skipped: isolation still holds, the cache is just cold.
+    config.toml and credentials.toml are absent from it — cargo reads none of
+    the real ones through this variable. A symlink that cannot be made (no
+    privilege on Windows without Developer Mode) is skipped: isolation still
+    holds, the cache is just cold.
     """
     fake = root / "cargo-home"
     fake.mkdir(parents=True, exist_ok=True)
     for name in ("registry", "git"):
         real, link = real_home / ".cargo" / name, fake / name
+        if real.is_dir() and not link.exists():
+            with contextlib.suppress(OSError):
+                link.symlink_to(real, target_is_directory=True)
+    return str(fake)
+
+
+def _rustup_home(root: Path, real_home: Path) -> str:
+    """The test run's RUSTUP_HOME: only the real toolchains/downloads *caches* symlinked in.
+
+    settings.toml (the default toolchain and other rustup preferences) is
+    mutable state, not a cache, and is absent from it — rustup reads and
+    writes none of the real one through this variable. A symlink that cannot
+    be made (no privilege on Windows without Developer Mode) is skipped:
+    isolation still holds, the cache is just cold.
+    """
+    fake = root / "rustup-home"
+    fake.mkdir(parents=True, exist_ok=True)
+    for name in ("toolchains", "downloads"):
+        real, link = real_home / ".rustup" / name, fake / name
         if real.is_dir() and not link.exists():
             with contextlib.suppress(OSError):
                 link.symlink_to(real, target_is_directory=True)
@@ -74,7 +99,7 @@ def _toolchain_env(real_home: Path, env: Mapping[str, str], root: Path) -> dict[
         "UV_PYTHON_INSTALL_DIR": str(data / "uv" / "python"),
         "UV_TOOL_DIR": str(data / "uv" / "tools"),
         "CARGO_HOME": _cargo_home(root, real_home),
-        "RUSTUP_HOME": str(real_home / ".rustup"),
+        "RUSTUP_HOME": _rustup_home(root, real_home),
         "GOPATH": str(real_home / "go"),
         "GOCACHE": str(go_cache),
         "BUN_INSTALL": str(real_home / ".bun"),
@@ -88,6 +113,10 @@ def _home_env(root: Path) -> dict[str, Path]:
         "HOME": home,
         # Windows: Path.home() reads USERPROFILE, then HOMEDRIVE + HOMEPATH, never HOME.
         "USERPROFILE": home,
+        # Windows: normally inherited absolute paths under the real profile, so
+        # redirecting USERPROFILE/the XDG vars alone leaves them pointing at it.
+        "APPDATA": home / "AppData" / "Roaming",
+        "LOCALAPPDATA": home / "AppData" / "Local",
         "XDG_CONFIG_HOME": home / ".config",
         "XDG_DATA_HOME": home / ".local" / "share",
         "XDG_CACHE_HOME": home / ".cache",
@@ -106,6 +135,13 @@ def _redirect(env: Mapping[str, Path], patch: pytest.MonkeyPatch) -> None:
     patch.setenv("HOMEPATH", str(home)[len(home.drive) :])
 
 
+# CARGO_HOME and RUSTUP_HOME hold mutable config, credentials or preferences
+# (not just a cache), so a pre-existing export of either must still be
+# replaced with the isolated one below — unlike the other toolchain vars,
+# which a runner's own override is left alone (#1056 review).
+_ALWAYS_ISOLATED = {"CARGO_HOME", "RUSTUP_HOME"}
+
+
 def _hermetic_session() -> tuple[pytest.MonkeyPatch, Path]:
     """Move home for the whole run, reading the real one first for the toolchain caches."""
     patch = pytest.MonkeyPatch()
@@ -113,7 +149,7 @@ def _hermetic_session() -> tuple[pytest.MonkeyPatch, Path]:
     # pytest_unconfigure removes it; this covers a run that never configures (--version).
     atexit.register(shutil.rmtree, root, ignore_errors=True)
     for name, value in _toolchain_env(Path.home(), os.environ, root).items():
-        if name not in os.environ:
+        if name in _ALWAYS_ISOLATED or name not in os.environ:
             patch.setenv(name, value)
     _redirect(_home_env(root), patch)
     return patch, root

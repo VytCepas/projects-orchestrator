@@ -272,6 +272,33 @@ def test_an_unscanned_root_fails_the_fleet_even_with_a_healthy_sibling(
     assert _rows(captured.out)["alpha"][-1] == "pass", captured.out
 
 
+def test_a_dropped_explicit_project_fails_the_fleet_even_with_a_healthy_sibling(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#320 review: an explicit `projects:` entry discover() drops (missing,
+    unreadable, refused, or not a project-init project — not a project-init
+    project, here) must fail the fleet even though a healthy scanned sibling
+    fills `selected`. Checked structurally (configured paths against admitted
+    descriptors), not by matching a specific warning's text — the earlier fix
+    only recognized the `cannot scan root` prefix."""
+    roots = tmp_path / "roots"
+    _repo(roots, "alpha", "echo alpha: 1 passed, 0 failed")
+    not_a_project = tmp_path / "not-a-project"
+    not_a_project.mkdir()
+    fleet_file = tmp_path / "fleet.yaml"
+    fleet_file.write_text(
+        f"roots:\n  - {roots}\nprojects:\n  - {not_a_project}\n", encoding="utf-8"
+    )
+    rc = main(["test-fleet", "--fleet", str(fleet_file)])
+    captured = capsys.readouterr()
+    assert rc != 0, captured.out + captured.err
+    lines = (captured.out + captured.err).strip().splitlines()
+    assert any(
+        "configured but not tested" in line and str(not_a_project) in line for line in lines
+    ), lines
+    assert _rows(captured.out)["alpha"][-1] == "pass", captured.out
+
+
 def test_one_project_by_name(fleet_dir: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _repo(fleet_dir, "alpha", "echo alpha: 3 passed, 0 failed")
     _repo(fleet_dir, "beta", "echo beta: 1 passed, 2 failed; exit 1")

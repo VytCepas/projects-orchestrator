@@ -392,8 +392,18 @@ def _cmd_test_fleet(args: argparse.Namespace) -> int:
     # against: a healthy sibling root filling `selected` must never let that gap
     # read as green (#320 review).
     unscanned = [w for w in fleet.warnings if w.startswith(SCAN_ROOT_ERROR)]
+    # An explicit `projects:` entry discover() dropped — missing, unreadable,
+    # refused, or not a project-init project — checked structurally (configured
+    # paths against admitted descriptors), never by matching a warning's text:
+    # the fix above only recognized the `cannot scan root` prefix, so a dropped
+    # explicit entry (warned e.g. "not a project-init project: ...") tested
+    # every OTHER repo and still exited 0 (#320 review).
+    admitted = {d.path.resolve() for d in fleet.descriptors}
+    dropped = sorted({p.resolve() for p in fleet.config.projects} - admitted, key=str)
     for warning in fleet.warnings:
         print(f"{FLEET_TEST_STAMP} warning: {warning}", file=sys.stderr)
+    for entry in dropped:
+        print(f"{FLEET_TEST_STAMP} configured but not tested: {entry}", file=sys.stderr)
     selected = list(fleet.descriptors)
     if args.project:
         selected = [d for d in selected if d.name == args.project]
@@ -405,7 +415,7 @@ def _cmd_test_fleet(args: argparse.Namespace) -> int:
         print(f"{FLEET_TEST_STAMP} no projects discovered — nothing was tested")
         return 2
     rows = run_fleet(selected, timeout=args.timeout, jobs=args.jobs)
-    rc = 1 if (fleet_test_exit(rows) or unscanned) else 0
+    rc = 1 if (fleet_test_exit(rows) or unscanned or dropped) else 0
     if args.json:
         _emit_json({"check": FLEET_TEST_ID, "exit": rc, "rows": [asdict(row) for row in rows]})
         return rc
