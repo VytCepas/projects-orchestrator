@@ -114,6 +114,7 @@ from projects_orchestrator.pool import map_ordered
 from projects_orchestrator.registry import (
     FLEET_FILENAME,
     FLEET_ROOT_ENV,
+    SCAN_ROOT_ERROR,
     Fleet,
     FleetConfig,
     default_fleet_config,
@@ -387,6 +388,10 @@ def _cmd_test_fleet(args: argparse.Namespace) -> int:
     """Run every repo's `just test` (the test contract); exit 1 when any repo fails (#316)."""
     # Not _discover(): every line this check prints carries its id, warnings included.
     fleet = discover(_fleet_config(args))
+    # A root that could not be scanned may hide projects nobody ran `just test`
+    # against: a healthy sibling root filling `selected` must never let that gap
+    # read as green (#320 review).
+    unscanned = [w for w in fleet.warnings if w.startswith(SCAN_ROOT_ERROR)]
     for warning in fleet.warnings:
         print(f"{FLEET_TEST_STAMP} warning: {warning}", file=sys.stderr)
     selected = list(fleet.descriptors)
@@ -400,7 +405,7 @@ def _cmd_test_fleet(args: argparse.Namespace) -> int:
         print(f"{FLEET_TEST_STAMP} no projects discovered — nothing was tested")
         return 2
     rows = run_fleet(selected, timeout=args.timeout, jobs=args.jobs)
-    rc = fleet_test_exit(rows)
+    rc = 1 if (fleet_test_exit(rows) or unscanned) else 0
     if args.json:
         _emit_json({"check": FLEET_TEST_ID, "exit": rc, "rows": [asdict(row) for row in rows]})
         return rc

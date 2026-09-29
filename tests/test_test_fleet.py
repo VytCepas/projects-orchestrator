@@ -253,6 +253,25 @@ def test_discovery_warnings_carry_the_check_id_too(
     assert all(line.startswith(STAMP + " ") for line in lines), lines
 
 
+def test_an_unscanned_root_fails_the_fleet_even_with_a_healthy_sibling(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#320 review: a healthy sibling root filling `selected` must not mask the
+    gap left by a root discovery could not read — that root's own projects, if
+    any, never got a `just test` run."""
+    healthy = tmp_path / "healthy"
+    _repo(healthy, "alpha", "echo alpha: 1 passed, 0 failed")
+    missing = tmp_path / "missing"
+    fleet_file = tmp_path / "fleet.yaml"
+    fleet_file.write_text(f"roots:\n  - {healthy}\n  - {missing}\n", encoding="utf-8")
+    rc = main(["test-fleet", "--fleet", str(fleet_file)])
+    captured = capsys.readouterr()
+    assert rc != 0, captured.out + captured.err
+    lines = (captured.out + captured.err).strip().splitlines()
+    assert any("cannot scan root" in line and str(missing) in line for line in lines), lines
+    assert _rows(captured.out)["alpha"][-1] == "pass", captured.out
+
+
 def test_one_project_by_name(fleet_dir: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _repo(fleet_dir, "alpha", "echo alpha: 3 passed, 0 failed")
     _repo(fleet_dir, "beta", "echo beta: 1 passed, 2 failed; exit 1")
