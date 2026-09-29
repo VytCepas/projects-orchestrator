@@ -20,9 +20,23 @@ this repository.
 
 ```sh
 git clone https://github.com/VytCepas/projects-orchestrator.git
-uv tool install ./projects-orchestrator
+cd projects-orchestrator
+just install            # dry run: source, commit, target, command, and what --apply would refuse
+just install --apply    # uv tool install --reinstall <this checkout>, then --check
 projects-orchestrator --version
 ```
+
+`just install` with no flag writes nothing and needs no network: it never
+downloads a Python and never syncs the checkout's dev environment. It
+exits 1 when `--apply` would refuse, unless the only reason is a Claude Code
+session. `--apply` installs only from the main worktree, on a clean
+`main` in sync with `origin/main` (it fetches first), and not from inside a
+Claude Code session. A branch or an uncommitted edit is code nobody reviewed,
+and so is an edit that a `skip-worktree` or `assume-unchanged` flag hides from
+`git status`: `--apply` names those files and the command that clears each
+flag. uv records the source path in its receipt, so a linked worktree's path would
+outlive its branch. After installing, `--apply` runs the check below and fails if
+the build does not match `HEAD`.
 
 `uv tool install` builds a copy of the checkout into its own environment. The
 command on your `PATH` runs that copy, never the working tree. See the next
@@ -32,19 +46,47 @@ section for what that means.
 
 ```sh
 git -C projects-orchestrator pull --ff-only
-uv tool install --reinstall ./projects-orchestrator
-projects-orchestrator --version
+just install --apply
 ```
 
-**`--reinstall` is not optional.** A merged fix is not a deployed fix. Pulling
+**The reinstall is not optional.** A merged fix is not a deployed fix. Pulling
 updates the checkout, but the installed copy keeps running the old code until it
 is rebuilt. So `git log` shows the fix, the tests pass, and the command on your
-`PATH` still behaves as before. Check `--version` after reinstalling. Between
-releases the version does not move, so also confirm the fix's behaviour.
+`PATH` still behaves as before. `just install --apply` always passes
+`--reinstall`, so uv rebuilds even when the version has not moved.
 
 No state migration is needed in either direction. The cache is versioned, and a
 build refuses to overwrite a newer build's file rather than discarding it (see
 [Operate the orchestrator's own state](operations.md#migrating-between-versions)).
+
+## Check the installed build
+
+```sh
+just install --check
+```
+
+This compares the installed package files, and their executable bits, with the
+checkout's `HEAD` and exits 1 on drift, naming each file: `modified`, `missing`,
+`mode`, or `not in tree`. It reads the files `HEAD` maps into the wheel and every
+file the installed build's `RECORD` lists, so one that a dropped mapping left
+behind is drift too, as is an install with no `RECORD`. A dist-info file that is
+missing or unreadable is one drift line, and the other comparisons still run.
+It also fails when:
+
+- uv's receipt names another checkout, or its entrypoint link is broken;
+- the `projects-orchestrator` your `PATH` selects is not the one in the tool's
+  environment, naming the one that shadows it. The venv directory that `uv run`
+  itself puts first on `PATH` is ignored, since a shell does not run it, but a
+  venv you had activated still counts;
+- the installed metadata differs from what `HEAD`'s `pyproject.toml` declares:
+  the version, `Requires-Python`, the dependencies and the entry points. A change
+  to `pyproject.toml` alone is drift too.
+
+The tool environment's own interpreter reports where its packages and scripts
+live, so no platform layout is assumed. The check compares against `HEAD`, not
+the working tree, so an uncommitted edit is not drift but a pull without a
+reinstall is. `--version` cannot tell you this: it does not move between
+releases.
 
 ## What changed between versions
 
