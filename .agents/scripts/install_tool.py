@@ -31,6 +31,7 @@ import io
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -153,6 +154,27 @@ def wheel_layout(project_toml: dict[str, Any]) -> list[tuple[str, str]]:
     if not pairs:
         raise RefusedError("pyproject.toml has no hatch wheel layout, so the tree cannot be mapped")
     return pairs
+
+
+def ignored_problems(project_toml: dict[str, Any]) -> list[str]:
+    """Name each ignored file under a path the wheel packages: git status never lists one.
+
+    force-include ships every file under its path, and a package walk skips only what the
+    root ``.gitignore`` names (project-init#1047). hatchling never ships ``__pycache__``.
+    """
+    layout = [src for src, _ in wheel_layout(project_toml)]
+    argv = ["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--", *layout]
+    listed = _git(*argv, strip=False).split("\0")
+    found = [p for p in listed if p and "__pycache__" not in PurePosixPath(p).parts]
+    if not found:
+        return []
+    shown = "\n      ".join(found[:10] + (["..."] if len(found) > 10 else []))
+    paths = shlex.join(layout)
+    return [
+        "ignored files the wheel packages would be installed unreviewed. Preview with "
+        f"`git clean -ndX -- {paths}`, then delete them with `git clean -fdX -- {paths}`:"
+        f"\n      {shown}"
+    ]
 
 
 def expected_files(project_toml: dict[str, Any], commit: str) -> dict[str, tuple[str, str, str]]:
@@ -479,6 +501,8 @@ def apply_problems(*, fetch: bool) -> list[str]:
             "`git update-index --no-skip-worktree -- <file>` or "
             f"`git update-index --no-assume-unchanged -- <file>`, one call per flag:\n      {shown}"
         )
+    # HEAD's layout: a pyproject on disk that differs from it is refused above.
+    problems += ignored_problems(tomllib.loads(_git("show", "HEAD:pyproject.toml")))
     if fetch:
         proc = _git_proc("fetch", "--quiet", "origin", _BASE)
         if proc.returncode != 0:

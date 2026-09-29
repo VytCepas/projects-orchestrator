@@ -457,6 +457,33 @@ def _hide(box: Box, label: str) -> None:
     assert _git(box.repo, "status", "--porcelain", "--untracked-files=all") == ""
 
 
+# Every place an ignore rule can live. Each hides the file from git status.
+_IGNORE_FILES = (".gitignore", f"src/{_PKG}/.gitignore", ".git/info/exclude")
+_CLEAN = f"git clean -fdX -- src/{_PKG}"
+_IGNORED_REFUSAL = (
+    "ignored files the wheel packages would be installed unreviewed. Preview with "
+    f"`git clean -ndX -- src/{_PKG}`, then delete them with `{_CLEAN}`:"
+)
+
+
+def _ignore(box: Box, rules: str, where: str) -> None:
+    path = box.repo / where
+    path.write_text(path.read_text() + rules if path.exists() else rules)
+    if not where.startswith(".git/"):
+        _commit(box.repo, "ignore")
+        _git(box.repo, "push", "-q")
+
+
+def _ignored(box: Box, where: str = ".git/info/exclude") -> None:
+    """Leave an ignored file where the wheel packages it, and a bytecode cache it never does."""
+    _ignore(box, "__pycache__/\n", ".git/info/exclude")
+    _ignore(box, "*.local\n", where)
+    (box.repo / "src" / _PKG / "extra.local").write_text("unreviewed\n")
+    (box.repo / "src" / _PKG / "__pycache__").mkdir()
+    (box.repo / "src" / _PKG / "__pycache__" / "cli.cpython-313.pyc").write_bytes(b"\0")
+    assert _git(box.repo, "status", "--porcelain", "--untracked-files=all") == ""
+
+
 _REFUSALS = {
     "branch": (_on_a_branch, "on 'feat/x', not main"),
     "detached": (_detached, "on 'detached HEAD', not main"),
@@ -470,6 +497,7 @@ _REFUSALS = {
     "behind": (_behind, "not in sync with origin/main (ahead 0, behind 1)"),
     "no-origin": (_no_origin, "cannot fetch origin/main"),
     "session": (_in_a_session, "inside a Claude Code session"),
+    "ignored": (_ignored, f"{_IGNORED_REFUSAL}\n      src/{_PKG}/extra.local"),
     **{
         label: (
             lambda box, label=label: _hide(box, label),
@@ -528,6 +556,36 @@ def test_install_apply_names_the_commands_that_clear_the_flags(box: Box, label: 
     assert _items(_script(box, "--apply").stderr) == [
         "uncommitted changes would be installed unreviewed:"
     ]
+
+
+@pytest.mark.parametrize("where", _IGNORE_FILES)
+def test_install_apply_names_only_the_ignored_file_the_wheel_packages(box: Box, where: str) -> None:
+    """status reads clean, yet the build ships the ignored file (project-init#1047 review)."""
+    _ignored(box, where)
+    assert _items(_script(box, "--apply").stderr) == [_IGNORED_REFUSAL]
+    assert f"    - {_IGNORED_REFUSAL}\n      src/{_PKG}/extra.local\n" in _script(box).stdout
+
+
+@pytest.mark.parametrize("where", _IGNORE_FILES)
+def test_install_dry_run_proceeds_once_the_named_command_ran(box: Box, where: str) -> None:
+    _ignored(box, where)
+    subprocess.run(_CLEAN.split(), cwd=box.repo, check=True, capture_output=True)
+    dry = _script(box)
+    assert dry.returncode == 0, dry.stdout
+
+
+def test_install_ignored_file_check_reads_the_packaged_paths_from_pyproject(box: Box) -> None:
+    _ignore(box, "*.local\n", ".git/info/exclude")
+    (box.repo / "assets").mkdir()
+    (box.repo / "assets" / "extra.local").write_text("unreviewed\n")
+    assert _script(box).returncode == 0  # not packaged, so no reason to refuse
+    forced = '[tool.hatch.build.targets.wheel.force-include]\n"assets" = "projects_orchestrator/assets"\n'
+    _change_pyproject(
+        box, "[tool.hatch.build.targets.wheel]\n", forced + "\n[tool.hatch.build.targets.wheel]\n"
+    )
+    _git(box.repo, "push", "-q")
+    dry = _script(box)
+    assert dry.returncode == 1 and "\n      assets/extra.local\n" in dry.stdout, dry.stdout
 
 
 def _linked_worktree(box: Box) -> Path:
