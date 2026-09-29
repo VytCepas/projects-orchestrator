@@ -11,15 +11,24 @@ then gets a directory of its own, TMPDIR included; TMPDIR moves per test only,
 because pytest keeps its own temporary directories under it. Toolchain caches
 (uv, cargo, rustup, go, bun) keep their real locations: they hold content, not
 configuration, and a cold cache would turn every ``uv run`` into a download.
+CARGO_HOME is the one exception that cannot just point at the real thing: cargo
+has no separate env var for its cache the way UV_CACHE_DIR splits from uv's
+config, so CARGO_HOME governs config.toml and credentials.toml (real registry
+tokens) as well as the registry/git download caches. A test's CARGO_HOME is
+therefore its own throwaway directory, with registry/ and git/ symlinked back
+to the real cache — content is reused, config and credentials are not.
 
 Rule 3: every run ends with ``<project>: N passed, M failed`` (an error counts
-as failed, a skip as neither), the line a fleet runner adds up. pytest's own
-exit code is unchanged: 0 all passed, 1 a test failed, 5 nothing collected.
+as failed, a skip as neither), the line a fleet runner adds up, printed after
+pytest's own final summary line so a reader taking "the last line" gets it.
+pytest's own exit code is unchanged: 0 all passed, 1 a test failed, 5 nothing
+collected.
 """
 
 from __future__ import annotations
 
 import atexit
+import contextlib
 import os
 import re
 import shutil
@@ -31,10 +40,27 @@ from typing import TYPE_CHECKING
 import pytest
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Generator, Mapping
 
 
-def _toolchain_env(real_home: Path, env: Mapping[str, str]) -> dict[str, str]:
+def _cargo_home(root: Path, real_home: Path) -> str:
+    """A throwaway CARGO_HOME with the real registry/git *caches* symlinked in.
+
+    config.toml and credentials.toml never exist under it, so a test cannot read
+    the real ones. A symlink that cannot be made (no privilege on Windows without
+    Developer Mode) is skipped: isolation still holds, the cache is just cold.
+    """
+    fake = root / "cargo-home"
+    fake.mkdir(parents=True, exist_ok=True)
+    for name in ("registry", "git"):
+        real, link = real_home / ".cargo" / name, fake / name
+        if real.is_dir() and not link.exists():
+            with contextlib.suppress(OSError):
+                link.symlink_to(real, target_is_directory=True)
+    return str(fake)
+
+
+def _toolchain_env(real_home: Path, env: Mapping[str, str], root: Path) -> dict[str, str]:
     """Each toolchain's cache and install dirs as the real home places them today."""
     cache = Path(env.get("XDG_CACHE_HOME") or real_home / ".cache")
     data = Path(env.get("XDG_DATA_HOME") or real_home / ".local" / "share")
@@ -47,7 +73,7 @@ def _toolchain_env(real_home: Path, env: Mapping[str, str]) -> dict[str, str]:
         "UV_CACHE_DIR": str(cache / "uv"),
         "UV_PYTHON_INSTALL_DIR": str(data / "uv" / "python"),
         "UV_TOOL_DIR": str(data / "uv" / "tools"),
-        "CARGO_HOME": str(real_home / ".cargo"),
+        "CARGO_HOME": _cargo_home(root, real_home),
         "RUSTUP_HOME": str(real_home / ".rustup"),
         "GOPATH": str(real_home / "go"),
         "GOCACHE": str(go_cache),
@@ -86,7 +112,7 @@ def _hermetic_session() -> tuple[pytest.MonkeyPatch, Path]:
     root = Path(tempfile.mkdtemp(prefix="test-contract-"))
     # pytest_unconfigure removes it; this covers a run that never configures (--version).
     atexit.register(shutil.rmtree, root, ignore_errors=True)
-    for name, value in _toolchain_env(Path.home(), os.environ).items():
+    for name, value in _toolchain_env(Path.home(), os.environ, root).items():
         if name not in os.environ:
             patch.setenv(name, value)
     _redirect(_home_env(root), patch)
@@ -130,16 +156,25 @@ def _suite_name(config: pytest.Config) -> str:
     return re.sub(r"[^A-Za-z0-9._-]", "-", name) or "tests"
 
 
-def pytest_terminal_summary(
-    terminalreporter: pytest.TerminalReporter, config: pytest.Config
-) -> None:
-    """Print the contract's summary line: ``<project>: N passed, M failed``.
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_sessionfinish(session: pytest.Session) -> Generator[None, None, None]:
+    """Print the contract's line: ``<project>: N passed, M failed``, printed last.
 
-    Args:
-        terminalreporter: pytest's reporter, which holds the run's results.
-        config: the run's config, for the project's name.
+    TerminalReporter calls the ``pytest_terminal_summary`` hook and its own
+    ``summary_stats()`` (which prints "N passed in Ys") as two separate
+    statements — so any ``pytest_terminal_summary`` hookimpl, wrapper or not, at
+    any priority, always runs *before* that final line, never after it (checked
+    against the installed pytest's ``_pytest/terminal.py``). ``pytest_sessionfinish``
+    is different: TerminalReporter's own implementation is itself a hook wrapper,
+    so a `tryfirst` wrapper here is the outermost one — its code after `yield`
+    runs last of all, once TerminalReporter's has already printed its line.
     """
-    stats = terminalreporter.stats
-    passed = len(stats.get("passed", []))
-    failed = len(stats.get("failed", [])) + len(stats.get("error", []))
-    terminalreporter.write_line(f"{_suite_name(config)}: {passed} passed, {failed} failed")
+    result = yield
+    terminalreporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    if terminalreporter is not None:
+        stats = terminalreporter.stats
+        passed = len(stats.get("passed", []))
+        failed = len(stats.get("failed", [])) + len(stats.get("error", []))
+        name = _suite_name(session.config)
+        terminalreporter.write_line(f"{name}: {passed} passed, {failed} failed")
+    return result
