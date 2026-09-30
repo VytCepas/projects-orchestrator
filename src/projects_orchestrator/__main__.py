@@ -1009,6 +1009,9 @@ def _cmd_work(args: argparse.Namespace) -> int:
         if work.needs_human_run(args.project) is None:
             print(f"no needs-human run for {args.project} to attach to", file=sys.stderr)
             return 2
+        # Attach skips discovery, so load the fleet file here or its `models.attach`
+        # override never becomes the active table (#324 review).
+        _fleet_config(args)
         if work.attach(args.project) is None:
             print(
                 f"could not open a session for {args.project} "

@@ -612,6 +612,29 @@ def test_cli_work_attach(fleet_dir: Path, monkeypatch: pytest.MonkeyPatch) -> No
     assert opened == ["session"]
 
 
+def test_cli_work_attach_honours_the_fleet_files_model_table(
+    fleet_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #324 review: --attach returned before anything loaded the fleet file, so a
+    # models.attach override was ignored and the shipped choice launched instead.
+    from projects_orchestrator import models
+    from projects_orchestrator.__main__ import main
+
+    run = _launched(fleet_dir)
+    runs.finish(run, runs.NEEDS_HUMAN, detail="which db?")
+    fleet_file = tmp_path / "fleet.yaml"
+    fleet_file.write_text(
+        f"roots:\n  - {fleet_dir}\n"
+        "models:\n  attach: {model: sonnet, effort: max, fallback: haiku}\n"
+    )
+    chosen: list[models.ModelChoice] = []
+    monkeypatch.setattr(
+        work, "_default_session", lambda *_a: chosen.append(models.choice_for(models.ATTACH))
+    )
+    assert main(["work", "alpha", "--attach", "--fleet", str(fleet_file)]) == 0
+    assert chosen == [models.ModelChoice("sonnet", "max", "haiku")]
+
+
 def test_cli_work_attach_without_a_needs_human_run_exits_two(fleet_dir: Path, capsys) -> None:
     from projects_orchestrator.__main__ import main
 
