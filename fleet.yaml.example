@@ -39,3 +39,17 @@ memory_sources: []
 # tile reads `host: unknown` when this is absent, fails, times out or prints
 # nothing, never blank and never "ok" by default.
 # host_health_command: ~/bin/host-health --one-line
+
+# Which model tier and effort each agent launch runs on, per task class: `heal`,
+# `work` (which `campaign` dispatches through) and `attach` (the interactive
+# session taken over a failed run). Every unattended run has a fresh HOME, so
+# nothing else selects a model. Omit the block for the shipped defaults; naming a
+# class replaces that class's entry, and an entry must carry all three keys.
+#   model / fallback: a tier alias only — haiku, sonnet or opus, never a pinned
+#     model id — and the fallback must differ from the model.
+#   effort: low, medium, high, xhigh or max.
+# An invalid block is refused whole, with a warning, and the defaults stand.
+# models:
+#   heal:   {model: sonnet, effort: medium, fallback: opus}
+#   work:   {model: sonnet, effort: high,   fallback: opus}
+#   attach: {model: opus,   effort: high,   fallback: sonnet}

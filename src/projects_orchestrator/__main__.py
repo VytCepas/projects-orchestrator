@@ -27,6 +27,7 @@ from projects_orchestrator import (
     cache,
     campaign,
     cost,
+    models,
     orphans,
     runs,
     selector,
@@ -148,12 +149,20 @@ _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 
 def _fleet_config(args: argparse.Namespace) -> FleetConfig:
-    """Resolve discovery config from --fleet / --root / defaults."""
+    """Resolve discovery config from --fleet / --root / defaults.
+
+    Also activates the config's model table (:mod:`models`): every CLI path that
+    can launch an agent resolves its config here, so this is where the fleet
+    file's ``models:`` becomes the table the launchers read.
+    """
     if args.fleet:
-        return load_fleet_config(Path(args.fleet))
-    if args.root:
-        return FleetConfig(roots=(Path(args.root).expanduser().resolve(),))
-    return default_fleet_config()
+        config = load_fleet_config(Path(args.fleet))
+    elif args.root:
+        config = FleetConfig(roots=(Path(args.root).expanduser().resolve(),))
+    else:
+        config = default_fleet_config()
+    models.configure(config.models)
+    return config
 
 
 def _discover(args: argparse.Namespace) -> Fleet:

@@ -568,6 +568,61 @@ def test_the_agent_launches_with_a_scrubbed_environment(
     assert env["XDG_CONFIG_HOME"].startswith(env["HOME"])
 
 
+@pytest.mark.inspects_agent_launch
+def test_the_heal_agent_carries_model_effort_and_fallback(
+    fleet_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #324: the heal launch gets a fresh HOME, so no user model setting applies —
+    # the argv must say which tier and effort to run.
+    from projects_orchestrator import heal as heal_mod
+
+    descriptor = load_descriptor(make_project(fleet_dir, "alpha", tooling={"lint": "true"}))
+    captured: list[list[str]] = []
+
+    def spy(command: list[str], **_kwargs: object) -> object:
+        captured.append(command)
+        raise OSError("stop before a real claude runs")
+
+    monkeypatch.setattr(heal_mod.subprocess, "run", spy)
+    heal_mod._default_agent_run(descriptor, "fix it")
+
+    argv = captured[0]
+    assert {"--model", "--effort", "--fallback-model"} <= set(argv), argv
+    model = argv[argv.index("--model") + 1]
+    fallback = argv[argv.index("--fallback-model") + 1]
+    assert model in {"haiku", "sonnet", "opus"}  # an alias, never a pinned id
+    assert argv[argv.index("--effort") + 1] in {"low", "medium", "high", "xhigh", "max"}
+    assert fallback in {"haiku", "sonnet", "opus"}
+    assert fallback != model
+
+
+@pytest.mark.inspects_agent_launch
+def test_the_heal_agent_reads_the_table_not_a_literal(
+    fleet_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from projects_orchestrator import heal as heal_mod
+    from projects_orchestrator import models
+
+    table = {**models.DEFAULT_TABLE, models.HEAL: models.ModelChoice("haiku", "low", "opus")}
+    monkeypatch.setattr(models, "_active", table)
+    descriptor = load_descriptor(make_project(fleet_dir, "alpha", tooling={"lint": "true"}))
+    captured: list[list[str]] = []
+
+    def spy(command: list[str], **_kwargs: object) -> object:
+        captured.append(command)
+        raise OSError("stop before a real claude runs")
+
+    monkeypatch.setattr(heal_mod.subprocess, "run", spy)
+    heal_mod._default_agent_run(descriptor, "fix it")
+
+    argv = captured[0]
+    assert [argv[argv.index(f) + 1] for f in ("--model", "--effort", "--fallback-model")] == [
+        "haiku",
+        "low",
+        "opus",
+    ]
+
+
 def _failing(fleet_dir: Path, name: str) -> object:
     """A git-backed project whose lint gate fails until ``fixed.txt`` exists."""
     project = make_project(fleet_dir, name, tooling={"lint": "test -f fixed.txt"})

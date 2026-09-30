@@ -145,7 +145,9 @@ commands* — the deterministic dispatcher still executes them.
 Copy [`fleet.yaml.example`](fleet.yaml.example) to `fleet.yaml` and list
 scan roots / explicit paths. The same file can list extra `memory_sources` for
 `memory` search, and a `host_health_command` whose first output line becomes the
-fleet view's host tile (`host: unknown` until one is declared and answers). Without it, the orchestrator scans
+fleet view's host tile (`host: unknown` until one is declared and answers), and a
+`models:` table naming the model tier and effort each agent launch (`heal`, `work`,
+`attach`) runs on. Without it, the orchestrator scans
 `$PO_FLEET_ROOT` when that is exported, else the directory the repositories
 live in side by side: `$PORT_ROOT`, else `~/port`. An empty `PORT_ROOT` counts
 as unset, and with neither `PORT_ROOT` nor `HOME` set there is no default —

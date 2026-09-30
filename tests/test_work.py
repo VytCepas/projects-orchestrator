@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -853,3 +854,150 @@ def test_cli_work_rejects_a_non_finite_budget(fleet_dir: Path, capsys) -> None:
     _repo(fleet_dir)
     assert main(["work", "alpha", "t", "--budget", "inf", "--root", str(fleet_dir)]) == 2
     assert "finite" in capsys.readouterr().err
+
+
+# --- Model tier and effort per task class (#324) ------------------------------
+#
+# Every launcher starts `claude` under a FRESH HOME, so no user model setting
+# reaches it: without explicit flags each unattended run silently takes the CLI
+# default. These tests read the argv the launcher really builds.
+
+_TIER_ALIASES = {"haiku", "sonnet", "opus"}
+_EFFORTS = {"low", "medium", "high", "xhigh", "max"}
+
+
+def _flag(argv: list[str], name: str) -> str:
+    assert name in argv, f"{name} missing from the agent argv: {argv}"
+    return argv[argv.index(name) + 1]
+
+
+def _assert_tier_flags(argv: list[str]) -> None:
+    model = _flag(argv, "--model")
+    assert model in _TIER_ALIASES  # an alias, never a pinned id
+    assert _flag(argv, "--effort") in _EFFORTS
+    fallback = _flag(argv, "--fallback-model")
+    assert fallback in _TIER_ALIASES
+    assert fallback != model
+
+
+def _capture_run_argv(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    captured: list[list[str]] = []
+
+    def fake_run(command, **_kwargs):
+        captured.append(command)
+        raise OSError("stop here — we only want the argv")
+
+    monkeypatch.setattr(work.subprocess, "run", fake_run)
+    return captured
+
+
+def test_the_default_agent_carries_model_effort_and_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured = _capture_run_argv(monkeypatch)
+    work._default_agent(tmp_path, "t", tmp_path / "log", budget_usd=1.0)
+    _assert_tier_flags(captured[0])
+
+
+def test_the_attach_session_carries_model_effort_and_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The interactive claude a human takes over a blocked run in is also started
+    # under a fresh HOME. It follows a failed run, so the escalation rule says opus.
+    captured = _capture_run_argv(monkeypatch)
+    with pytest.raises(OSError, match="only want the argv"):
+        work._default_session(tmp_path, "the briefing", "the handoff note")
+    _assert_tier_flags(captured[0])
+    assert _flag(captured[0], "--model") == "opus"
+
+
+def test_the_launchers_read_the_table_not_a_literal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from projects_orchestrator import models
+
+    table = {
+        **models.DEFAULT_TABLE,
+        models.WORK: models.ModelChoice("haiku", "low", "opus"),
+        models.ATTACH: models.ModelChoice("sonnet", "max", "haiku"),
+    }
+    monkeypatch.setattr(models, "_active", table)
+    captured = _capture_run_argv(monkeypatch)
+    work._default_agent(tmp_path, "t", tmp_path / "log", budget_usd=1.0)
+    with pytest.raises(OSError, match="only want the argv"):
+        work._default_session(tmp_path, "p", "r")
+    work_argv, attach_argv = captured
+    assert [_flag(work_argv, f) for f in ("--model", "--effort", "--fallback-model")] == [
+        "haiku",
+        "low",
+        "opus",
+    ]
+    assert [_flag(attach_argv, f) for f in ("--model", "--effort", "--fallback-model")] == [
+        "sonnet",
+        "max",
+        "haiku",
+    ]
+
+
+def test_launch_records_the_model_and_effort_it_chose(fleet_dir: Path) -> None:
+    run = work.launch(_repo(fleet_dir), "t", spawn=_recording_spawn([]))
+    assert run.model in _TIER_ALIASES
+    assert run.effort in _EFFORTS
+    assert run.fallback_model in _TIER_ALIASES
+    saved = runs.load(run.id)
+    assert (saved.model, saved.effort, saved.fallback_model) == (
+        run.model,
+        run.effort,
+        run.fallback_model,
+    )
+
+
+def test_the_detached_wrapper_runs_the_choice_recorded_at_launch(
+    fleet_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The wrapper is a separate process that never read fleet.yaml: it must run
+    # what the LAUNCHER chose (and recorded), not whatever a fresh process defaults to.
+    from projects_orchestrator import models
+
+    launch_table = {**models.DEFAULT_TABLE, models.WORK: models.ModelChoice("haiku", "low", "opus")}
+    monkeypatch.setattr(models, "_active", launch_table)
+    run = work.launch(_repo(fleet_dir), "t", spawn=_recording_spawn([]))
+    monkeypatch.setattr(models, "_active", models.DEFAULT_TABLE)  # the wrapper's own view
+    captured = _capture_run_argv(monkeypatch)
+    work.run_agent(run.id, land=lambda r: r)
+    argv = captured[0]
+    assert [_flag(argv, f) for f in ("--model", "--effort", "--fallback-model")] == [
+        "haiku",
+        "low",
+        "opus",
+    ]
+
+
+def test_a_queued_record_without_a_choice_runs_the_table_default(
+    fleet_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A run staged before this change has no model on its record; it must still
+    # launch with tier flags rather than the CLI default.
+    run = work.launch(_repo(fleet_dir), "t", spawn=_recording_spawn([]))
+    stripped = replace(run, model="", effort="", fallback_model="")
+    runs.save(stripped)
+    captured = _capture_run_argv(monkeypatch)
+    work.run_agent(run.id, land=lambda r: r)
+    _assert_tier_flags(captured[0])
+
+
+def test_a_corrupt_recorded_model_is_not_passed_to_the_cli(
+    fleet_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = work.launch(_repo(fleet_dir), "t", spawn=_recording_spawn([]))
+    runs.save(replace(run, model="claude-sonnet-5-5", effort="max", fallback_model="opus"))
+    captured = _capture_run_argv(monkeypatch)
+    work.run_agent(run.id, land=lambda r: r)
+    _assert_tier_flags(captured[0])
+
+
+def test_a_campaign_launch_inherits_the_work_choice() -> None:
+    # campaign dispatches through work.launch (its production seam), so it inherits.
+    from projects_orchestrator import campaign
+
+    assert campaign.default_seams().launch is work.launch

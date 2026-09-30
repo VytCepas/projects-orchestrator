@@ -101,6 +101,11 @@ class AgentRun:
         budget_usd: The spend cap this run was launched under, in USD. Set by the
             launcher (a campaign's policy, or ``work --budget``) and recorded here
             so the detached wrapper enforces the cap the launcher chose.
+        model: The tier alias the agent was launched on (:mod:`models`), or ``""``
+            for a run recorded before models were tracked. Recorded so the mix of
+            tiers can be measured; also what the detached wrapper launches with.
+        effort: The ``--effort`` level it was launched with, ``""`` when unrecorded.
+        fallback_model: The ``--fallback-model`` tier it was launched with.
     """
 
     id: str
@@ -118,6 +123,9 @@ class AgentRun:
     ended_at: str = ""
     cost: RunCost | None = None
     budget_usd: float = DEFAULT_BUDGET_USD
+    model: str = ""
+    effort: str = ""
+    fallback_model: str = ""
 
     @property
     def is_terminal(self) -> bool:
@@ -184,6 +192,11 @@ def _as_budget(raw: object) -> float:
     return float(raw)
 
 
+def _as_text(raw: object) -> str:
+    """A recorded string field, or ``""`` when it is absent or not a string."""
+    return raw if isinstance(raw, str) else ""
+
+
 def _parse(raw: object) -> AgentRun | None:
     """Build a run from a decoded JSON blob; ``None`` if it is not one."""
     if not isinstance(raw, dict):
@@ -211,6 +224,9 @@ def _parse(raw: object) -> AgentRun | None:
             ended_at=str(raw.get("ended_at", "")),
             cost=from_record(raw.get("cost")),
             budget_usd=_as_budget(raw.get("budget_usd")),
+            model=_as_text(raw.get("model")),
+            effort=_as_text(raw.get("effort")),
+            fallback_model=_as_text(raw.get("fallback_model")),
         )
     except (KeyError, TypeError, ValueError) as exc:
         _log.debug("malformed run record: %r", exc)

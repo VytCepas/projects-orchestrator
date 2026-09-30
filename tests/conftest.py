@@ -492,3 +492,11 @@ def _reads_survive_mutmuts_copy(request: pytest.FixtureRequest) -> Iterator[None
         return
     missing = uncopied(set(_TOUCHED))
     assert not missing, _copy_advice(request.node.nodeid, missing)
+
+
+@pytest.fixture(autouse=True)
+def _default_model_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every test starts on the shipped model table, whatever a CLI test activated (#324)."""
+    from projects_orchestrator import models
+
+    monkeypatch.setattr(models, "_active", models.DEFAULT_TABLE)

@@ -19,7 +19,7 @@ import fnmatch
 import logging
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -33,6 +33,7 @@ from projects_orchestrator.descriptor import (
     refused_symlink,
     resolve_config,
 )
+from projects_orchestrator.models import DEFAULT_TABLE, ModelChoice, ModelTableError, parse_table
 
 _log = logging.getLogger(__name__)
 
@@ -58,6 +59,9 @@ class FleetConfig:
             beside the projects' own (#247), in the memory-file format.
         host_health_command: The command whose first output line is the fleet
             view's host-health tile (#247); ``""`` when not declared.
+        models: Which model tier and effort each agent launch runs on (#324),
+            from the ``models:`` key: :data:`models.DEFAULT_TABLE` with the file's
+            per-class overrides applied.
     """
 
     roots: tuple[Path, ...] = ()
@@ -68,6 +72,7 @@ class FleetConfig:
     warnings: tuple[str, ...] = ()
     memory_sources: tuple[Path, ...] = ()
     host_health_command: str = ""
+    models: Mapping[str, ModelChoice] = field(default_factory=lambda: DEFAULT_TABLE)
 
 
 @dataclass(frozen=True)
@@ -137,6 +142,13 @@ def load_fleet_config(fleet_file: Path) -> FleetConfig:
     if not isinstance(host_command, str):
         warnings = (*warnings, "host_health_command must be a string — ignored")
         host_command = ""
+    try:
+        model_table = parse_table(raw.get("models"))
+    except ModelTableError as exc:
+        # Never raises (ADR-003): a bad table is refused as a whole, so a launch
+        # never runs on a half-applied one, and the operator is told which value.
+        warnings = (*warnings, f"{exc} — the models table is ignored, defaults apply")
+        model_table = dict(DEFAULT_TABLE)
     return FleetConfig(
         roots=paths("roots"),
         projects=paths("projects"),
@@ -146,6 +158,7 @@ def load_fleet_config(fleet_file: Path) -> FleetConfig:
         warnings=warnings,
         memory_sources=paths("memory_sources"),
         host_health_command=host_command,
+        models=model_table,
     )
 
 
