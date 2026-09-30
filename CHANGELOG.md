@@ -12,6 +12,16 @@ version's only source. `tests/test_version.py` fails when they disagree.
 
 ### Added
 
+- **A model tier and effort per task class** (#324). Every unattended
+  `claude` this tool starts runs under a fresh HOME, so it took the CLI default
+  model. Each launcher now passes `--model`, `--effort` and `--fallback-model`,
+  read from one table (`models.py`, overridable under `models:` in `fleet.yaml`):
+  `heal` and `work` on `sonnet`, and `attach` (the interactive session a human
+  takes over a failed run in) on `opus`. Only the aliases `haiku`, `sonnet` and
+  `opus` are accepted; a pinned model id, an unknown effort or a fallback equal to
+  its model is refused at load with a warning, and the defaults stand. A `work` run
+  records its `model`, `effort` and `fallback_model` so the mix can be measured;
+  older records still load.
 - `just install`, the one install route for the tool itself. With no flag it is
   a dry run that prints the source, commit, target and command, and what
   `--apply` would refuse; it exits 1 when `--apply` would refuse, unless the

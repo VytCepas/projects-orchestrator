@@ -540,3 +540,43 @@ def test_a_non_finite_persisted_budget_falls_back_to_the_default() -> None:
         # json.dumps emits bare Infinity/NaN (non-standard but Python round-trips it).
         path.write_text(json.dumps(raw))
         assert load(run.id).budget_usd == DEFAULT_BUDGET_USD
+
+
+# --- The model and effort a run used (#324) -------------------------------------
+
+
+def test_a_new_run_has_no_model_recorded_until_a_launcher_chooses() -> None:
+    run = new_run("alpha", "t")
+    assert (run.model, run.effort, run.fallback_model) == ("", "", "")
+
+
+def test_model_and_effort_round_trip_through_persistence() -> None:
+    run = replace(new_run("alpha", "t"), model="sonnet", effort="high", fallback_model="opus")
+    assert save(run)
+    loaded = load(run.id)
+    assert (loaded.model, loaded.effort, loaded.fallback_model) == ("sonnet", "high", "opus")
+
+
+def test_a_run_recorded_before_models_were_recorded_still_loads() -> None:
+    run = new_run("alpha", "t")
+    save(run)
+    path = state_dir() / f"{run.id}.json"
+    raw = json.loads(path.read_text())
+    for key in ("model", "effort", "fallback_model"):
+        del raw[key]  # the key must exist now (else this proves nothing) ...
+    path.write_text(json.dumps(raw))
+    loaded = load(run.id)
+    assert loaded is not None  # ... and its absence must not lose the record
+    assert (loaded.model, loaded.effort, loaded.fallback_model) == ("", "", "")
+
+
+def test_a_non_string_recorded_model_reads_back_as_unrecorded() -> None:
+    run = new_run("alpha", "t")
+    save(run)
+    path = state_dir() / f"{run.id}.json"
+    raw = json.loads(path.read_text())
+    raw["model"], raw["effort"] = ["sonnet"], 7
+    path.write_text(json.dumps(raw))
+    loaded = load(run.id)
+    assert loaded is not None
+    assert (loaded.model, loaded.effort) == ("", "")

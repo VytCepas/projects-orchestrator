@@ -382,6 +382,17 @@ Read and search the fleet's memory — the "all-knowing" layer.
 - `def load_memory` — Load one project's memory via its tier's retrieval surface; never raises.
 - `def search_memory` — Search all loaded memories, ranked by BM25 relevance (pure).
 
+### `projects_orchestrator/models.py`
+
+Which model tier and effort each kind of agent launch runs on (#324).
+
+- `class ModelTableError` — A model table value the launchers must never be handed.
+- `class ModelChoice` — The tier, effort and fallback tier one task class runs on.
+- `def parse_table` — Merge a ``models:`` override onto :data:`DEFAULT_TABLE`, or raise.
+- `def from_record` — A launcher's recorded choice, or ``None`` when it is absent or unusable.
+- `def configure` — Make ``table`` the one launchers consult (the CLI does this per invocation).
+- `def choice_for` — The choice for ``task_class`` under the active table.
+
 ### `projects_orchestrator/naming.py`
 
 The project name is not ours — sanitise it before it becomes a path.
