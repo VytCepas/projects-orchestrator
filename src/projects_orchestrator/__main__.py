@@ -16,6 +16,7 @@ import json
 import logging
 import math
 import os
+import platform
 import sys
 import traceback
 from collections.abc import Iterator
@@ -144,6 +145,8 @@ VERBOSE_ENV = "PROJECTS_ORCHESTRATOR_VERBOSE"
 #: sysexits EX_SOFTWARE: the orchestrator itself failed, which is not the
 #: "something in the fleet needs attention" that 1 means on every data command.
 EXIT_INTERNAL_ERROR = 70
+EXIT_UNSUPPORTED_PLATFORM = 2
+_NATIVE_WINDOWS_PREFIXES = ("MINGW", "MSYS", "CYGWIN", "Windows")
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 
@@ -2121,6 +2124,11 @@ def _silence_stdout() -> None:
             os.close(devnull)
 
 
+def _native_windows() -> bool:
+    """Report whether this is a native Windows shell (the shared platforms contract)."""
+    return platform.system().startswith(_NATIVE_WINDOWS_PREFIXES)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the projects-orchestrator CLI.
 
@@ -2134,6 +2142,14 @@ def main(argv: list[str] | None = None) -> int:
     Returns:
         Process exit code.
     """
+    if _native_windows():
+        print(
+            "projects-orchestrator: a native Windows shell is not supported. "
+            "Run it inside WSL2 (macOS and Linux are supported; "
+            "see the shared platforms contract).",
+            file=sys.stderr,
+        )
+        return EXIT_UNSUPPORTED_PLATFORM
     parser = _build_parser()
     args = parser.parse_args(argv)
     if args.command is None:
