@@ -37,7 +37,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from projects_orchestrator import cost as cost_mod
-from projects_orchestrator import landing, sandbox
+from projects_orchestrator import landing, models, sandbox
 from projects_orchestrator import worktree as wt
 from projects_orchestrator.briefing import build_briefing, evidence_from_checks
 from projects_orchestrator.checks import CheckResult, collect_checks
@@ -313,6 +313,9 @@ def _default_agent_run(descriptor: ProjectDescriptor, prompt: str) -> AgentOutco
         _agent_allowed_tools(descriptor),
         "--max-budget-usd",
         _MAX_BUDGET_USD,
+        # Tier and effort come from the one table (#324): the fresh HOME below
+        # means no user model setting reaches this run, so unset = CLI default.
+        *models.choice_for(models.HEAL).cli_args(),
     ]
     # ADR-007 §4: the agent runs with the data plane scrubbed OUT of its
     # environment. The --allowedTools list stops the CLI from running gcloud;

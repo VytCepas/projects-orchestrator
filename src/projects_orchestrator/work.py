@@ -38,7 +38,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
-from projects_orchestrator import briefing, cost, landing, runs, sandbox
+from projects_orchestrator import briefing, cost, landing, models, runs, sandbox
 from projects_orchestrator import worktree as wt
 from projects_orchestrator.descriptor import ProjectDescriptor
 from projects_orchestrator.naming import safe_component
@@ -110,15 +110,25 @@ def _default_spawn(argv: list[str], log_path: Path) -> int:
     return process.pid
 
 
-def _default_agent(worktree: Path, prompt: str, log_path: Path, *, budget_usd: float) -> bool:
+def _default_agent(
+    worktree: Path,
+    prompt: str,
+    log_path: Path,
+    *,
+    budget_usd: float,
+    choice: models.ModelChoice | None = None,
+) -> bool:
     """Run the ``claude`` CLI in ``worktree`` with the data plane scrubbed out.
 
     Returns whether the process exited 0. Output streams to ``log_path`` so a
     detached run can be tailed. The environment carries no operator credential
     and a fresh HOME (:mod:`sandbox`), so even the general Bash tool cannot reach
     production. ``budget_usd`` is the run's own cap (:data:`DEFAULT_BUDGET_USD`
-    unless the launcher chose otherwise), bound in by :func:`run_agent`.
+    unless the launcher chose otherwise), bound in by :func:`run_agent`, which also
+    binds ``choice`` — the tier and effort the launcher recorded (:mod:`models`).
+    ``None`` reads the table's ``work`` entry.
     """
+    choice = choice or models.choice_for(models.WORK)
     command = [
         "claude",
         "-p",
@@ -131,6 +141,7 @@ def _default_agent(worktree: Path, prompt: str, log_path: Path, *, budget_usd: f
         _AGENT_TOOLS,
         "--max-budget-usd",
         f"{budget_usd:.2f}",
+        *choice.cli_args(),
     ]
     try:
         with (
@@ -212,7 +223,17 @@ def launch(
     is exactly the flake that taught this lesson.
     """
     spawn = spawn or _default_spawn
-    run = replace(runs.new_run(descriptor.name, task), budget_usd=budget_usd)
+    # The tier is chosen HERE, in the operator's process, and recorded: the detached
+    # wrapper never reads fleet.yaml, so it must run what was decided (and the record
+    # is what lets the tier mix be measured).
+    choice = models.choice_for(models.WORK)
+    run = replace(
+        runs.new_run(descriptor.name, task),
+        budget_usd=budget_usd,
+        model=choice.model,
+        effort=choice.effort,
+        fallback_model=choice.fallback,
+    )
 
     wt.prune_expired(descriptor.path, descriptor.name)
     slug = wt.run_slug()
@@ -274,7 +295,13 @@ def run_agent(
     # Bind the run's own budget into the production agent here, not at the top:
     # only now is the run (and its budget_usd) loaded from disk. A substituted
     # ``agent`` — a test's — is used verbatim; the seam stays a plain 3-arg callable.
-    agent = agent or functools.partial(_default_agent, budget_usd=run.budget_usd)
+    # The recorded tier is validated on the way out (a run staged before models were
+    # recorded, or an edited record, falls back to the table's ``work`` entry).
+    agent = agent or functools.partial(
+        _default_agent,
+        budget_usd=run.budget_usd,
+        choice=models.from_record(run.model, run.effort, run.fallback_model),
+    )
 
     worktree = Path(run.worktree)
     # Snapshot the marker BEFORE the run: a repo may already ship a `NEEDS_HUMAN.md`
@@ -445,7 +472,7 @@ def _default_session(worktree: Path, prompt: str, reason: str) -> None:
         f"not.\n\n--- Its handoff note ---\n{reason}\n\n--- Its original briefing "
         f"---\n{prompt}"
     )
-    command = ["claude", seed]
+    command = ["claude", *models.choice_for(models.ATTACH).cli_args(), seed]
     with tempfile.TemporaryDirectory(prefix="po-attach-home-") as home:
         subprocess.run(  # noqa: S603 — fixed argv, no shell; interactive by design
             command,
