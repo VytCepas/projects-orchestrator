@@ -183,7 +183,8 @@ def port_root(env: Mapping[str, str] | None = None) -> str | None:
     - Trailing slashes are stripped, stopping at ``/`` itself. A root that does
       not exist yet has nothing to resolve, so only the spelling can make
       ``~/port/`` and ``~/port`` agree.
-    - No per-OS default is guessed. Windows has none yet (#311); there, as
+    - No per-OS default is guessed. Native Windows is refused at CLI entry
+      (the shared platforms contract, #326), so no default exists there; as
       anywhere, an unset ``HOME`` means no root rather than an invented one.
 
     Args:

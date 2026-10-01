@@ -1181,3 +1181,20 @@ def test_status_json_also_warns_about_watch(fleet_dir: Path, capsys) -> None:
     captured = capsys.readouterr()
     assert "watch has never run" in captured.err
     assert json.loads(captured.out) == [] or isinstance(json.loads(captured.out), list)
+
+
+@pytest.mark.parametrize(
+    "system", ["MINGW64_NT-10.0-22631", "MSYS_NT-10.0", "CYGWIN_NT-10.0", "Windows"]
+)
+def test_native_windows_is_refused_naming_wsl2(system: str, monkeypatch, capsys) -> None:
+    """A native Windows shell exits non-zero before parsing, naming WSL2 (#326)."""
+    monkeypatch.setattr("platform.system", lambda: system)
+    assert main(["--version"]) != 0
+    assert "WSL2" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("system", ["Linux", "Darwin"])
+def test_linux_and_darwin_are_not_refused(system: str, monkeypatch) -> None:
+    """Supported platforms reach the normal command path."""
+    monkeypatch.setattr("platform.system", lambda: system)
+    assert main([]) == 0
