@@ -606,7 +606,7 @@ class RegisterOutcome:
 def register_project(fleet_file: Path, project: Path) -> RegisterOutcome:
     """Add a project path to a fleet file's ``projects:`` list; never raises.
 
-    Consumes the ``scaffold --json`` seam: a freshly-scaffolded project is
+    Consumes the ``project-init --json`` seam: a freshly-scaffolded project is
     registered into the orchestrator's own fleet file (not the child tree —
     ADR-003 forbids writing to children, not to the orchestrator's registry)
     so the next ``discover`` governs it without a manual edit. Idempotent: a
