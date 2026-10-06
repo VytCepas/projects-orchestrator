@@ -287,7 +287,12 @@ def receipt_problems(env: Path, scripts: Path) -> list[str]:
     receipt = env / "uv-receipt.toml"
     if not receipt.is_file():
         return [f"no uv-receipt.toml in {env}"]
-    tool = tomllib.loads(receipt.read_text(encoding="utf-8")).get("tool", {})
+    try:
+        tool = tomllib.loads(_dist_text(receipt)).get("tool", {})
+    except UnreadableError as exc:
+        return [f"receipt: {exc}"]
+    except tomllib.TOMLDecodeError as exc:
+        return [f"receipt: {receipt.name} is not valid TOML ({exc})"]
     problems: list[str] = []
     reqs = [r for r in tool.get("requirements", []) if r.get("name") == _TOOL]
     source = reqs[0].get("directory") if reqs else None
@@ -295,7 +300,10 @@ def receipt_problems(env: Path, scripts: Path) -> list[str]:
         problems.append(
             f"source: installed from {source or reqs}, not this checkout ({_REPO_ROOT})"
         )
-    for ep in tool.get("entrypoints", []):
+    entrypoints = tool.get("entrypoints", [])
+    if _TOOL not in {ep.get("name") for ep in entrypoints}:
+        problems.append(f"entrypoint: the receipt records no {_TOOL} entrypoint")
+    for ep in entrypoints:
         link = Path(ep.get("install-path", ""))
         if not _same_entry(link, scripts / link.name):
             problems.append(f"entrypoint: {link} does not resolve to {scripts / link.name}")
@@ -314,10 +322,10 @@ def caller_path() -> list[str]:
     dirs = os.environ.get("PATH", "").split(os.pathsep)
     depth = os.environ.get("UV_RUN_RECURSION_DEPTH", "")
     own = Path(sysconfig.get_path("scripts")).resolve()
-    for _ in range(int(depth) if depth.isdigit() else 0):
-        if not dirs or not dirs[0] or Path(dirs[0]).resolve() != own:
-            break
-        dirs = dirs[1:]
+    levels = int(depth) if depth.isdigit() else 0
+    # Each level adds ONE prefix, but an outer level's is its own interpreter's dir, not ours (#322).
+    if levels and dirs and dirs[0] and Path(dirs[0]).resolve() == own:
+        dirs = dirs[levels:]
     return dirs
 
 

@@ -418,7 +418,8 @@ def _cmd_test_fleet(args: argparse.Namespace) -> int:
         print(f"{FLEET_TEST_STAMP} configured but not tested: {entry}", file=sys.stderr)
     selected = list(fleet.descriptors)
     if args.project:
-        selected = [d for d in selected if d.name == args.project]
+        found = fleet.get(args.project)  # case-insensitive, like every other handler (#322)
+        selected = [found] if found in selected else []
         if not selected:
             print(f"{FLEET_TEST_STAMP} unknown project: {args.project}")
             return 2
