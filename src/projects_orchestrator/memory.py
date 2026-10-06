@@ -183,11 +183,53 @@ def _is_dir(path: Path) -> bool:
         return False
 
 
-def _load_memory_dir(memory_path: Path, label: str) -> ProjectMemory:
-    """Read one memory directory's fact files under ``label``; never raises."""
+#: Bounds on a memory SOURCE's recursion, so a mispointed one cannot walk a home
+#: directory (#306). A project's own memory directory is never recursive.
+_SOURCE_MAX_DEPTH = 6
+_SOURCE_MAX_FILES = 5000
+
+
+def _source_markdown(root: Path, warnings: list[str]) -> list[Path]:
+    """Every ``*.md`` under ``root``, bounded in depth and count; never raises (#306)."""
+    found: list[Path] = []
+    top = nested = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        depth = len(Path(dirpath).relative_to(root).parts)
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+        if depth >= _SOURCE_MAX_DEPTH:
+            dirnames[:] = []
+        for name in sorted(filenames):
+            if name.endswith(".md"):
+                if depth:
+                    nested += 1
+                elif name not in _INDEX_FILES:
+                    top += 1
+                if len(found) >= _SOURCE_MAX_FILES:
+                    warnings.append(
+                        f"memory source read stopped at {_SOURCE_MAX_FILES} files — not all indexed"
+                    )
+                    return found
+                found.append(Path(dirpath) / name)
+    if nested > top:
+        warnings.append(
+            f"memory source top level holds {top} markdown file(s), subdirectories "
+            f"{nested} — all read, but this is not a flat memory directory"
+        )
+    return found
+
+
+def _load_memory_dir(memory_path: Path, label: str, *, recursive: bool = False) -> ProjectMemory:
+    """Read one memory directory's fact files under ``label``; never raises.
+
+    A project's directory is flat by the memory-file contract, so it keeps the
+    flat glob; a ``memory_sources`` directory makes no such promise (#306).
+    """
     files: list[MemoryFile] = []
     warnings: list[str] = []
-    for path in sorted(memory_path.glob("*.md")):
+    candidates = (
+        _source_markdown(memory_path, warnings) if recursive else sorted(memory_path.glob("*.md"))
+    )
+    for path in candidates:
         if path.name in _INDEX_FILES:
             continue
         parsed = _read_memory_file(path, label)
@@ -275,7 +317,7 @@ def load_memory_sources(
                 )
             )
             continue
-        memories.append(_load_memory_dir(path, label))
+        memories.append(_load_memory_dir(path, label, recursive=True))
     return memories
 
 

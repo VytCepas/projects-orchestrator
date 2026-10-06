@@ -18,6 +18,7 @@ from __future__ import annotations
 import fnmatch
 import logging
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -603,6 +604,60 @@ class RegisterOutcome:
     warnings: tuple[str, ...] = ()
 
 
+_PROJECTS_KEY = re.compile(r"^projects\s*:\s*(\[\s*\])?\s*(#.*)?$")
+_TOP_KEY = re.compile(r"^[^\s#-]")
+
+
+def _add_item(lines: list[str], item: str) -> None:
+    """Add a ``projects:`` list item to ``lines`` in place, matching the indent."""
+    found = [(i, m) for i, ln in enumerate(lines) if (m := _PROJECTS_KEY.match(ln))]
+    if not found:
+        lines += ["projects:\n", item + "\n"]
+        return
+    start, match = found[0]
+    end = start
+    for i in range(start + 1, len(lines)):
+        if _TOP_KEY.match(lines[i]):
+            break
+        if lines[i].strip() and not lines[i].lstrip().startswith("#"):
+            end = i
+    if match.group(1):  # `projects: []`
+        lines[start : end + 1] = ["projects:\n", item + "\n"]
+        return
+    body = lines[start + 1 : end + 1]
+    indent = next(
+        (ln[: len(ln) - len(ln.lstrip())] for ln in body if ln.lstrip().startswith("- ")), ""
+    )
+    lines.insert(end + 1, f"{indent}{item}\n")
+
+
+def _with_project(text: str, project: str) -> str | None:
+    """``text`` with ``project`` added to ``projects:``, all else untouched (#305).
+
+    Returns ``None`` when the edit cannot be proven lossless: the result must
+    parse to the original document with only ``projects`` extended.
+    """
+    try:
+        original = yaml.safe_load(text) if text.strip() else {}
+    except yaml.YAMLError:
+        return None  # expected: None means declined; register_project says so
+    if not isinstance(original, dict):
+        return None
+    item = yaml.safe_dump([project], default_flow_style=False).rstrip("\n")
+    lines = text.splitlines(keepends=True)
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+    _add_item(lines, item)
+    after = "".join(lines)
+    try:
+        parsed = yaml.safe_load(after)
+    except yaml.YAMLError:
+        return None  # expected: None means declined; register_project says so
+    expected = dict(original)
+    expected["projects"] = [*(original.get("projects") or []), project]
+    return after if parsed == expected else None
+
+
 def register_project(fleet_file: Path, project: Path) -> RegisterOutcome:
     """Add a project path to a fleet file's ``projects:`` list; never raises.
 
@@ -638,18 +693,26 @@ def register_project(fleet_file: Path, project: Path) -> RegisterOutcome:
         if resolved in listed:
             return RegisterOutcome(fleet_file, resolved, added=False, warnings=warnings)
 
-        projects = sorted({*listed, resolved}, key=str)
-        document: dict[str, object] = {
-            "projects": [str(p) for p in projects],
-            "roots": [str(p) for p in (existing.roots if existing is not None else ())],
-        }
-        # Preserve fields the loader treats as first-class but this rewrite would
-        # otherwise silently drop — an omitted `exclude` re-admits excluded repos and
-        # a dropped `include_plain_repos` flips discovery, both invisibly.
-        if existing is not None and existing.exclude:
-            document["exclude"] = list(existing.exclude)
-        if existing is not None and existing.include_plain_repos:
-            document["include_plain_repos"] = existing.include_plain_repos
+        # Edit the file's text, never rebuild it from an allow-list (#305): a rebuilt
+        # document dropped memory_sources, host_health_command, models and every comment.
+        try:
+            before = fleet_file.read_text(encoding="utf-8") if fleet_file.is_file() else ""
+        except (OSError, UnicodeDecodeError) as exc:
+            return RegisterOutcome(
+                fleet_file, resolved, False, (*warnings, f"cannot read {fleet_file}: {exc}")
+            )
+        after = _with_project(before, str(resolved))
+        if after is None:
+            return RegisterOutcome(
+                fleet_file,
+                resolved,
+                added=False,
+                warnings=(
+                    *warnings,
+                    f"cannot edit {fleet_file} without losing content — left unchanged; "
+                    f"add `- {resolved}` under `projects:` by hand",
+                ),
+            )
         try:
             # WRITE THROUGH A SYMLINK, never over it (raised in review on #240).
             # `atomic_write` replaces a directory entry, so pointing --fleet at
@@ -659,7 +722,7 @@ def register_project(fleet_file: Path, project: Path) -> RegisterOutcome:
             # `write_text` followed the link, so this was a regression the
             # hardening introduced rather than a pre-existing gap.
             target = fleet_file.resolve() if fleet_file.is_symlink() else fleet_file
-            persist.atomic_write(target, yaml.safe_dump(document, sort_keys=True))
+            persist.atomic_write(target, after)
         except OSError as exc:
             return RegisterOutcome(
                 fleet_file,
