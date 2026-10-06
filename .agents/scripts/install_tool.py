@@ -37,6 +37,7 @@ import subprocess
 import sys
 import sysconfig
 import tarfile
+import tempfile
 import tomllib
 from email.parser import Parser
 from pathlib import Path, PurePosixPath
@@ -87,6 +88,23 @@ def _git(*args: str, strip: bool = True) -> str:
     if proc.returncode != 0:
         raise RefusedError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
     return proc.stdout.strip() if strip else proc.stdout
+
+
+def _status_without_stat_cache() -> list[str]:
+    """`git status --porcelain` lines, with every tracked file hashed instead of stat-trusted.
+
+    A cleared skip-worktree or assume-unchanged flag leaves the entry's stat from before
+    the edit, and git trusts it when size and whole-second mtime still match: a same-size
+    edit made in that second reads clean (#331). A throwaway index built from HEAD holds
+    no stat, so status must read the bytes.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        env = os.environ | {"GIT_INDEX_FILE": str(Path(tmp) / "index")}
+        for argv in (["read-tree", "HEAD"], ["status", "--porcelain", "--untracked-files=all"]):
+            proc = _run(["git", "-C", str(_REPO_ROOT), *argv], env=env)
+            if proc.returncode != 0:
+                raise RefusedError(f"git {' '.join(argv)} failed: {proc.stderr.strip()}")
+        return proc.stdout.splitlines()
 
 
 def _uv() -> str:
@@ -486,14 +504,19 @@ def apply_problems(*, fetch: bool) -> list[str]:
     name = _git_proc("symbolic-ref", "--short", "-q", "HEAD").stdout.strip() or "detached HEAD"
     if name != _BASE:
         problems.append(f"on '{name}', not {_BASE}: an unmerged branch is unreviewed text")
-    # Unstripped: porcelain's first column is a space for an unstaged change.
-    dirty = _git("status", "--porcelain", "--untracked-files=all", strip=False).splitlines()
-    if dirty:
-        shown = "\n      ".join(dirty[:10] + (["..."] if len(dirty) > 10 else []))
-        problems.append(f"uncommitted changes would be installed unreviewed:\n      {shown}")
     # status skips a skip-worktree or assume-unchanged file; uv builds it (project-init#1047).
     entries = _git("ls-files", "-v", "-z", strip=False).split("\0")
     hidden = [f"{_HIDDEN.get(e[0], e[0])}: {e[2:]}" for e in entries if e and e[0] != "H"]
+    hidden_paths = {e[2:] for e in entries if e and e[0] != "H"}
+    # Unstripped: porcelain's first column is a space for an unstaged change.
+    dirty = [
+        line
+        for line in _status_without_stat_cache()
+        if line[3:] not in hidden_paths  # named by the hidden-files refusal instead
+    ]
+    if dirty:
+        shown = "\n      ".join(dirty[:10] + (["..."] if len(dirty) > 10 else []))
+        problems.append(f"uncommitted changes would be installed unreviewed:\n      {shown}")
     if hidden:
         shown = "\n      ".join(hidden[:10] + (["..."] if len(hidden) > 10 else []))
         problems.append(
