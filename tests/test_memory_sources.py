@@ -12,6 +12,7 @@ from projects_orchestrator.__main__ import main
 from projects_orchestrator.controller import ControllerContext, Intent, dispatch
 from projects_orchestrator.descriptor import load_descriptor
 from projects_orchestrator.memory import (
+    _load_memory_dir,
     load_memory_sources,
     load_project_memory,
     memory_source_label,
@@ -131,3 +132,29 @@ def test_the_repl_searches_a_source(fleet_dir: Path, tmp_path: Path) -> None:
     ctx = ControllerContext(config=FleetConfig(roots=(fleet_dir,), memory_sources=(source,)))
     lines = list(dispatch(Intent(verb="memory", args=("nightly",)), ctx))
     assert any(line.startswith(f"{memory_source_label(source)}/a.md:") for line in lines)
+
+
+def test_a_source_is_read_recursively_but_a_project_stays_flat(tmp_path: Path) -> None:
+    """#306: a source carries no flatness promise; a project's directory does."""
+    source = _source(tmp_path, {"top.md": ("Top", "term")})
+    (source / "work" / "deep").mkdir(parents=True)
+    for rel in ("work/a.md", "work/deep/b.md"):
+        (source / rel).write_text(_NOTE.format(name=rel, description=rel, body="term"))
+    [memory] = load_memory_sources((source,))
+    assert sorted(f.name for f in memory.files) == ["Top", "work/a.md", "work/deep/b.md"]
+    assert any("not a flat memory directory" in w for w in memory.warnings)
+    # The project loader keeps its flat glob: nested markdown is not project memory.
+    assert [f.name for f in _load_memory_dir(source, "p").files] == ["Top"]
+
+
+def test_the_cli_states_files_indexed_per_source(
+    fleet_dir: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    make_project(fleet_dir, "alpha")
+    source = _source(tmp_path, {"a.md": ("Deploy", "the deploy runs nightly")})
+    fleet_file = tmp_path / "fleet.yaml"
+    fleet_file.write_text(f"roots:\n  - {fleet_dir}\nmemory_sources:\n  - {source}\n")
+    main(["memory", "nightly", "--fleet", str(fleet_file)])
+    assert (
+        f"memory source {memory_source_label(source)}: 1 file(s) indexed" in capsys.readouterr().err
+    )

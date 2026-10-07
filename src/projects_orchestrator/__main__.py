@@ -461,6 +461,10 @@ def _cmd_memory(args: argparse.Namespace) -> int:
         fleet.config.memory_sources, tuple(d.memory_path for d in fleet.descriptors)
     )
     for source in sources:
+        # State coverage: a search that can only be wrong quietly names its denominator (#306).
+        print(
+            f"memory source {source.project}: {len(source.files)} file(s) indexed", file=sys.stderr
+        )
         for warning in source.warnings:
             print(f"warning: {warning}", file=sys.stderr)
     hits = search_memory(memories + sources, " ".join(args.query))

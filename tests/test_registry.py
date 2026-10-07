@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 from conftest import make_project
 
 from projects_orchestrator.registry import (
@@ -774,6 +775,54 @@ def test_scanned_sibling_worktrees_are_one_project_without_a_main(tmp_path: Path
     )
     names = _names(FleetConfig(roots=(tmp_path / "root",), include_plain_repos=True))
     assert len(names) == 1 and names[0] in {"wt-a", "wt-b"}, names
+
+
+_FULL_FLEET = """\
+# do not delete: why include_plain_repos is on
+roots: []
+projects: []
+exclude: ["archive-*"]
+include_plain_repos: true
+memory_sources:
+  - ~/notes
+host_health_command: "uptime"
+models:
+  default: {model: opus}
+"""
+
+
+def test_register_keeps_every_other_key_and_comment(tmp_path: Path) -> None:
+    """#305: register edited only `projects`, the rest was rebuilt from an allow-list."""
+    fleet_file = tmp_path / "fleet.yaml"
+    fleet_file.write_text(_FULL_FLEET, encoding="utf-8")
+    project = make_project(tmp_path, "alpha")
+    assert register_project(fleet_file, project).added is True
+    after = fleet_file.read_text(encoding="utf-8")
+    assert after.startswith("# do not delete")
+    expected = _FULL_FLEET.replace("projects: []\n", f"projects:\n- {project.resolve()}\n")
+    assert after == expected
+
+
+def test_register_covers_every_configurable_fleet_field(tmp_path: Path) -> None:
+    """#305: a FleetConfig field added later with no round-trip fails here."""
+    import dataclasses
+
+    derived = {"source", "warnings"}
+    fleet_file = tmp_path / "fleet.yaml"
+    fleet_file.write_text(_FULL_FLEET, encoding="utf-8")
+    register_project(fleet_file, make_project(tmp_path, "alpha"))
+    kept = set(yaml.safe_load(fleet_file.read_text(encoding="utf-8")))
+    fields = {f.name for f in dataclasses.fields(FleetConfig)} - derived
+    assert fields <= kept
+
+
+def test_register_declines_rather_than_dropping_an_unparseable_shape(tmp_path: Path) -> None:
+    fleet_file = tmp_path / "fleet.yaml"
+    body = "projects: [a, b]\nmemory_sources: [x]\n"
+    fleet_file.write_text(body, encoding="utf-8")
+    outcome = register_project(fleet_file, make_project(tmp_path, "alpha"))
+    assert (outcome.added, fleet_file.read_text(encoding="utf-8")) == (False, body)
+    assert any("by hand" in w for w in outcome.warnings)
 
 
 # --- Audit defect: linked worktrees and scratch clones are one project, not many --------
