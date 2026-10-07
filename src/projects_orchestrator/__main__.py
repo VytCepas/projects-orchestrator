@@ -53,6 +53,7 @@ from projects_orchestrator.adapters.cloud import as_check_results as cloud_check
 from projects_orchestrator.adapters.forge import probe_ci
 from projects_orchestrator.adapters.gitlab import provider_is_gitlab
 from projects_orchestrator.adapters.project_init import (
+    SCAFFOLD_JSON_COMMAND,
     latest_plugin_version,
     latest_upstream_version,
     parse_scaffold_result,
@@ -779,7 +780,7 @@ def _cmd_upgrade_plan(args: argparse.Namespace) -> int:
 
 
 def _cmd_register(args: argparse.Namespace) -> int:
-    """Register a freshly-scaffolded project from `scaffold --json` output.
+    """Register a freshly-scaffolded project from `project-init --json` output.
 
     Consumes the project-init ``--json`` seam (#510): reads a scaffold-result
     document (a file path, or ``-`` for stdin) and adds the new project to the
@@ -1845,7 +1846,7 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
         (
             "register",
-            "register a scaffolded project from `project-init scaffold --json` output",
+            f"register a scaffolded project from `{SCAFFOLD_JSON_COMMAND}` output",
             _cmd_register,
             True,
         ),
@@ -1947,7 +1948,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_heal_arguments(sub)
     sub.choices["register"].add_argument(
-        "result", help="path to `scaffold --json` output, or '-' for stdin"
+        "result", help=f"path to `{SCAFFOLD_JSON_COMMAND}` output, or '-' for stdin"
     )
     sub.choices["upgrade-plan"].add_argument("project", nargs="?", help="limit to one project")
     sub.choices["upgrade-plan"].add_argument(

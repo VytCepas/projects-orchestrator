@@ -51,7 +51,7 @@ projects-orchestrator start <project>          # launch the project's run_comman
 projects-orchestrator stop <project>           # terminate the supervised process
 projects-orchestrator logs <project>           # tail the captured run output (-n lines)
 projects-orchestrator upgrade-plan             # scaffold version vs upstream (--apply to trigger upgrades)
-projects-orchestrator register <json>          # register a project from `project-init scaffold --json`
+projects-orchestrator register <json>          # register a project from `project-init --json <target>`
 ```
 
 ### Surfaces

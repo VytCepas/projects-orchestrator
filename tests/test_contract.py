@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 import yaml
 
 from projects_orchestrator.adapters.project_init import parse_scaffold_result
@@ -288,3 +289,24 @@ def test_reader_ladder_is_the_vendored_schemas_ladder() -> None:
                 "memory": {"tier": candidate, "stack": stack, "memory_path": ".agents/memory"},
             }
             assert validator.is_valid(descriptor) is (candidate == tier), (stack, candidate)
+
+
+def test_the_documented_scaffold_invocation_is_not_swallowed_as_a_path() -> None:
+    """#307: `project-init scaffold --json` scaffolded into a directory named `scaffold`."""
+    import re
+    import shutil
+    import subprocess
+
+    from projects_orchestrator.adapters.project_init import SCAFFOLD_JSON_COMMAND
+
+    if shutil.which("project-init") is None:
+        pytest.skip("project-init is not installed")
+    tokens = SCAFFOLD_JSON_COMMAND.split()
+    assert tokens[0] == "project-init"
+    words = [t for t in tokens[1:] if not t.startswith("-")]
+    assert words == ["<target>"], f"a bare word before the target is read as the path: {words}"
+    helptext = subprocess.run(
+        ["project-init", "--help"], capture_output=True, text=True, check=True
+    ).stdout
+    flags = {t for t in tokens[1:] if t.startswith("-")}
+    assert flags <= set(re.findall(r"--[a-z][a-z-]*", helptext))
