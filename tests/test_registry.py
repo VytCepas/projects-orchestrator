@@ -823,3 +823,103 @@ def test_register_declines_rather_than_dropping_an_unparseable_shape(tmp_path: P
     outcome = register_project(fleet_file, make_project(tmp_path, "alpha"))
     assert (outcome.added, fleet_file.read_text(encoding="utf-8")) == (False, body)
     assert any("by hand" in w for w in outcome.warnings)
+
+
+# --- Audit defect: linked worktrees and scratch clones are one project, not many --------
+
+
+def _governed_repo(root: Path, name: str, origin: str) -> Path:
+    """A real git repo carrying a readable descriptor and an ``origin``."""
+    repo = make_project(root, name)
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "remote", "add", "origin", origin)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "init")
+    return repo
+
+
+def _fleet_of(root: Path):
+    return discover(FleetConfig(roots=(root,)))
+
+
+def test_a_fleet_of_repos_with_worktrees_and_scratch_clones_has_one_project_per_repo(
+    tmp_path: Path,
+) -> None:
+    url = "https://github.com/acme/widget.git"
+    canonical = _governed_repo(tmp_path, "widget", url)
+    _git(canonical, "worktree", "add", "-q", "-b", "t", str(tmp_path / "widget-wt-ci"))
+    # An upgrade run's scratch clone: a hidden directory, a different spelling of one origin.
+    _git(tmp_path, "clone", "-q", str(canonical), str(tmp_path / ".pi-upgrade-widget"))
+    _git(
+        tmp_path / ".pi-upgrade-widget", "remote", "set-url", "origin", "git@github.com:acme/widget"
+    )
+    other = _governed_repo(tmp_path, "other", "https://github.com/acme/other.git")
+    fleet = _fleet_of(tmp_path)
+    assert sorted(d.path for d in fleet.descriptors) == sorted(
+        [canonical.resolve(), other.resolve()]
+    )
+    assert not [w for w in fleet.warnings if "duplicate project name" in w], fleet.warnings
+
+
+def test_the_clone_named_for_the_repository_is_the_one_that_stays(tmp_path: Path) -> None:
+    # Sorted by name the hidden clone comes first; the canonical one must win anyway.
+    _governed_repo(tmp_path, ".aaa-scratch", "https://github.com/acme/real.git")
+    canonical = _governed_repo(tmp_path, "real", "https://github.com/acme/real.git")
+    assert [d.path for d in _fleet_of(tmp_path).descriptors] == [canonical.resolve()]
+
+
+def test_two_unrelated_repos_with_no_origin_are_both_kept(tmp_path: Path) -> None:
+    # No origin is not evidence of being the same repository.
+    for name in ("a", "b"):
+        repo = make_project(tmp_path, name)
+        _git(repo, "init", "-q", "-b", "main")
+    assert _names(FleetConfig(roots=(tmp_path,))) == ["a", "b"]
+
+
+def test_a_clone_listed_explicitly_is_the_one_that_stays(tmp_path: Path) -> None:
+    url = "https://github.com/acme/real.git"
+    _governed_repo(tmp_path, "real", url)
+    scratch = _governed_repo(tmp_path, ".scratch", url)
+    fleet = discover(FleetConfig(roots=(tmp_path,), projects=(scratch,)))
+    assert [d.path.name for d in fleet.descriptors] == [".scratch"]
+
+
+def test_an_ungoverned_repos_worktrees_do_not_each_repeat_its_warning(tmp_path: Path) -> None:
+    repo = tmp_path / "ungov"
+    (repo / ".claude").mkdir(parents=True)  # a layout dir with no config.yaml
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / "f").write_text("x", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "init")
+    for i in range(3):
+        _git(repo, "worktree", "add", "-q", "-b", f"t{i}", str(tmp_path / f"ungov-wt-{i}"))
+        (tmp_path / f"ungov-wt-{i}" / ".claude").mkdir(exist_ok=True)
+    said = [w for w in _fleet_of(tmp_path).warnings if "no readable config.yaml" in w]
+    assert said == [
+        f"{repo.resolve()} carries .claude/ but no readable config.yaml — it is NOT being governed"
+    ]
+
+
+def test_a_real_nested_project_stays_reported_beside_worktrees(tmp_path: Path) -> None:
+    canonical = _governed_repo(tmp_path, "mono", "https://github.com/acme/mono.git")
+    make_project(canonical / "packages", "inner")
+    _git(canonical, "worktree", "add", "-q", "-b", "t", str(tmp_path / "mono-wt"))
+    fleet = _fleet_of(tmp_path)
+    assert [d.path.name for d in fleet.descriptors] == ["mono"]
+    assert "inner" in _nested_warning(fleet)
+    assert "mono-wt" not in _nested_warning(fleet)
+
+
+def test_the_hint_does_not_spend_its_budget_walking_worktrees(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A worktree's tree is its repository's tree again; walking it is what used up
+    # the whole budget on a box with forty of them, so the search "stopped looking".
+    import projects_orchestrator.registry as registry
+
+    canonical = _governed_repo(tmp_path, "mono", "https://github.com/acme/mono.git")
+    _git(canonical, "worktree", "add", "-q", "-b", "t", str(tmp_path / "mono-wt"))
+    for i in range(30):
+        (tmp_path / "mono-wt" / f"d{i}").mkdir()
+    monkeypatch.setattr(registry, "_HINT_BUDGET", 20)
+    assert "stopped looking" not in " ".join(_fleet_of(tmp_path).warnings)
