@@ -25,7 +25,9 @@ def test_the_defaults_cover_every_task_class() -> None:
 
 def test_the_defaults_follow_the_tier_decision() -> None:
     # #324: scoped fixes on Sonnet; a human taking over a FAILED run escalates.
-    assert models.DEFAULT_TABLE[models.HEAL].model == "sonnet"
+    # A heal is a narrow fix a gate checks, so it runs on Haiku at high effort,
+    # falling back to Sonnet (a 141-run trial matched Sonnet and Opus there).
+    assert models.DEFAULT_TABLE[models.HEAL] == ModelChoice("haiku", "high", "sonnet")
     assert models.DEFAULT_TABLE[models.WORK].model == "sonnet"
     assert models.DEFAULT_TABLE[models.ATTACH].model == "opus"
 

@@ -4,8 +4,8 @@ Every ``claude`` this program starts runs under a **fresh HOME** (:mod:`sandbox`
 so no user-level model setting reaches it. Without explicit flags an unattended
 run takes whatever the CLI defaults to — a tier chosen
 by nobody. The fleet's decision is to route work to the *smallest tier that
-meets the bar*: Haiku for scans and polling, Sonnet for scoped ticket and review
-fixes, Opus for coordination, guard design and final verification.
+meets the bar*: Haiku for scans, polling and gate-checked heals, Sonnet for ticket
+work, Opus for coordination, guard design and final verification.
 
 This module is the ONE place that decision lives. A launch names its **task
 class** and asks :func:`choice_for`; no launcher spells an alias. The table is
@@ -76,12 +76,14 @@ class ModelChoice:
 
 
 #: The shipped table. heal and work are scoped fixes with their own verification
-#: (heal re-runs the failing gate; work lands a draft PR a human reviews), which is
-#: Sonnet's tier; a failed run's human takeover is the escalation, so Opus.
+#: (heal re-runs the failing gate; work lands a draft PR a human reviews). A heal is
+#: narrow and gate-checked, which a 141-run trial found Haiku at high effort passes
+#: as reliably as Sonnet and Opus; work stays on Sonnet until real tickets say
+#: otherwise. A failed run's human takeover is the escalation, so Opus.
 #: Fallbacks go the other way in cost only when the primary is overloaded or
 #: unavailable: a stronger tier for the fixes, the next tier down for attach.
 DEFAULT_TABLE: Mapping[str, ModelChoice] = {
-    HEAL: ModelChoice("sonnet", "medium", "opus"),
+    HEAL: ModelChoice("haiku", "high", "sonnet"),
     WORK: ModelChoice("sonnet", "high", "opus"),
     ATTACH: ModelChoice("opus", "high", "sonnet"),
 }
