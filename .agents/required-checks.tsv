@@ -1,0 +1,6 @@
+# required-checks.tsv — the checks a PR must pass before an approval gate merges it, read from the default branch.
+# repo<TAB>check name, exactly as `gh pr checks` prints it. These are the contexts GitHub marks required on main:
+# the `CI gate` aggregator in ci.yml and validate-pr.yml's single job. KEEP IN STEP with the branch rules.
+
+VytCepas/projects-orchestrator	CI gate
+VytCepas/projects-orchestrator	Check PR title, branch, and linked issue
