@@ -370,3 +370,12 @@ def test_parse_summary_takes_the_last_contract_line(
     text: str, want: tuple[str, int, int] | None
 ) -> None:
     assert parse_summary(text) == want
+
+
+def test_project_filter_is_case_insensitive(
+    fleet_dir: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#322: `test-fleet alpha` said "unknown project" for a project named `Alpha`."""
+    _repo(fleet_dir, "Alpha", "echo Alpha: 1 passed, 0 failed")
+    rc, out = _run(fleet_dir, "alpha", capsys=capsys)
+    assert (rc, set(_rows(out))) == (0, {"Alpha"})

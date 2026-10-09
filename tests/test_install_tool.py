@@ -1017,3 +1017,55 @@ def test_install_unknown_flag_is_a_usage_error(box: Box) -> None:
 
 def test_install_apply_and_check_together_is_a_usage_error(box: Box) -> None:
     assert _script(box, "--apply", "--check").returncode == 2
+
+
+# --- #321 / #322 review follow-ups ---------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("damage", "prefix"),
+    [
+        (b"\xff\xfe", "uv-receipt.toml cannot be read (not UTF-8)"),
+        (b"[tool\nrequirements = ", "uv-receipt.toml is not valid TOML"),
+    ],
+    ids=["binary", "truncated"],
+)
+def test_install_check_reports_a_damaged_receipt_as_drift(
+    box: Box, damage: bytes, prefix: str
+) -> None:
+    # #321: a traceback, not a drift report, before.
+    _install_faithfully(box)
+    (box.tools / _TOOL / "uv-receipt.toml").write_bytes(damage)
+    done = _script(box, "--check")
+    assert "Traceback" not in done.stderr
+    assert [i for i in _items(done.stderr) if i.startswith("receipt: ") and prefix in i]
+
+
+@pytest.mark.parametrize(
+    "entrypoints", ["", 'entrypoints = [{ name = "other", install-path = "x" }]']
+)
+def test_install_check_requires_the_receipt_to_record_this_tools_entrypoint(
+    box: Box, entrypoints: str
+) -> None:
+    # #322 item 3: an empty or unrelated list ran zero iterations and passed.
+    _install_faithfully(box)
+    receipt = box.tools / _TOOL / "uv-receipt.toml"
+    kept = [ln for ln in receipt.read_text().splitlines() if not ln.startswith("entrypoints")]
+    receipt.write_text("\n".join([*kept, entrypoints]) + "\n")
+    assert f"entrypoint: the receipt records no {_TOOL} entrypoint" in _items(
+        _script(box, "--check").stderr
+    )
+
+
+def test_install_check_drops_every_uv_prefix_from_a_nested_run(box: Box, tmp_path: Path) -> None:
+    # #322 item 1: depth 2 with two interpreters is [inner scripts, outer venv, caller].
+    import sysconfig
+
+    _install_faithfully(box)
+    outer = _venv_with_the_tool(tmp_path / "outer").parent
+    box.env |= {
+        "UV_RUN_RECURSION_DEPTH": "2",
+        "PATH": os.pathsep.join([sysconfig.get_path("scripts"), str(outer), box.env["PATH"]]),
+    }
+    done = _script(box, "--check")
+    assert done.returncode == 0, done.stderr
