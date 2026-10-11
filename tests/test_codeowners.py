@@ -25,11 +25,26 @@ gen = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(gen)
 
 
-def _tracked() -> list[str]:
-    out = subprocess.run(
-        ["git", "ls-files"], cwd=_ROOT, capture_output=True, text=True, check=True
+def _git(*argv: str, cwd: Path) -> str:
+    return subprocess.run(
+        ["git", *argv], cwd=cwd, capture_output=True, text=True, check=True
     ).stdout
-    return out.splitlines()
+
+
+def _tracked(root: Path = _ROOT) -> list[str]:
+    # From git's top level, not `root`: the nightly mutation run executes this suite
+    # from mutmut's untracked `mutants/` copy, where `git ls-files` lists nothing.
+    top = Path(_git("rev-parse", "--show-toplevel", cwd=root).strip())
+    return _git("ls-files", cwd=top).splitlines()
+
+
+def test_tracked_lists_the_checkout_from_inside_an_untracked_copy(tmp_path):
+    _git("init", "-q", cwd=tmp_path)
+    (tmp_path / ".agents" / "hooks").mkdir(parents=True)
+    (tmp_path / ".agents" / "hooks" / "guard.py").write_text("x\n")
+    _git("add", ".", cwd=tmp_path)
+    (tmp_path / "mutants").mkdir()
+    assert _tracked(tmp_path / "mutants") == [".agents/hooks/guard.py"]
 
 
 def test_manifest_is_merge_only():
