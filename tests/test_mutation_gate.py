@@ -15,7 +15,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
-from conftest import _REPO, _tracked_top_level, touched_by, uncopied
+from conftest import _REPO, _tracked_top_level, mutmut_copy_set, touched_by, uncopied
 
 # The gate lives under .agents/scripts/ (it is CI tooling, not library code), so
 # it is loaded by path. It must be registered in sys.modules BEFORE exec_module:
@@ -233,3 +233,11 @@ def test_the_ignore_does_not_hide_the_suite_from_mutmut_itself(tmp_path: Path) -
         check=False,
     )
     assert "1 passed" in run.stdout, run.stdout[-2000:]
+
+
+def test_a_root_conftest_is_copied_into_mutants() -> None:
+    """The cross-repo test contract lives in the root conftest.py (PO-316). Its
+    hermetic HOME only applies under `mutants/` if mutmut copies the file there:
+    without it test_home_is_not_the_real_home fails in the nightly, not in a PR."""
+    assert "conftest.py" in _tracked_top_level()
+    assert "conftest.py" in mutmut_copy_set()
