@@ -12,6 +12,11 @@ version's only source. `tests/test_version.py` fails when they disagree.
 
 ### Changed
 
+- **`just install` fetches `origin/main` in its dry run, and a refusal prints as
+  `  FAIL: <reason>` then `  fix: <command>`**. The dry run judged "in sync" by
+  the last-fetched ref and passed a clone five merges behind, which `--apply` then
+  refused. Both now fetch and agree; a failed fetch is a refusal. The fix lines
+  are commands, such as `git -C <checkout> pull --ff-only origin main`.
 - **`heal` runs on `haiku` at high effort, falling back to `sonnet`.** A heal is a
   narrow fix that its own gate re-checks. In a 141-run trial of scoped, gate-checked
   tasks, Haiku at high effort passed as reliably as Sonnet and Opus at about a fifth
