@@ -26,10 +26,12 @@ just install --apply    # uv tool install --reinstall <this checkout>, then --ch
 projects-orchestrator --version
 ```
 
-`just install` with no flag writes nothing and needs no network: it never
-downloads a Python and never syncs the checkout's dev environment. It
-exits 1 when `--apply` would refuse, unless the only reason is a Claude Code
-session. `--apply` installs only from the main worktree, on a clean
+`just install` with no flag installs nothing: it never downloads a Python and
+never syncs the checkout's dev environment. It fetches `origin/main`, as
+`--apply` does, so a checkout behind origin is refused by both; a failed fetch is
+a refusal too, never a pass. It exits 1 when `--apply` would refuse, unless the
+only reason is a Claude Code session. Each refusal prints as `  FAIL: <reason>`
+then `  fix: <command>`. `--apply` installs only from the main worktree, on a clean
 `main` in sync with `origin/main` (it fetches first), and not from inside a
 Claude Code session. A branch or an uncommitted edit is code nobody reviewed,
 and so is an edit that a `skip-worktree` or `assume-unchanged` flag hides from

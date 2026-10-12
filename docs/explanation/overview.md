@@ -94,7 +94,7 @@ plane is unreachable from an agent. Code is reversible; state is not.
 | `campaign <file> --apply` | A declarative fleet campaign: task + selector (`ci=fail`, `scaffold=none`, `drift>0`) + policy. Canaries one project, reports what the fan-out would cost at that rate, and terminates when its selector empties. `--apply` fans out. | `campaign.py`, `selector.py` |
 | `heal <project>` *(controller)* | The narrow preset: spawn a scoped agent to fix a cached lint/test failure and open a PR. Its `Bash` allow-list covers only the declared gate commands — an unattended run fails closed rather than getting a wider shell. | `heal.py` |
 | `orphans --scope` | Read-only GCP inventory diffed against the fleet. Anything without a repo is invisible to everything above — no descriptor, no CI, no review — so this makes the unmanaged estate *enumerable*, the first step to giving it a repo. An unauthenticated scan reports `unknown`, never "no orphans". | `orphans.py`, `adapters/gcp.py` |
-| `register <json>` | Register a freshly scaffolded project from `project-init scaffold --json` output. | `registry.py` |
+| `register <json>` | Register a freshly scaffolded project from `project-init --json <target>` output. | `registry.py` |
 
 ## How it interacts with project-init
 

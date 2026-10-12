@@ -124,7 +124,7 @@ those tables and inverts them across the fleet — *which projects expose which
 skill/MCP* (project-init ADR-025 §3). A missing or malformed file degrades to an empty
 inventory, never an error.
 
-## 6. `project-init scaffold --json` — the registration seam
+## 6. `project-init --json <target>` — the registration seam
 
 Read by `adapters/project_init.py` (`parse_scaffold_result`) and the `register`
 command. project-init emits this JSON "for a root orchestrator driving

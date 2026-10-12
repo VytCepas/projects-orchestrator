@@ -210,6 +210,30 @@ def _plan(out: str) -> dict[str, str]:
     return {row[0]: row[1] for row in rows if len(row) == 2}
 
 
+def _fails(out: str) -> list[str]:
+    """The reason of each `  FAIL:` or `  WARN:` line: the box deploy's line shape."""
+    return [line[8:] for line in out.splitlines() if line[:8] in ("  FAIL: ", "  WARN: ")]
+
+
+def _fix_after(out: str, reason: str) -> str:
+    """The `  fix:` command printed right under the FAIL or WARN line for *reason*."""
+    rows = out.splitlines()
+    idx = next(
+        i for i, row in enumerate(rows) if row[8:] == reason and row[:8] in ("  FAIL: ", "  WARN: ")
+    )
+    assert rows[idx + 1].startswith("  fix: "), rows[idx : idx + 2]
+    return rows[idx + 1][7:]
+
+
+def _every_fail_has_its_fix(out: str) -> bool:
+    rows = out.splitlines()
+    return all(
+        i + 1 < len(rows) and rows[i + 1].startswith("  fix: ")
+        for i, row in enumerate(rows)
+        if row[:8] in ("  FAIL: ", "  WARN: ")
+    )
+
+
 def _items(out: str) -> list[str]:
     """The `    - <item>` lines a refusal or a drift report lists."""
     return [line[6:] for line in out.splitlines() if line.startswith("    - ")]
@@ -277,9 +301,37 @@ def test_install_dry_run_on_a_clean_synced_main_says_apply_would_proceed(box: Bo
 
 def test_install_dry_run_lists_what_apply_would_refuse(box: Box) -> None:
     _git(box.repo, "checkout", "-q", "-b", "feat/x")
-    assert _items(_script(box).stdout) == [
+    assert _fails(_script(box).stdout) == [
         "on 'feat/x', not main: an unmerged branch is unreviewed text"
     ]
+
+
+def test_install_dry_run_fetches_so_it_sees_a_checkout_behind_origin(box: Box) -> None:
+    # the dry run judged "in sync" by the last-fetched ref, then --apply fetched
+    # and refused a clone 5 behind. Both must now say the same thing.
+    _behind(box)
+    want = "not in sync with origin/main (ahead 0, behind 1)"
+    dry = _script(box)
+    assert dry.returncode == 1, dry.stdout
+    assert _fails(dry.stdout) == [want], dry.stdout
+    assert "--apply would proceed" not in dry.stdout
+    assert _fails(_script(box, "--apply").stderr) == [want]
+
+
+def test_install_behind_origin_prints_a_fix_that_makes_the_dry_run_proceed(box: Box) -> None:
+    _behind(box)
+    fix = _fix_after(_script(box).stdout, "not in sync with origin/main (ahead 0, behind 1)")
+    assert fix.endswith("pull --ff-only origin main"), fix
+    subprocess.run(["sh", "-c", fix], check=True, capture_output=True)
+    assert _script(box).returncode == 0
+
+
+def test_install_dry_run_says_sync_is_unverified_when_the_fetch_fails(box: Box) -> None:
+    _no_origin(box)
+    dry = _script(box)
+    assert dry.returncode == 1, dry.stdout
+    assert any("sync with origin/main is unverified" in r for r in _fails(dry.stdout))
+    assert "--apply would proceed" not in dry.stdout
 
 
 def test_install_dry_run_exits_0_on_a_clean_synced_main(box: Box) -> None:
@@ -300,7 +352,7 @@ def test_install_dry_run_exits_0_when_a_session_is_the_only_reason(box: Box) -> 
 
 def test_install_dry_run_still_lists_a_session_as_a_reason(box: Box) -> None:
     box.env["CLAUDECODE"] = "1"
-    assert _items(_script(box).stdout) == [
+    assert _fails(_script(box).stdout) == [
         "inside a Claude Code session: run `just install --apply` from a terminal"
     ]
 
@@ -316,7 +368,8 @@ def test_just_install_with_no_flag_is_the_dry_run(box: Box) -> None:
         ["just", "install"], cwd=box.repo, env=box.env, capture_output=True, text=True, check=False
     )
     assert (
-        done.stdout.splitlines()[0] == "projects-orchestrator box install: DRY RUN, nothing written"
+        done.stdout.splitlines()[0]
+        == "projects-orchestrator box install: DRY RUN, nothing installed (fetches origin/main)"
     )
 
 
@@ -350,7 +403,7 @@ _NEEDS_JUST_AND_UV = pytest.mark.skipif(
 )
 _READ_ONLY_MODES = pytest.mark.parametrize(
     ("args", "ran"),
-    [((), "DRY RUN, nothing written"), (("--check",), "not installed:")],
+    [((), "DRY RUN, nothing installed"), (("--check",), "not installed:")],
     ids=["dry-run", "check"],
 )
 
@@ -442,11 +495,7 @@ _HIDING = {
     "assume-unchanged": ("--assume-unchanged",),
     "skip-worktree, assume-unchanged": ("--skip-worktree", "--assume-unchanged"),
 }
-_HIDDEN_REFUSAL = (
-    "files git status skips would be installed unreviewed. Clear each flag with "
-    "`git update-index --no-skip-worktree -- <file>` or "
-    "`git update-index --no-assume-unchanged -- <file>`, one call per flag:"
-)
+_HIDDEN_REFUSAL = "files git status skips would be installed unreviewed"
 
 
 def _hide(box: Box, label: str) -> None:
@@ -459,11 +508,7 @@ def _hide(box: Box, label: str) -> None:
 
 # Every place an ignore rule can live. Each hides the file from git status.
 _IGNORE_FILES = (".gitignore", f"src/{_PKG}/.gitignore", ".git/info/exclude")
-_CLEAN = f"git clean -fdX -- src/{_PKG}"
-_IGNORED_REFUSAL = (
-    "ignored files the wheel packages would be installed unreviewed. Preview with "
-    f"`git clean -ndX -- src/{_PKG}`, then delete them with `{_CLEAN}`:"
-)
+_IGNORED_REFUSAL = "ignored files the wheel packages would be installed unreviewed"
 
 
 def _ignore(box: Box, rules: str, where: str) -> None:
@@ -490,18 +535,24 @@ _REFUSALS = {
     # Porcelain's leading space is kept: " M", not "M".
     "dirty": (
         _dirty,
-        f"uncommitted changes would be installed unreviewed:\n       M src/{_PKG}/cli.py",
+        "uncommitted changes would be installed unreviewed",
+        f"       M src/{_PKG}/cli.py",
     ),
-    "untracked": (_untracked, "uncommitted changes would be installed unreviewed:\n      ?? src/"),
+    "untracked": (
+        _untracked,
+        "uncommitted changes would be installed unreviewed",
+        f"      ?? src/{_PKG}/new.py",
+    ),
     "ahead": (_ahead, "not in sync with origin/main (ahead 1, behind 0)"),
     "behind": (_behind, "not in sync with origin/main (ahead 0, behind 1)"),
     "no-origin": (_no_origin, "cannot fetch origin/main"),
     "session": (_in_a_session, "inside a Claude Code session"),
-    "ignored": (_ignored, f"{_IGNORED_REFUSAL}\n      src/{_PKG}/extra.local"),
+    "ignored": (_ignored, _IGNORED_REFUSAL, f"      src/{_PKG}/extra.local"),
     **{
         label: (
             lambda box, label=label: _hide(box, label),
-            f"{_HIDDEN_REFUSAL}\n      {label}: src/{_PKG}/cli.py",
+            _HIDDEN_REFUSAL,
+            f"      {label}: src/{_PKG}/cli.py",
         )
         for label in _HIDING
     },
@@ -509,9 +560,9 @@ _REFUSALS = {
 
 
 def _refusal_text(stderr: str) -> str:
-    """The refusal's items, rejoined so a multi-line item reads as printed."""
+    """The refusal's lines, after its header."""
     head, _, rest = stderr.partition("\n")
-    return rest if head == "refusing --apply:" else ""
+    return rest if head == "  note: refusing --apply:" else ""
 
 
 @pytest.mark.parametrize("scenario", sorted(_REFUSALS))
@@ -529,9 +580,21 @@ def test_install_apply_refusal_installs_nothing(box: Box, scenario: str) -> None
 
 @pytest.mark.parametrize("scenario", sorted(_REFUSALS))
 def test_install_apply_refusal_names_the_reason(box: Box, scenario: str) -> None:
-    setup, reason = _REFUSALS[scenario]
+    setup, reason, *detail = _REFUSALS[scenario]
     setup(box)
-    assert f"    - {reason}" in _refusal_text(_script(box, "--apply").stderr)
+    text = _refusal_text(_script(box, "--apply").stderr)
+    assert any(line.startswith(f"  FAIL: {reason}") for line in text.splitlines()), text
+    assert all(f"{d}\n" in text for d in detail), text
+
+
+@pytest.mark.parametrize("scenario", sorted(_REFUSALS))
+def test_install_apply_refusal_gives_each_fail_its_fix_line(box: Box, scenario: str) -> None:
+    _REFUSALS[scenario][0](box)
+    refused = _script(box, "--apply")
+    assert _fails(refused.stderr), refused.stderr
+    assert _every_fail_has_its_fix(refused.stderr), refused.stderr
+    dry = _script(box)
+    assert _every_fail_has_its_fix(dry.stdout), dry.stdout
 
 
 @pytest.mark.parametrize("label", sorted(_HIDING))
@@ -543,18 +606,17 @@ def test_install_dry_run_exits_1_on_an_edit_git_status_skips(box: Box, label: st
 @pytest.mark.parametrize("label", sorted(_HIDING))
 def test_install_dry_run_lists_an_edit_git_status_skips(box: Box, label: str) -> None:
     _hide(box, label)
-    shown = f"    - {_HIDDEN_REFUSAL}\n      {label}: src/{_PKG}/cli.py\n"
-    assert shown in _script(box).stdout
+    assert f"      {label}: src/{_PKG}/cli.py\n" in _script(box).stdout
 
 
 @pytest.mark.parametrize("label", sorted(_HIDING))
 def test_install_apply_names_the_commands_that_clear_the_flags(box: Box, label: str) -> None:
     # Run as the refusal says, one call per flag; status then sees the edit.
     _hide(box, label)
-    for flag in _HIDING[label]:
-        _git(box.repo, "update-index", f"--no-{flag[2:]}", "--", f"src/{_PKG}/cli.py")
-    assert _items(_script(box, "--apply").stderr) == [
-        "uncommitted changes would be installed unreviewed:"
+    fix = _fix_after(_script(box, "--apply").stderr, _HIDDEN_REFUSAL)
+    subprocess.run(["sh", "-c", fix], check=True, capture_output=True)
+    assert _fails(_script(box, "--apply").stderr) == [
+        "uncommitted changes would be installed unreviewed"
     ]
 
 
@@ -562,14 +624,19 @@ def test_install_apply_names_the_commands_that_clear_the_flags(box: Box, label: 
 def test_install_apply_names_only_the_ignored_file_the_wheel_packages(box: Box, where: str) -> None:
     """status reads clean, yet the build ships the ignored file (project-init#1047 review)."""
     _ignored(box, where)
-    assert _items(_script(box, "--apply").stderr) == [_IGNORED_REFUSAL]
-    assert f"    - {_IGNORED_REFUSAL}\n      src/{_PKG}/extra.local\n" in _script(box).stdout
+    assert _fails(_script(box, "--apply").stderr) == [_IGNORED_REFUSAL]
+    assert f"      src/{_PKG}/extra.local\n" in _script(box).stdout
 
 
 @pytest.mark.parametrize("where", _IGNORE_FILES)
 def test_install_dry_run_proceeds_once_the_named_command_ran(box: Box, where: str) -> None:
     _ignored(box, where)
-    subprocess.run(_CLEAN.split(), cwd=box.repo, check=True, capture_output=True)
+    # The command the dry run prints, run as printed.
+    subprocess.run(
+        ["sh", "-c", _fix_after(_script(box).stdout, _IGNORED_REFUSAL)],
+        check=True,
+        capture_output=True,
+    )
     dry = _script(box)
     assert dry.returncode == 0, dry.stdout
 
@@ -597,7 +664,7 @@ def _linked_worktree(box: Box) -> Path:
 
 def test_install_apply_refuses_a_linked_worktree(box: Box) -> None:
     wt = _linked_worktree(box)
-    assert _items(_script(box, "--apply", cwd=wt).stderr) == [
+    assert _fails(_script(box, "--apply", cwd=wt).stderr) == [
         f"linked worktree: install from the main checkout, {box.repo.resolve()}"
     ]
 
@@ -627,7 +694,9 @@ def test_install_apply_fails_when_uv_fails(box: Box) -> None:
 def test_install_apply_names_a_failed_uv_run_as_the_failure(box: Box) -> None:
     # Not only the check that follows: that would report "not installed" instead.
     box.env["FAKE_UV_INSTALL_RC"] = "3"
-    assert _script(box, "--apply").stderr.splitlines()[0] == "failed:"
+    failed = _script(box, "--apply").stderr
+    assert any(row.startswith("  FAIL: ") and "failed (rc=3)" in row for row in failed.splitlines())
+    assert _every_fail_has_its_fix(failed), failed
 
 
 def test_install_apply_fails_when_the_build_does_not_match_head(box: Box) -> None:

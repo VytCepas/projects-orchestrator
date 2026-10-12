@@ -380,6 +380,11 @@ jobs:
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           version: "0.11.7"
+      # The suite shells out to just (test_just_install_with_no_flag_is_the_dry_run, #333).
+      - name: Install just
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        with:
+          just-version: "1.57.0"
       # Mutmut needs a pyproject.toml *carrying a [tool.mutmut] section* — the
       # comment above this job already says so, and source_paths is not
       # optional: without it mutmut aborts with "Could not figure out where the

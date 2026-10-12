@@ -1,0 +1,39 @@
+# protected-paths.tsv — the paths only the maintainer may merge. An approval gate reads this register from the
+# default branch: a PR touching any path below is queued for the maintainer's approval; a PR touching none may be
+# merged unattended once its required checks are green for its exact head (.agents/required-checks.tsv).
+#
+# FORMAT  glob <TAB> class <TAB> reason. Globs are repo-relative and case-insensitive; `**` crosses directories,
+# `*` and `?` do not. Always protected whatever this file says: this register, .agents/ship.conf and .github/**.
+# A rename is judged on both of its paths, so moving a file into or out of a glob is protected.
+#
+# WHAT IS PROTECTED: a path whose change could weaken a guard or reach a machine unreviewed — this repo's
+# governance and guard hooks, the scheduled units, the config that decides whether a merge is green, release
+# inputs, and the modules that are the safety boundary of an agent run. Ordinary source, tests and docs are
+# not: a change there is still held to every required check.
+# .github/CODEOWNERS is generated from this file: uv run python .agents/scripts/gen_codeowners.py --write
+glob	class	reason
+CLAUDE.md	governance	the Claude Code entry point: imports AGENTS.md
+AGENTS.md	governance	the canonical instructions for every agent in this repo
+.agents/**	governance	agent config: guard hooks (prod_guard, package_guard, dag_workflow), hook wiring, lifecycle scripts that push and merge, the tool installer, skills, rules, memory, the gate manifest
+.claude/**	governance	the generated mirror Claude Code actually loads: settings, rules, skills
+.codex/**	hook	wires the guards for Codex
+contrib/systemd/**	persistent-job	scheduled units that run heal, watch, digest and serve unattended: a recurring job needs an explicit yes
+**.service	persistent-job	a systemd service unit anywhere in the tree
+**.timer	persistent-job	a systemd timer anywhere in the tree
+src/projects_orchestrator/sandbox.py	guard	scrubs the environment an agent run sees, so it cannot reach production
+src/projects_orchestrator/landing.py	guard	the write boundary: an agent run's work leaves only as a draft PR
+src/projects_orchestrator/worktree.py	guard	keeps an agent run out of the operator's clone
+src/projects_orchestrator/urlguard.py	guard	scheme and host allowlist for URLs a child repo declares
+src/projects_orchestrator/naming.py	guard	sanitises an untrusted project name before it becomes a path
+src/projects_orchestrator/gcloud_identity.py	guard	pins every gcloud call to one named credential directory
+src/projects_orchestrator/server.py	guard	the dashboard's bind address and its opt-in mutating actions
+justfile	ci-gate	the command surface CI and the git hooks run
+pyproject.toml	release	package version, dependencies, wheel contents, and the pytest/coverage config CI enforces
+uv.lock	release	the resolved dependencies every install gets
+ruff.toml	ci-gate	the lint gate: docstrings, complexity caps, bandit rules
+mypy.ini	ci-gate	the strict typecheck gate
+conftest.py	ci-gate	root test collection config: can skip or deselect any test
+tests/conftest.py	ci-gate	test collection config: can skip or deselect any test
+.gitleaks.toml	ci-gate	the secret-scan config: an allowlist entry silences a finding
+.gitattributes	ci-gate	can mark a path binary or generated, hiding its diff from review
+renovate.json	ci-gate	the automated-update policy: which bumps arrive and how

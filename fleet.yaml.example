@@ -50,6 +50,6 @@ memory_sources: []
 #   effort: low, medium, high, xhigh or max.
 # An invalid block is refused whole, with a warning, and the defaults stand.
 # models:
-#   heal:   {model: sonnet, effort: medium, fallback: opus}
+#   heal:   {model: haiku,  effort: high,   fallback: sonnet}
 #   work:   {model: sonnet, effort: high,   fallback: opus}
 #   attach: {model: opus,   effort: high,   fallback: sonnet}

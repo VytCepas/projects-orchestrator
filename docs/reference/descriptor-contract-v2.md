@@ -141,7 +141,7 @@ that lands, the producer→consumer contract test (`tests/test_contract.py`) —
 which parses the real `.agents/`-layout v2 fixture through every reader — is the
 tripwire.
 
-**Registration seam (consumed).** project-init's `scaffold --json` output
+**Registration seam (consumed).** project-init's `--json` output
 (#510) is no longer a tested-but-dead seam: `adapters/project_init.parse_scaffold_result`
 + the `register` command read it to register a freshly-scaffolded project
 into the fleet without a second config read. See

@@ -18,6 +18,7 @@ from __future__ import annotations
 import fnmatch
 import logging
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -344,6 +345,11 @@ def _nested_projects(root: Path, config: FleetConfig) -> tuple[list[Path], bool]
                 continue
             if depth + 1 >= 2 and _is_project_dir(child, config):
                 found.append(child)
+            if _is_linked_worktree(child):
+                # Reported above if it is a project, but never walked: its tree is
+                # another repo's tree again, and walking 40 of them (~180
+                # directories each) spent the whole budget before the real search ended.
+                continue
             frontier.append((child, depth + 1))
     return sorted(found), False
 
@@ -474,12 +480,101 @@ def _git_dirs(path: Path) -> tuple[Path, Path] | None:
         return None
 
 
-def _unresolved_warning(resolved: Path, *, listed: bool) -> str | None:
+_ORIGIN_URL = re.compile(r"^\s*url\s*=\s*(?P<url>\S+)\s*$")
+
+
+def _origin_key(common_dir: Path) -> str | None:
+    """Normalised ``host/path`` of the ``origin`` remote in ``common_dir/config``.
+
+    Read from the file, not via ``git``: discovery runs on every verb and never
+    raises (ADR-003), so it spawns no process per candidate. ``None`` when there
+    is no readable origin; two checkouts with no origin are never "the same repo".
+    """
+    try:
+        lines = (common_dir / "config").read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as exc:
+        _log.debug("cannot read git config under %s: %r", common_dir, exc)
+        return None
+    in_origin = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("["):
+            in_origin = stripped.replace(" ", "") == '[remote"origin"]'
+        elif in_origin and (match := _ORIGIN_URL.match(line)):
+            url = match["url"].removesuffix("/").removesuffix(".git")
+            url = re.sub(r"^[a-z+]+://(?:[^@/]*@)?", "", url, flags=re.IGNORECASE)
+            return re.sub(r"^[^@/]*@", "", url).replace(":", "/", 1).lower()
+    return None
+
+
+def _canonical_rank(path: Path, key: str, explicit: set[Path], governed: bool) -> tuple[bool, ...]:
+    """Sort key: the lowest-ranked clone of one repository is the one that stays."""
+    named_for_repo = path.name.lower() == key.rsplit("/", 1)[-1]
+    return (
+        path not in explicit,
+        not named_for_repo,
+        path.name.startswith("."),
+        not governed,
+    )
+
+
+def _redundant_clones(
+    dirs: dict[Path, tuple[Path, Path] | None],
+    admitted: dict[Path, ProjectDescriptor | None],
+    explicit: set[Path],
+) -> set[Path]:
+    """Scanned MAIN checkouts that are another clone of a repository also scanned.
+
+    A scratch clone of a repo (an upgrade run's `.pi-upgrade-<name>`, a fix
+    sandbox) shares its ``origin`` with the real checkout and is not another
+    project: left in, every verb ran twice on the same repository and the name
+    lookup collapsed onto an arbitrary copy. The clone that stays is the one the
+    operator listed, else the one named for the repository, else a non-hidden,
+    governed, shallowest path. Listed paths are never dropped — the operator
+    asked for them.
+    """
+    groups: dict[str, list[Path]] = {}
+    for path, d in dirs.items():
+        if d is not None and d[0] == d[1] and (key := _origin_key(d[1])):
+            groups.setdefault(key, []).append(path)
+    dropped: set[Path] = set()
+    for key, paths in groups.items():
+        keeper = min(
+            paths,
+            key=lambda p: (
+                *_canonical_rank(p, key, explicit, admitted[p] is not None),
+                len(p.parts),
+                str(p),
+            ),
+        )
+        dropped.update(p for p in paths if p != keeper and p not in explicit)
+    return dropped
+
+
+def _is_linked_worktree(path: Path) -> bool:
+    """Whether ``path`` is a linked worktree (its gitdir differs from its common dir)."""
+    d = _git_dirs(path)
+    return d is not None and d[0] != d[1]
+
+
+def _is_sibling_checkout(repo: tuple[Path, Path] | None, candidate_repos: set[Path]) -> bool:
+    """Whether a linked worktree belongs to a repository whose main checkout is scanned too.
+
+    Its repository is already accounted for by that main checkout (admitted, or
+    warned about once), so a second warning from the worktree is the same fact
+    repeated per worktree — 40 lines for one ungoverned repository.
+    """
+    return repo is not None and repo[0] != repo[1] and repo[1] in candidate_repos
+
+
+def _unresolved_warning(resolved: Path, *, listed: bool, sibling: bool = False) -> str | None:
     """Why a candidate with no descriptor is not in the fleet, or ``None`` to stay silent.
 
     Args:
         resolved: The candidate's resolved path.
         listed: Whether the operator listed it under ``projects:``.
+        sibling: Whether it is a linked worktree of a repository whose main checkout
+            is scanned too (that checkout already speaks for the repository).
 
     Returns:
         One warning line, or ``None`` for an ordinary directory beside the fleet.
@@ -489,6 +584,8 @@ def _unresolved_warning(resolved: Path, *, listed: bool) -> str | None:
         # fired, or the operator goes looking for a scaffold that is already
         # there, one link away.
         return f"{resolved}: {refused} is a symlink, so the descriptor is refused — replace the link with the file itself"
+    if sibling:
+        return None
     if listed:
         return f"not a project-init project: {resolved}"
     if layout := layout_dir_present(resolved):
@@ -551,6 +648,8 @@ def discover(config: FleetConfig) -> Fleet:
         for r, d in dirs.items()
         if d is not None and admitted[r] is not None and (d[0] == d[1] or r in explicit)
     }
+    redundant = _redundant_clones(dirs, admitted, explicit)
+    candidate_repos = {d[1] for d in dirs.values() if d is not None and d[0] == d[1]}
     seen: set[Path] = set()
     for candidate in candidates:
         resolved = candidate.resolve()
@@ -568,12 +667,19 @@ def discover(config: FleetConfig) -> Fleet:
         #
         # With no main checkout in the fleet, the FIRST admitted scanned worktree holds
         # the repository, so a second scanned sibling is a duplicate too (Codex on #261).
-        if _duplicate_checkout(dirs.get(resolved), resolved in explicit, mains):
+        if resolved in redundant or _duplicate_checkout(
+            dirs.get(resolved), resolved in explicit, mains
+        ):
             continue
         descriptor = admitted[resolved]
         _hold_repo(dirs.get(resolved), descriptor, mains)
         if descriptor is None:
-            if warning := _unresolved_warning(resolved, listed=candidate in config.projects):
+            if warning := _unresolved_warning(
+                resolved,
+                listed=candidate in config.projects,
+                sibling=resolved not in explicit
+                and _is_sibling_checkout(dirs.get(resolved), candidate_repos),
+            ):
                 warnings.append(warning)
             continue
         found.append(descriptor)
@@ -603,10 +709,64 @@ class RegisterOutcome:
     warnings: tuple[str, ...] = ()
 
 
+_PROJECTS_KEY = re.compile(r"^projects\s*:\s*(\[\s*\])?\s*(#.*)?$")
+_TOP_KEY = re.compile(r"^[^\s#-]")
+
+
+def _add_item(lines: list[str], item: str) -> None:
+    """Add a ``projects:`` list item to ``lines`` in place, matching the indent."""
+    found = [(i, m) for i, ln in enumerate(lines) if (m := _PROJECTS_KEY.match(ln))]
+    if not found:
+        lines += ["projects:\n", item + "\n"]
+        return
+    start, match = found[0]
+    end = start
+    for i in range(start + 1, len(lines)):
+        if _TOP_KEY.match(lines[i]):
+            break
+        if lines[i].strip() and not lines[i].lstrip().startswith("#"):
+            end = i
+    if match.group(1):  # `projects: []`
+        lines[start : end + 1] = ["projects:\n", item + "\n"]
+        return
+    body = lines[start + 1 : end + 1]
+    indent = next(
+        (ln[: len(ln) - len(ln.lstrip())] for ln in body if ln.lstrip().startswith("- ")), ""
+    )
+    lines.insert(end + 1, f"{indent}{item}\n")
+
+
+def _with_project(text: str, project: str) -> str | None:
+    """``text`` with ``project`` added to ``projects:``, all else untouched (#305).
+
+    Returns ``None`` when the edit cannot be proven lossless: the result must
+    parse to the original document with only ``projects`` extended.
+    """
+    try:
+        original = yaml.safe_load(text) if text.strip() else {}
+    except yaml.YAMLError:
+        return None  # expected: None means declined; register_project says so
+    if not isinstance(original, dict):
+        return None
+    item = yaml.safe_dump([project], default_flow_style=False).rstrip("\n")
+    lines = text.splitlines(keepends=True)
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+    _add_item(lines, item)
+    after = "".join(lines)
+    try:
+        parsed = yaml.safe_load(after)
+    except yaml.YAMLError:
+        return None  # expected: None means declined; register_project says so
+    expected = dict(original)
+    expected["projects"] = [*(original.get("projects") or []), project]
+    return after if parsed == expected else None
+
+
 def register_project(fleet_file: Path, project: Path) -> RegisterOutcome:
     """Add a project path to a fleet file's ``projects:`` list; never raises.
 
-    Consumes the ``scaffold --json`` seam: a freshly-scaffolded project is
+    Consumes the ``project-init --json`` seam: a freshly-scaffolded project is
     registered into the orchestrator's own fleet file (not the child tree —
     ADR-003 forbids writing to children, not to the orchestrator's registry)
     so the next ``discover`` governs it without a manual edit. Idempotent: a
@@ -638,18 +798,26 @@ def register_project(fleet_file: Path, project: Path) -> RegisterOutcome:
         if resolved in listed:
             return RegisterOutcome(fleet_file, resolved, added=False, warnings=warnings)
 
-        projects = sorted({*listed, resolved}, key=str)
-        document: dict[str, object] = {
-            "projects": [str(p) for p in projects],
-            "roots": [str(p) for p in (existing.roots if existing is not None else ())],
-        }
-        # Preserve fields the loader treats as first-class but this rewrite would
-        # otherwise silently drop — an omitted `exclude` re-admits excluded repos and
-        # a dropped `include_plain_repos` flips discovery, both invisibly.
-        if existing is not None and existing.exclude:
-            document["exclude"] = list(existing.exclude)
-        if existing is not None and existing.include_plain_repos:
-            document["include_plain_repos"] = existing.include_plain_repos
+        # Edit the file's text, never rebuild it from an allow-list (#305): a rebuilt
+        # document dropped memory_sources, host_health_command, models and every comment.
+        try:
+            before = fleet_file.read_text(encoding="utf-8") if fleet_file.is_file() else ""
+        except (OSError, UnicodeDecodeError) as exc:
+            return RegisterOutcome(
+                fleet_file, resolved, False, (*warnings, f"cannot read {fleet_file}: {exc}")
+            )
+        after = _with_project(before, str(resolved))
+        if after is None:
+            return RegisterOutcome(
+                fleet_file,
+                resolved,
+                added=False,
+                warnings=(
+                    *warnings,
+                    f"cannot edit {fleet_file} without losing content — left unchanged; "
+                    f"add `- {resolved}` under `projects:` by hand",
+                ),
+            )
         try:
             # WRITE THROUGH A SYMLINK, never over it (raised in review on #240).
             # `atomic_write` replaces a directory entry, so pointing --fleet at
@@ -659,7 +827,7 @@ def register_project(fleet_file: Path, project: Path) -> RegisterOutcome:
             # `write_text` followed the link, so this was a regression the
             # hardening introduced rather than a pre-existing gap.
             target = fleet_file.resolve() if fleet_file.is_symlink() else fleet_file
-            persist.atomic_write(target, yaml.safe_dump(document, sort_keys=True))
+            persist.atomic_write(target, after)
         except OSError as exc:
             return RegisterOutcome(
                 fleet_file,

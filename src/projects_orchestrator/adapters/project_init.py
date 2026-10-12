@@ -81,9 +81,14 @@ def _coerce_int(value: Any, default: int = 0) -> int:
         return default
 
 
+#: The documented invocation that produces a scaffold result (#307). Scaffolding is the bare
+#: command with a positional target; a leading word like ``scaffold`` is taken as the path.
+SCAFFOLD_JSON_COMMAND = "project-init --json <target>"
+
+
 @dataclass(frozen=True)
 class ScaffoldResult:
-    """The machine-readable result of ``project-init scaffold --json`` (#510).
+    """The machine-readable result of ``project-init --json <target>`` (#510).
 
     project-init emits this seam explicitly "for a root orchestrator driving
     project-init": it names the freshly-scaffolded project and its key contract
@@ -112,7 +117,7 @@ class ScaffoldResult:
 
 
 def parse_scaffold_result(text: str) -> ScaffoldResult | None:
-    """Parse ``scaffold --json`` stdout into a :class:`ScaffoldResult` (pure).
+    """Parse ``project-init --json`` stdout into a :class:`ScaffoldResult` (pure).
 
     Args:
         text: The JSON document project-init wrote to stdout.

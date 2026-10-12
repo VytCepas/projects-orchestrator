@@ -107,6 +107,7 @@ also_copy = [
     "AGENTS.md",
     "CHANGELOG.md",
     "README.md",
+    "conftest.py",
     "contrib",
     "docs",
     "justfile",

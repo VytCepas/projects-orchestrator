@@ -88,8 +88,8 @@ Per-project GitLab state via ``glab`` — latest pipeline status and open MRs.
 
 Upstream project-init state via ``gh`` — latest release, upgrade dispatch.
 
-- `class ScaffoldResult` — The machine-readable result of ``project-init scaffold --json`` (#510).
-- `def parse_scaffold_result` — Parse ``scaffold --json`` stdout into a :class:`ScaffoldResult` (pure).
+- `class ScaffoldResult` — The machine-readable result of ``project-init --json <target>`` (#510).
+- `def parse_scaffold_result` — Parse ``project-init --json`` stdout into a :class:`ScaffoldResult` (pure).
 - `def parse_release_tag` — Parse ``gh release view --json tagName`` output to a version tuple (pure).
 - `def latest_upstream_version` — Fetch the newest upstream project-init release; never raises.
 - `def parse_plugin_manifest` — Parse a raw ``plugin.json`` into its version tuple (pure).

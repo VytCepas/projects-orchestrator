@@ -2,9 +2,11 @@
 """Install this checkout as the machine's ``projects-orchestrator`` uv tool, or check it (#317).
 
 ``just install`` is a dry run. It prints the source, commit, target and command,
-and writes nothing. It exits 1 when ``--apply`` would refuse, unless the only
-reason is a Claude Code session. ``just install --apply`` runs ``uv tool install
---reinstall <repo>``, and only from a clean ``main`` in sync with ``origin/main``.
+and installs nothing. It fetches ``origin/main`` as ``--apply`` does, so its verdict
+on sync is the apply's; a failed fetch is a refusal, never a pass. It exits 1 when
+``--apply`` would refuse, unless the only reason is a Claude Code session. A refusal
+prints as ``  FAIL: <reason>`` then ``  fix: <command>``, the line shape a deploy relays.
+``just install --apply`` runs ``uv tool install --reinstall <repo>``, and only from a clean ``main`` in sync with ``origin/main``.
 ``just install --check`` compares the installed package files, and their exec
 bits, with HEAD and exits 1 on drift, naming each file. The files read are those
 HEAD maps into the wheel plus every one the installed build's RECORD lists.
@@ -41,7 +43,7 @@ import tempfile
 import tomllib
 from email.parser import Parser
 from pathlib import Path, PurePosixPath
-from typing import Any, TextIO
+from typing import Any, NamedTuple, TextIO
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TOOL = "projects-orchestrator"
@@ -61,6 +63,14 @@ _HIDDEN = {"S": "skip-worktree", "h": "assume-unchanged", "s": "skip-worktree, a
 
 class RefusedError(Exception):
     """A precondition failed. The message says which one, and how to fix it."""
+
+
+class Problem(NamedTuple):
+    """One reason ``--apply`` refuses: what failed, the command that fixes it, and its items."""
+
+    reason: str
+    fix: str
+    detail: tuple[str, ...] = ()
 
 
 class UnreadableError(Exception):
@@ -174,7 +184,21 @@ def wheel_layout(project_toml: dict[str, Any]) -> list[tuple[str, str]]:
     return pairs
 
 
-def ignored_problems(project_toml: dict[str, Any]) -> list[str]:
+def _first(items: list[str], limit: int = 10) -> tuple[str, ...]:
+    """The first *limit* items, with a trailing ``...`` when there are more."""
+    return tuple(items[:limit] + (["..."] if len(items) > limit else []))
+
+
+def _root() -> str:
+    return shlex.quote(str(_REPO_ROOT))
+
+
+def _install_cmd(flag: str) -> str:
+    """The recipe, run from anywhere: `just install <flag>` against this checkout."""
+    return f"just --justfile {_root()}/justfile --working-directory {_root()} install {flag}"
+
+
+def ignored_problems(project_toml: dict[str, Any]) -> list[Problem]:
     """Name each ignored file under a path the wheel packages: git status never lists one.
 
     force-include ships every file under its path, and a package walk skips only what the
@@ -186,12 +210,14 @@ def ignored_problems(project_toml: dict[str, Any]) -> list[str]:
     found = [p for p in listed if p and "__pycache__" not in PurePosixPath(p).parts]
     if not found:
         return []
-    shown = "\n      ".join(found[:10] + (["..."] if len(found) > 10 else []))
     paths = shlex.join(layout)
     return [
-        "ignored files the wheel packages would be installed unreviewed. Preview with "
-        f"`git clean -ndX -- {paths}`, then delete them with `git clean -fdX -- {paths}`:"
-        f"\n      {shown}"
+        Problem(
+            "ignored files the wheel packages would be installed unreviewed",
+            f"git -C {shlex.quote(str(_REPO_ROOT))} clean -fdX -- {paths}"
+            f"   # preview first: git clean -ndX -- {paths}",
+            _first(found),
+        )
     ]
 
 
@@ -500,18 +526,30 @@ def check(env: Path) -> tuple[list[str], int]:
     return drift, len(expected)
 
 
-def apply_problems(*, fetch: bool) -> list[str]:
+def apply_problems() -> list[Problem]:
     """Return every reason ``--apply`` must refuse; empty means it may install."""
-    problems: list[str] = []
+    problems: list[Problem] = []
     if os.environ.get("CLAUDECODE"):
-        problems.append(_SESSION)
+        problems.append(Problem(_SESSION, f"{_install_cmd('--apply')}   # from a terminal"))
     git_dir = Path(_git("rev-parse", "--path-format=absolute", "--git-dir"))
     common = Path(_git("rev-parse", "--path-format=absolute", "--git-common-dir"))
     if git_dir.resolve() != common.resolve():
-        problems.append(f"linked worktree: install from the main checkout, {common.parent}")
+        main_checkout = shlex.quote(str(common.parent))
+        problems.append(
+            Problem(
+                f"linked worktree: install from the main checkout, {common.parent}",
+                f"just --justfile {main_checkout}/justfile --working-directory {main_checkout}"
+                " install --apply",
+            )
+        )
     name = _git_proc("symbolic-ref", "--short", "-q", "HEAD").stdout.strip() or "detached HEAD"
     if name != _BASE:
-        problems.append(f"on '{name}', not {_BASE}: an unmerged branch is unreviewed text")
+        problems.append(
+            Problem(
+                f"on '{name}', not {_BASE}: an unmerged branch is unreviewed text",
+                f"git -C {_root()} switch {_BASE}",
+            )
+        )
     # status skips a skip-worktree or assume-unchanged file; uv builds it (project-init#1047).
     entries = _git("ls-files", "-v", "-z", strip=False).split("\0")
     hidden = [f"{_HIDDEN.get(e[0], e[0])}: {e[2:]}" for e in entries if e and e[0] != "H"]
@@ -523,28 +561,56 @@ def apply_problems(*, fetch: bool) -> list[str]:
         if line[3:] not in hidden_paths  # named by the hidden-files refusal instead
     ]
     if dirty:
-        shown = "\n      ".join(dirty[:10] + (["..."] if len(dirty) > 10 else []))
-        problems.append(f"uncommitted changes would be installed unreviewed:\n      {shown}")
-    if hidden:
-        shown = "\n      ".join(hidden[:10] + (["..."] if len(hidden) > 10 else []))
         problems.append(
-            "files git status skips would be installed unreviewed. Clear each flag with "
-            "`git update-index --no-skip-worktree -- <file>` or "
-            f"`git update-index --no-assume-unchanged -- <file>`, one call per flag:\n      {shown}"
+            Problem(
+                "uncommitted changes would be installed unreviewed",
+                f"git -C {_root()} status --short   # commit each through a PR, or discard it",
+                _first(dirty),
+            )
+        )
+    if hidden:
+        hidden_files = shlex.join(sorted(e[2:] for e in entries if e and e[0] != "H"))
+        problems.append(
+            Problem(
+                "files git status skips would be installed unreviewed",
+                f"git -C {_root()} update-index --no-skip-worktree -- {hidden_files}"
+                f" && git -C {_root()} update-index --no-assume-unchanged -- {hidden_files}",
+                _first(hidden),
+            )
         )
     # HEAD's layout: a pyproject on disk that differs from it is refused above.
     problems += ignored_problems(tomllib.loads(_git("show", "HEAD:pyproject.toml")))
-    if fetch:
-        proc = _git_proc("fetch", "--quiet", "origin", _BASE)
-        if proc.returncode != 0:
-            problems.append(f"cannot fetch origin/{_BASE}: {proc.stderr.strip()}")
+    # The dry run fetches too: one that read the last-fetched ref passed a checkout several merges
+    # behind, which the apply then refused.
+    proc = _git_proc("fetch", "--quiet", "origin", _BASE)
+    if proc.returncode != 0:
+        problems.append(
+            Problem(
+                f"cannot fetch origin/{_BASE}, so sync with origin/{_BASE} is unverified: "
+                f"{proc.stderr.strip()}",
+                f"git -C {_root()} fetch origin {_BASE}",
+            )
+        )
     upstream = _git_proc("rev-parse", "-q", "--verify", f"origin/{_BASE}").stdout.strip()
     if not upstream:
-        problems.append(f"no origin/{_BASE} to compare with: fetch it first")
+        problems.append(
+            Problem(
+                f"no origin/{_BASE} to compare with: fetch it first",
+                f"git -C {_root()} fetch origin {_BASE}",
+            )
+        )
     elif upstream != _git("rev-parse", "HEAD"):
         counts = _git_proc("rev-list", "--left-right", "--count", f"HEAD...origin/{_BASE}")
         ahead, _, behind = counts.stdout.strip().partition("\t")
-        problems.append(f"not in sync with origin/{_BASE} (ahead {ahead}, behind {behind})")
+        if ahead == "0":
+            fix = f"git -C {_root()} pull --ff-only origin {_BASE}"
+        else:
+            fix = (
+                f"git -C {_root()} log origin/{_BASE}..HEAD   # push those through a PR, then pull"
+            )
+        problems.append(
+            Problem(f"not in sync with origin/{_BASE} (ahead {ahead}, behind {behind})", fix)
+        )
     return problems
 
 
@@ -556,35 +622,46 @@ def _print_plan(env: Path, argv: list[str]) -> None:
     print(f"  command   {' '.join(argv)}")
 
 
-def _report(lines: list[str], head: str, *, stream: TextIO | None = None) -> None:
+def _fail(problem: Problem, *, tag: str = "FAIL", stream: TextIO | None = None) -> None:
+    """One refusal in the line shape a deploy relays: `  FAIL:`, then `  fix:`, then its items."""
     out = stream or sys.stderr
-    print(head, file=out)
-    for line in lines:
-        print(f"    - {line}", file=out)
+    # One line of reason: a git error runs to several, and a FAIL is followed by its fix.
+    head, *more = problem.reason.splitlines() or [""]
+    print(f"  {tag}: {head}", file=out)
+    print(f"  fix: {problem.fix}", file=out)
+    for item in [*(row.strip() for row in more if row.strip()), *problem.detail]:
+        print(f"      {item}", file=out)
 
 
 def _dry_run(env: Path, install: list[str]) -> int:
-    print(f"{_TOOL} box install: DRY RUN, nothing written")
+    print(f"{_TOOL} box install: DRY RUN, nothing installed (fetches origin/{_BASE})")
     _print_plan(env, install)
-    problems = apply_problems(fetch=False)
+    problems = apply_problems()
     if problems:
-        _report(problems, "  --apply would refuse:", stream=sys.stdout)
+        print("  note: --apply would refuse:", file=sys.stdout)
+        for problem in problems:
+            # A session alone is a warning here: dry runs are expected inside one.
+            _fail(problem, tag="WARN" if problem.reason == _SESSION else "FAIL", stream=sys.stdout)
     else:
-        print(f"  --apply would proceed (origin/{_BASE} as of the last fetch; --apply fetches)")
+        print(f"  --apply would proceed (in sync with origin/{_BASE} as fetched just now)")
     # Non-zero so a caller planning on the dry run stops early. A session alone is only
     # a note: dry runs are expected inside one, and deploy checks for a session itself.
-    return 1 if any(p != _SESSION for p in problems) else 0
+    return 1 if any(p.reason != _SESSION for p in problems) else 0
 
 
 def _apply(env: Path, install: list[str]) -> int:
-    problems = apply_problems(fetch=True)
+    problems = apply_problems()
     if problems:
-        _report(problems, "refusing --apply:")
+        print("  note: refusing --apply:", file=sys.stderr)
+        for problem in problems:
+            _fail(problem)
         return 1
     _print_plan(env, install)
     child_env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
-    if subprocess.run(install, env=child_env, check=False).returncode != 0:  # noqa: S603
-        _report([" ".join(install)], "failed:")
+    rc = subprocess.run(install, env=child_env, check=False).returncode  # noqa: S603
+    if rc != 0:
+        cmd = shlex.join(install)
+        _fail(Problem(f"{cmd} failed (rc={rc}); uv's own message is above", f"{cmd}   # by hand"))
         return 1
     return _check(env, done="installed and verified")
 
@@ -592,7 +669,14 @@ def _apply(env: Path, install: list[str]) -> int:
 def _check(env: Path, done: str = "matches") -> int:
     drift, count = check(env)
     if drift:
-        _report(drift, f"drift: the installed {_TOOL} differs from {_REPO_ROOT} HEAD:")
+        _fail(
+            Problem(
+                f"the installed {_TOOL} differs from {_REPO_ROOT} HEAD ({len(drift)} differences)",
+                f"{_install_cmd('--apply')}   # from a terminal; the differences are listed below",
+            )
+        )
+        for line in drift:
+            print(f"    - {line}", file=sys.stderr)
         return 1
     head = _git("rev-parse", "--short", "HEAD")
     print(f"ok: {env} {done} {_REPO_ROOT} at {head} ({count} files)")
@@ -617,7 +701,7 @@ def main(argv: list[str] | None = None) -> int:
         install = [_uv(), "tool", "install", "--reinstall", str(_REPO_ROOT)]
         return _apply(env, install) if args.apply else _dry_run(env, install)
     except RefusedError as exc:
-        _report([str(exc)], "refused:")
+        _fail(Problem(str(exc), "none automatic — the reason above names its own cause"))
         return 1
 
 
