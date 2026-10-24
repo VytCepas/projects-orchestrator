@@ -57,6 +57,16 @@ follow the inline quick-references in the rules below.
 - **Agent support tiers** — only the Claude Code path is functionally CI-tested; the real security boundary for every agent is the git/CI enforcement above. Codex: guards wired via `.codex/hooks.json` (**advisory** — some versions need a one-time enable step). Full wiring matrix: `.agents/docs/guides/enforcement.md`.
 
 
+## Tests and CI
+
+- **Iterate / before pushing** — `just test-quick` (fail-fast) while editing; `just test` when a change is done; `just ci` is the full gate CI runs.
+- **Pre-push hook** — the git pre-push hook runs the local gate on every push (activate once per clone: `.agents/scripts/install_hooks.sh`). Never weaken a gate to get green.
+- **Where CI runs** — `ci.yml` compute jobs run on `vars.CI_RUNS_ON` (a self-hosted runner when set, GitHub-hosted otherwise). To see where a job actually ran: `gh run view <run-id> --json jobs --jq '.jobs[] | {name, runnerName}'`. Setup: [`.agents/docs/guides/self-hosted-ci-runner.md`](.agents/docs/guides/self-hosted-ci-runner.md).
+- **Not per-PR** — scheduled jobs (nightly fuzz, mutation tests) run on their cron. To run one on a branch, check the `on:` block of `ci.yml`: with a `workflow_dispatch` that has a `cadence` input, `gh workflow run ci.yml --ref <branch> -f cadence=nightly` (needs `actions: write`, else HTTP 403 — hand it to a maintainer); without one, adding it is a workflow edit (next bullet).
+- **Workflow files need the `workflows` permission** — GitHub refuses a push of anything under `.github/workflows/` from a GitHub App or token without it ("refusing to allow a GitHub App to create or update workflow"). Commit, then hand the exact push command to a human with that permission; same for any PR whose branch carries such a commit.
+- **Flaky locally is the machine, not the code** — if two identical runs differ (a crash, then a pass), re-run in CI before concluding anything.
+- **Heavy suites belong in CI** — mutation, browser and perf suites do not run on a shared developer machine unless the task is about them.
+
 ## Claude Code specifics
 
 This section applies only when the agent is Claude Code. Other agents get

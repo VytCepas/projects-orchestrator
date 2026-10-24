@@ -44,7 +44,7 @@ Scaffolded with [project-init](https://github.com/VytCepas/project-init) on 2026
 
 Hooks run automatically: `github_command_guard`, `workflow_state_reminder`, `pre_commit_gate`, `post_edit_lint`, `prod_guard` — supplied by the `project-init-workflow` plugin (enabled in `.agents/settings.json` under `enabledPlugins`, not a local `hooks` block); the scripts live under the plugin's `CLAUDE_PLUGIN_ROOT`/hooks, so edit the plugin to change them. Secret scanning and lifecycle gating are enforced agent-agnostically by git hooks (gitleaks pre-commit, commit-msg, pre-push — installed via `.agents/scripts/install_hooks.sh`) and mirrored in CI; the `security-guidance` plugin provides Claude-side guidance.
 
-**Rules** (`.agents/rules/`): per-filetype conventions loaded automatically by Claude Code when you open a matching file.
+**Rules** (`.agents/rules/`): per-filetype conventions. Claude Code reads the copy generated in `.claude/rules/`, not `.agents/rules/`, and loads a rule when the session reads a matching file.
 
 ## Coding standards
 

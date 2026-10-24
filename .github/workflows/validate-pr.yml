@@ -12,7 +12,12 @@ permissions:
 jobs:
   pr-format-and-issue:
     name: Check PR title, branch, and linked issue
-    runs-on: ubuntu-24.04
+    # A REQUIRED check: pinned to GitHub-hosted, a billing lockout blocks every
+    # merge. Its only token is the job's read-only github.token, no PAT.
+    runs-on: ${{ vars.CI_RUNS_ON || 'ubuntu-24.04' }}
+    # Slowest of 417 completed jobs on hosted and self-hosted: 9 s. GitHub's
+    # default is 360 min, which a hung job would hold a single runner for.
+    timeout-minutes: 10
     steps:
       - name: Validate PR workflow metadata
         env:

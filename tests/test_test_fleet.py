@@ -266,7 +266,7 @@ def test_an_unscanned_root_fails_the_fleet_even_with_a_healthy_sibling(
     fleet_file.write_text(f"roots:\n  - {healthy}\n  - {missing}\n", encoding="utf-8")
     rc = main(["test-fleet", "--fleet", str(fleet_file)])
     captured = capsys.readouterr()
-    assert rc != 0, captured.out + captured.err
+    assert rc == 1, captured.out + captured.err
     lines = (captured.out + captured.err).strip().splitlines()
     assert any("cannot scan root" in line and str(missing) in line for line in lines), lines
     assert _rows(captured.out)["alpha"][-1] == "pass", captured.out
@@ -291,7 +291,7 @@ def test_a_dropped_explicit_project_fails_the_fleet_even_with_a_healthy_sibling(
     )
     rc = main(["test-fleet", "--fleet", str(fleet_file)])
     captured = capsys.readouterr()
-    assert rc != 0, captured.out + captured.err
+    assert rc == 1, captured.out + captured.err
     lines = (captured.out + captured.err).strip().splitlines()
     assert any(
         "configured but not tested" in line and str(not_a_project) in line for line in lines
@@ -345,7 +345,7 @@ def test_filtered_run_still_fails_when_its_own_project_never_scanned(
     fleet_file.write_text(f"roots:\n  - {missing}\n", encoding="utf-8")
     rc = main(["test-fleet", "--fleet", str(fleet_file), "alpha"])
     captured = capsys.readouterr()
-    assert rc != 0, captured.out + captured.err
+    assert rc == 2, captured.out + captured.err
 
 
 def test_one_project_by_name(fleet_dir: Path, capsys: pytest.CaptureFixture[str]) -> None:

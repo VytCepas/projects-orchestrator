@@ -31,6 +31,7 @@ jobs:
   release:
     name: Build + GitHub Release
     runs-on: ubuntu-24.04
+    if: ${{ vars.CI_RUNS_ON == '' }}  # hosted-only: skip (not fail) when CI_RUNS_ON routes CI to a self-hosted runner
     # Job-level perms override the workflow block, so contents: write is
     # restated for the release step; id-token + attestations back the SLSA
     # provenance attestation (#575).
@@ -78,7 +79,7 @@ jobs:
     name: Publish to registry
     needs: release
     # DISABLED by default — flip PUBLISH_ENABLED to arm it (see header).
-    if: ${{ vars.PUBLISH_ENABLED == 'true' }}
+    if: ${{ vars.CI_RUNS_ON == '' && vars.PUBLISH_ENABLED == 'true' }}
     runs-on: ubuntu-24.04
 
     # PyPI trusted publishing (ADR-011): OIDC, no token to custody. One-time:

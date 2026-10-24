@@ -5,7 +5,8 @@ name: CI
 # repo exhausts its GitHub Actions minutes. Toggle with `just ci-local-on` /
 # `ci-local-off`; setup guide: .agents/docs/guides/self-hosted-ci-runner.md.
 # Secret/PAT-bearing workflows deliberately stay on GitHub-hosted ephemeral runners.
-# Pinned here: board-automation, validate-pr, issue-validation, project-init-upgrade.
+# Pinned here: board-automation, issue-validation, project-init-upgrade.
+# validate-pr follows CI_RUNS_ON: it is a required check and carries no PAT.
 
 
 on:
@@ -47,6 +48,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Job timeouts: GitHub's default is 360 min, and a hung nightly held a single
+# self-hosted runner that long while deploys queued. Each bound is 1.5x the job's
+# slowest completed run (success or failure, minutes, noted per job) across four
+# scaffolded repos' Actions history, 2026-07-07..10-13, on hosted runners and
+# 1-CPU/1-GiB self-hosted ones, rounded up to 10. Outgrow one? Raise it.
+# Exceptions to that rule are marked UNMEASURED or, for mutation-tests, explained.
 jobs:
 
   # PI-214: derive the test matrix from requires-python at runtime, so the
@@ -59,6 +66,7 @@ jobs:
   python-matrix:
     name: Resolve Python matrix
     runs-on: ${{ vars.CI_RUNS_ON || 'ubuntu-24.04' }}
+    timeout-minutes: 10  # slowest 4.3
     outputs:
       versions: ${{ steps.resolve.outputs.versions }}
     steps:
@@ -142,6 +150,7 @@ jobs:
   lint-and-test:
     name: Lint and test
     runs-on: ${{ vars.CI_RUNS_ON || 'ubuntu-24.04' }}
+    timeout-minutes: 70  # slowest 40.8
 
     needs: python-matrix
     strategy:
@@ -322,6 +331,7 @@ jobs:
   integration-tests:
     name: Integration tests
     runs-on: ${{ vars.CI_RUNS_ON || 'ubuntu-24.04' }}
+    timeout-minutes: 10  # slowest 1.6
     needs: lint-and-test
     # Optional: Only run on main branch or when tests change significantly
     # if: github.ref == 'refs/heads/main' || contains(github.event.pull_request.files[*].name, 'tests/')
@@ -370,9 +380,16 @@ jobs:
   # deterministic pure-logic modules — skip I/O-heavy code, hooks, template
   # renderers) in your own pyproject.toml; mutmut reads config from there,
   # not a standalone file like ruff.toml/mypy.ini.
+  # The 120 bound is a judgement, NOT 1.5x a measured run of this command: no
+  # 1-worker run exists. Small mutation sets took 5-12 min at mutmut's default
+  # workers (2-4 CPUs), so 1 worker should stay well under 120. A large set (one
+  # 18k-mutation repo ran 76.6 min at default workers) is projected past it:
+  # measure one run with this job's command and set its own bound before adopting
+  # this file. Do not set MUTMUT_MAX_CHILDREN here; the recipe owns the count.
   mutation-tests:
     name: Mutation tests (mutmut)
     runs-on: ${{ vars.CI_RUNS_ON || 'ubuntu-24.04' }}
+    timeout-minutes: 120  # judgement, see above
     # Nightly cron only — not the weekly Scorecard one (see `on.schedule`).
     if: github.event_name == 'schedule' && github.event.schedule == '0 3 * * *'
     steps:
@@ -407,10 +424,12 @@ jobs:
           fi
       - if: steps.pyproject.outputs.exists == 'true'
         run: uv sync --group dev
-      - if: steps.pyproject.outputs.exists == 'true'
-        run: uv run --with mutmut mutmut run
-      - if: steps.pyproject.outputs.exists == 'true'
-        run: uv run --with mutmut mutmut export-cicd-stats
+      # The justfile recipe, not a copy of its commands: the worker count is
+      # defined once there. A bare `mutmut run` here forked os.cpu_count()
+      # workers (the host's count inside a container) and hung a 1-GiB runner.
+      - name: Mutation run (just test-mutation)
+        if: steps.pyproject.outputs.exists == 'true'
+        run: just test-mutation
       # The gate lives in a script, not a heredoc, because a gate that cannot be
       # tested is a gate that cannot be trusted — and this one had exactly the
       # defect it exists to detect (#132): it scored an empty run as 100% and
@@ -430,7 +449,7 @@ jobs:
         run: python3 .agents/scripts/mutation_gate.py --floor 60
 
 
-  
+
 
 
   # ADR-007: agent-agnostic secret-scanning backstop. The pre-commit git hook
@@ -438,6 +457,7 @@ jobs:
   secret-scan:
     name: Secret scan (gitleaks)
     runs-on: ${{ vars.CI_RUNS_ON || 'ubuntu-24.04' }}
+    timeout-minutes: 10  # slowest 2.3
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
@@ -543,6 +563,7 @@ jobs:
   semgrep:
     name: Semgrep (semantic security scan)
     runs-on: ${{ vars.CI_RUNS_ON || 'ubuntu-24.04' }}
+    timeout-minutes: 20  # slowest 11.3
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
@@ -583,6 +604,7 @@ jobs:
   license-scan:
     name: Dependency license scan
     runs-on: ${{ vars.CI_RUNS_ON || 'ubuntu-24.04' }}
+    timeout-minutes: 20  # slowest 6.9
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
@@ -639,6 +661,7 @@ jobs:
   fuzz:
     name: Fuzz / property tests
     runs-on: ${{ vars.CI_RUNS_ON || 'ubuntu-24.04' }}
+    timeout-minutes: 20  # slowest 11.0
     # Nightly cron only — not the weekly Scorecard one (see `on.schedule`).
     if: github.event_name == 'schedule' && github.event.schedule == '0 3 * * *'
     steps:
@@ -743,8 +766,10 @@ jobs:
   scorecard:
     name: OpenSSF Scorecard
     runs-on: ubuntu-24.04  # pinned: OSSF scorecard-action requires GitHub-hosted runners
-    # Weekly cron only — not the nightly one (see `on.schedule`).
-    if: github.event_name == 'schedule' && github.event.schedule == '0 4 * * 1'
+    timeout-minutes: 10  # slowest 1.0
+    # Weekly cron only — not the nightly one (see `on.schedule`). Skipped (not
+    # failed) when CI_RUNS_ON routes CI to a self-hosted runner: it can never start there.
+    if: vars.CI_RUNS_ON == '' && github.event_name == 'schedule' && github.event.schedule == '0 4 * * 1'
     permissions:
       security-events: write   # upload the SARIF result to code scanning
       id-token: write          # only needed if publish_results is turned on
@@ -787,6 +812,7 @@ jobs:
   ci-gate:
     name: CI gate
     runs-on: ${{ vars.CI_RUNS_ON || 'ubuntu-24.04' }}  # must follow the variable: it is the REQUIRED check — pinned, it can't start during a billing lockout and blocks the merge
+    timeout-minutes: 10  # slowest 1.8
     needs: [lint-and-test, secret-scan]
     if: always()
     steps:
