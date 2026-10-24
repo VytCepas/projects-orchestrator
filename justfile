@@ -13,6 +13,9 @@ setup:
 # lint project code (docstring + complexity gates per ruff.toml).
 # `ruff format --check` verifies formatting without writing — `just format`
 # writes. Without this, an unformatted file merged green (#726).
+# The discovery check runs with this repo's two deliberate collection gaps lifted:
+# addopts ignores tests/integration (CI's own job runs it) and test_properties.py
+# skips without hypothesis, so a plain collection would flag both as "run nowhere".
 [doc("lint project code (docstring + complexity gates per ruff.toml).")]
 lint:
     uv run ruff check .
@@ -20,6 +23,8 @@ lint:
     sh -c 'if command -v shellcheck >/dev/null 2>&1; then find .agents -name "*.sh" -exec shellcheck -S error -x {} +; else echo "shellcheck not installed — skipping shell lint (CI still runs it). Install: https://github.com/koalaman/shellcheck#installing or run \`mise install\`."; fi'
     sh -c 'if command -v shfmt >/dev/null 2>&1; then find .agents -name "*.sh" -exec shfmt -d -i 2 {} +; else echo "shfmt not installed — skipping shfmt check (CI still runs it). Install: https://github.com/mvdan/sh#shfmt or run \`mise install\`."; fi'
     bash .agents/scripts/lint_context_budget.sh
+    uv run python .agents/scripts/check_test_contract.py exit-codes
+    PYTEST_ADDOPTS="-o addopts=" uv run --with pytest --with hypothesis python .agents/scripts/check_test_contract.py discovery
 
 # static type check (strict mode per mypy.ini; add mypy with `uv add --dev mypy`)
 # no-op on a fresh scaffold with no src/ yet — mypy errors on a missing path.
@@ -34,9 +39,12 @@ typecheck:
 format:
     uv run ruff format .
 
-# run the test suite (xdist pulled in on demand so -n works without declaring it)
+# run the test suite (xdist pulled in on demand so -n works without declaring it).
+# The cross-repo test contract (PI-1044): it ends with `<project>: N passed, M failed`,
+# printed by the root conftest.py, and exits with pytest's own code.
+[doc("run the test suite; ends with `<project>: N passed, M failed` (the test contract)")]
 test:
-    sh -c 'if find tests -type f \( -name "test_*.py" -o -name "*_test.py" \) 2>/dev/null | grep -q .; then uv run --with pytest-xdist pytest -n auto --tb=short -q; else echo "No test files yet — nothing to test."; fi'
+    sh -c 'if find tests -type f \( -name "test_*.py" -o -name "*_test.py" \) 2>/dev/null | grep -q .; then uv run --with pytest-xdist pytest -n auto --tb=short -q; else echo "No test files yet — nothing to test."; echo "projects-orchestrator: 0 passed, 0 failed"; fi'
 
 # fail-fast quiet run for the edit-test loop (token-efficiency; PI-641) —
 # stops at the first failure so agents ingest one traceback, not the suite's
@@ -57,9 +65,12 @@ test-cov:
 # mutation testing on core logic (slow; requires [tool.mutmut] source_paths
 # in your own pyproject.toml, scoped to deterministic pure-logic modules —
 # skip I/O-heavy code, hooks, template renderers). CI runs this nightly.
+# Workers default to 1: mutmut forks os.cpu_count() workers, which a container
+# reports as the HOST's count — 8 forks in a 1-CPU/1-GiB runner OOM-killed and
+# then hung for 3h. Raise it per run: MUTMUT_MAX_CHILDREN=4 just test-mutation.
 [doc("mutation testing on core logic")]
 test-mutation:
-    uv run --with mutmut mutmut run
+    uv run --with mutmut mutmut run --max-children "${MUTMUT_MAX_CHILDREN:-1}"
     uv run --with mutmut mutmut export-cicd-stats
 
 # dependency vulnerability scan against known CVEs/advisories (PI-568).

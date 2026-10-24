@@ -45,7 +45,9 @@ for file in "$MEMORY_DIR"/*.md; do
   is_skipped "$name" && continue
 
   # Extract YAML frontmatter (between --- delimiters)
-  if ! head -1 "$file" | grep -q '^---$'; then
+  # Here-strings, not `cmd | grep -q`: under pipefail a grep that exits on its first
+  # match can SIGPIPE the writer, turning a match into a spurious failure (flaky).
+  if ! grep -q '^---$' <<<"$(head -1 "$file")"; then
     error "$name: missing YAML frontmatter (no opening ---)"
     continue
   fi
@@ -55,7 +57,7 @@ for file in "$MEMORY_DIR"/*.md; do
 
   # Check required fields
   for field in name description type; do
-    if ! echo "$frontmatter" | grep -q "^${field}:"; then
+    if ! grep -q "^${field}:" <<<"$frontmatter"; then
       error "$name: missing required field '$field'"
     fi
   done
@@ -177,7 +179,7 @@ if [ -d "$VAULT_DIR" ]; then
     # metacharacters in note names ("plan(v2)") misfire and lets any note whose
     # name is a substring of another's ("foo" vs "[[foobar]]") pass as linked.
     if [ -n "$all_links" ]; then
-      if ! echo "$all_links" | grep -Fxq "$name"; then
+      if ! grep -Fxq "$name" <<<"$all_links"; then
         warn "$(basename "$file"): no inbound wikilinks (orphan note)"
       fi
     fi

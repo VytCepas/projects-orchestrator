@@ -9,7 +9,8 @@ name: Board automation
 #      (the single source of truth shared with create_issue.sh / setup_github.sh).
 #   4. Status field options (single-select): Backlog, To Do, In Progress,
 #      In Review, Done. Optional metadata fields: Priority, Area, Size,
-#      Agent ready, Confidence, Type.
+#      Agent ready, Confidence, Work type ("Type" is reserved by GitHub; a
+#      board with a custom "Type" field from before that keeps it — #1034).
 #
 # Status transitions:
 #   issue opened        -> Backlog   (a new ticket lands in the backlog to triage)
@@ -39,6 +40,7 @@ permissions:
 jobs:
   board-sync:
     runs-on: ubuntu-24.04
+    if: ${{ vars.CI_RUNS_ON == '' }}  # hosted-only: skip (not fail) when CI_RUNS_ON routes CI to a self-hosted runner
     env:
       GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
       # Pin the repo so every `gh` call (e.g. `gh issue view`) resolves it
@@ -262,7 +264,7 @@ jobs:
             if [ -z "$option_id" ]; then
               # A warning, not a log line: the value is set on the issue but the board
               # cannot show it until the option exists (#1016).
-              echo "::warning title=Board option missing::Skipping missing project option: $field_name=$option_name. Add the option to the board's '$field_name' field (setup_github.sh adds missing Type options)."
+              echo "::warning title=Board option missing::Skipping missing project option: $field_name=$option_name. Add the option to the board's '$field_name' field (setup_github.sh adds missing type options)."
               return 0
             fi
 
@@ -285,6 +287,12 @@ jobs:
           update_single_select "Size"        "$SIZE"
           update_single_select "Agent ready" "$AGENT_READY"
           update_single_select "Confidence"  "$CONFIDENCE"
-          update_single_select "Type"        "$TYPE_LABEL"
+          # GitHub reserves "Type", so boards get "Work type" (must match
+          # setup_github.sh, #1034); a board's pre-reservation "Type" still syncs.
+          TYPE_FIELD="Work type"
+          if ! echo "$PROJECT" | jq -e --arg f "$TYPE_FIELD" 'any((.fields.nodes // [])[]; .name == $f)' >/dev/null; then
+            TYPE_FIELD="Type"
+          fi
+          update_single_select "$TYPE_FIELD" "$TYPE_LABEL"
 
           echo "Synced issue #$ISSUE_NUM to GitHub Project metadata fields"

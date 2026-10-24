@@ -6,8 +6,10 @@ argument-hint: "<command-name> <what it does>"
 allowed-tools: Write
 ---
 
-> **Claude Code specific**: this skill manages Claude Code configuration
-> (settings.json wiring). Other agents do not consume what it produces.
+> **Claude Code specific**: the frontmatter keys below are Claude Code's. The
+> skill file itself (`.agents/skills/<name>/SKILL.md`) is also read by Codex, Amp,
+> Antigravity and Junie, and none of them reads `disable-model-invocation`
+> (see Step 4).
 
 
 ## Create a skill
@@ -64,6 +66,20 @@ Run this command to <what it does>.
 ```
 
 **`$ARGUMENTS`** expands to the full argument string. Use `$1`, `$2` for positional args.
+
+## Step 4 — User-only skills on other harnesses
+
+`disable-model-invocation: true` only hides the skill from Claude Code. When the
+user asks for a user-only skill and the project's `agents` include Codex, also
+write `.agents/skills/<name>/agents/openai.yaml`:
+
+```yaml
+policy:
+  allow_implicit_invocation: false
+```
+
+Then tell the user which harnesses in the project will still list the skill to
+the model: Amp, Antigravity and Junie have no per-skill invocation control.
 
 ## Guidelines
 

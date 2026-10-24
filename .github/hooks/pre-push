@@ -92,9 +92,15 @@ if [[ "$PUSHING_BRANCH" == "1" ]]; then
       echo "  Commit or stash your changes to run the gate before pushing." >&2
     else
       echo "pre-push: running 'just fast-ci' (lint + tests) before push…"
-      if ! (cd "$REPO_ROOT" && env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
-        -u GIT_PREFIX -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES \
-        -u GIT_QUARANTINE_PATH just fast-ci); then
+      # Every `git rev-parse --local-env-vars` name, plus GIT_QUARANTINE_PATH: a
+      # `git -c` push exports GIT_CONFIG_PARAMETERS here, and an exported GIT_CONFIG
+      # redirects every `git config` write (#1065).
+      if ! (cd "$REPO_ROOT" && env -u GIT_DIR -u GIT_WORK_TREE -u GIT_IMPLICIT_WORK_TREE \
+        -u GIT_INDEX_FILE -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \
+        -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_QUARANTINE_PATH -u GIT_PREFIX \
+        -u GIT_CONFIG -u GIT_CONFIG_PARAMETERS -u GIT_CONFIG_COUNT -u GIT_GRAFT_FILE \
+        -u GIT_NO_REPLACE_OBJECTS -u GIT_REPLACE_REF_BASE -u GIT_SHALLOW_FILE \
+        just fast-ci); then
         echo ""
         echo "❌ pre-push: 'just fast-ci' failed — fix the errors above before pushing."
         echo "   (bypass in an emergency with: git push --no-verify)"

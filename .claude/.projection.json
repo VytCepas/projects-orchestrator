@@ -3,9 +3,12 @@
     "CAPABILITIES.md",
     "agents/README.md",
     "project-init.md",
+    "protected-paths.tsv",
+    "required-checks.tsv",
     "rules/hooks.md",
     "rules/python.md",
     "settings.json",
+    "ship.conf",
     "skills/README.md",
     "skills/plan/SKILL.md"
   ]

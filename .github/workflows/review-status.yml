@@ -63,7 +63,7 @@ jobs:
     name: Set review/decision status
     # issue_comment fires for plain issues too; only PRs have a head SHA to
     # attach a commit status to (#719).
-    if: github.event_name != 'issue_comment' || github.event.issue.pull_request
+    if: vars.CI_RUNS_ON == '' && (github.event_name != 'issue_comment' || github.event.issue.pull_request)
     runs-on: ubuntu-24.04
     steps:
       - name: Post commit status

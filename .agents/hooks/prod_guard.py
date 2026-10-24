@@ -510,9 +510,19 @@ def _read_word(command: str, i: int) -> tuple[_Word, int] | None:
             quoted.append((i, j + 1))
             plain = False
             i = j + 1
-        elif ch == "`" or command.startswith(("$'", '$"'), i):
-            # `$'…'` has escape rules of its own: `echo $'\'' ; <verb> ; echo
-            # $'\''` RAN the verb where POSIX quoting reads it as arguments.
+        elif command.startswith("$'", i):
+            # `$'…'` has escape rules of its own (`\'` does not close it): `echo
+            # $'\'' ; <verb> ; echo $'\''` RAN the verb where POSIX quoting reads
+            # it as arguments. Read with those rules, it is a quoted word (#1057).
+            j = i + 2
+            while j < n and command[j] != "'":
+                j += 2 if command[j] == "\\" else 1
+            if j >= n:
+                return None
+            quoted.append((i, j + 1))
+            plain = False
+            i = j + 1
+        elif ch == "`" or command.startswith('$"', i):
             return None
         else:
             plain = plain and ch != "$"
@@ -520,9 +530,11 @@ def _read_word(command: str, i: int) -> tuple[_Word, int] | None:
     return _Word(command[start:i], tuple(quoted), plain), i
 
 
-def _lex(command: str) -> list[_Simple] | None:
-    """*command* as its simple commands in order, or None when any part is unmodelled."""
+def _lex(command: str) -> tuple[list[_Simple], list[tuple[int, int]]] | None:
+    """*command* as its simple commands plus recognised comment spans, in order,
+    or None when any part is unmodelled."""
     simples: list[_Simple] = []
+    comments: list[tuple[int, int]] = []
     words: list[_Word] = []
     redirects: list[tuple[str, str, _Word]] = []
     i, n = 0, len(command)
@@ -539,6 +551,7 @@ def _lex(command: str) -> list[_Simple] | None:
             # measured in bash, zsh, an interactive zsh with no rc, and bash with
             # `interactive_comments` off. The newline stays: it ends a statement.
             end = command.find("\n", i)
+            comments.append((i, n if end < 0 else end))
             i = n if end < 0 else end
             continue
         if ch in "()`":
@@ -584,7 +597,7 @@ def _lex(command: str) -> list[_Simple] | None:
         target, i = read
         redirects.append((io, redirect, target))
     simples.append(_Simple(words, redirects, ""))
-    return simples
+    return simples, comments
 
 
 def _dequote(text: str) -> str:
@@ -714,29 +727,53 @@ def _message_regions(simple: _Simple) -> list[tuple[int, int]]:
     return regions
 
 
+# Operators that would start, pipe or substitute a command if `#` were a word.
+_COMMENT_CAN_RUN = re.compile(r"[;&|()`<>]")
+
+
 def _prose_spans(command: str) -> list[tuple[int, int]]:
-    """Character spans in *command* that are prose rather than execution.
+    """Character spans in *command* that are prose or a shell comment, not execution.
 
     A quoted region qualifies when the simple command holding it is headed by a
     command that only prints or searches its arguments, or when it is the value
     of a commit-message flag — AND that command's output goes nowhere but the
     terminal. Prose that is DISPLAYED or SEARCHED is inert; prose that is SENT
-    somewhere is not.
+    somewhere is not. A comment span (#1061) is inert only when it holds no
+    shell operator: a shell that reads `#` as a word would run what follows a
+    separator, so such a span stays visible. Without one, a blind dequote of
+    the raw text would rejoin a quote-split phrase sitting inside it.
     """
-    simples = _lex(command)
-    if simples is None or any(_ends_analysis(simple) for simple in simples):
+    lexed = _lex(command)
+    if lexed is None:
         return []
-    spans: list[tuple[int, int]] = []
+    simples, comments = lexed
+    if any(_ends_analysis(simple) for simple in simples):
+        return []
+    # #1063 review: `#` is a plain word under bash `interactive_comments` off or
+    # zsh's `histchars`, so a comment holding a separator stays in the views.
+    spans = [c for c in comments if not _COMMENT_CAN_RUN.search(command, *c)]
     for simple in simples:
         if not simple.words or _flows_onward(simple):
             continue
         head = _head(simple.words[0])
+        grep_args = _git_grep_args(simple)
         if head in _PROSE_HEADS or head in _PROSE_PATTERN_TOOLS:
-            if head == "printf" and any(word.text.startswith("-v") for word in simple.words[1:]):
+            if head == "printf" and any(
+                _dequote(word.text).startswith("-v") for word in simple.words[1:]
+            ):
                 # `printf -v c "…"; $c` RAN in bash: the text became a command
                 # through the variable, and no verb was left anywhere to see.
+                # Dequoted, because `printf '-v' c "…"` assigns too (#1043).
                 continue
             regions = [region for word in simple.words[1:] for region in word.quoted]
+        elif grep_args is not None:
+            # #1039: `git grep <pattern>` searches its argument like `grep`, so a
+            # quoted pattern naming a destructive verb is prose, not the verb —
+            # `git grep 'terraform destroy'` asked before this. `git grep` never
+            # executes its own quoted arguments; the one exec path,
+            # `-O`/`--open-files-in-pager`, is caught by `_git_grep_runs_pager`
+            # whether its value is blanked or not.
+            regions = [region for word in simple.words[grep_args:] for region in word.quoted]
         else:
             regions = _message_regions(simple)
         spans.extend(
@@ -851,7 +888,252 @@ def _search_runs_program(command: str) -> str | None:
                     found = _tool_flag(names[k], leaf[k + 1 :])
                     if found:
                         return found
+                if names[k] == "git":
+                    found = _git_grep_runs_pager(leaf[k + 1 :])
+                    if found:
+                        return found
     return None
+
+
+# ── #1039: `git grep` opens its hits in a program ───────────────────────────
+# `git grep -O<pager>` / `--open-files-in-pager[=<pager>]` runs <pager> FILE for
+# every match, so `git grep -O'terraform destroy' needle` runs `terraform
+# destroy`; the pager value is not a quoted PATTERN, so blanking never touched
+# it, and no deny rule saw the verb. All four spellings ran a `touch` payload:
+# `-O'…'`, the clustered `-iO'…'`, `--open-files-in-pager='…'`, and git's
+# unambiguous long-option abbreviation `--op='…'`. Short `-o` (only-matching)
+# is lowercase and inert; the flag we key on is the UPPER-case `O` and the long
+# name it abbreviates. Refusing the flag models nothing, as with the search
+# tools above.
+_GIT_GREP_PAGER_LONG = "open-files-in-pager"
+_GIT_GREP_SHORT_PAGER = re.compile(r"-[A-Za-z0-9]*O")  # `-1O` too: -NUM is context
+
+
+#: Wrappers that exec the rest of their argv as given — no shell, no search path of
+#: their own — with the only options modelled for each (#1043). Any other option
+#: keeps the prompt: `env -S'bash -c "eval \$3" x' git grep '…'` RAN the pattern.
+_EXEC_WRAPPERS: dict[str, frozenset[str]] = {
+    "builtin": frozenset(),
+    "command": frozenset({"-p"}),
+    "env": frozenset({"-", "-i", "--ignore-environment"}),
+    "nice": frozenset(),
+    "nohup": frozenset(),
+    "noglob": frozenset(),
+    "nocorrect": frozenset(),
+    "time": frozenset({"-p"}),
+}
+#: An assignment that decides which `git` runs (zsh ties `path` to PATH).
+_SEARCH_PATH_ASSIGN = re.compile(r"(?:PATH|path)(?:\[[^\]]*\])?\+?=")
+
+
+def _git_grep_args(simple: _Simple) -> int | None:
+    """Index of the first argument `git grep` itself takes in *simple*, or None.
+
+    Past `VAR=…` prefixes, `_EXEC_WRAPPERS` and git's global options. Only the
+    words from here on are prose: `git -c core.fsmonitor='…' grep` and a
+    GIT_CONFIG_* prefix RAN their value, and with a PATH prefix a planted
+    ./git ran the pattern (#1043).
+    """
+    words = simple.words
+    i = 0
+    while i < len(words):
+        if _ASSIGN_PREFIX.match(words[i].text):
+            if _SEARCH_PATH_ASSIGN.match(words[i].text):
+                return None
+            i += 1
+            continue
+        options = _EXEC_WRAPPERS.get(_head(words[i]))
+        if options is None:
+            break
+        i += 1
+        while i < len(words) and words[i].plain and words[i].text in options:
+            i += 1
+    if i >= len(words) or _head(words[i]) != "git":
+        return None
+    i += 1
+    while i < len(words):
+        text = words[i].text
+        if text in _VCS_GLOBAL_ARG_FLAGS:
+            i += 2
+            continue
+        if text.startswith("-"):
+            i += 1
+            continue
+        break
+    return i + 1 if i < len(words) and words[i].text == "grep" else None
+
+
+def _git_grep_runs_pager(after_git: list[str]) -> str | None:
+    """The `git grep -O`/`--open-files-in-pager` flag in *after_git*, or None.
+
+    *after_git* is the word list following the `git` command word (its own
+    global options, the `grep` subcommand, then grep's arguments).
+    """
+    words = after_git
+    i = 0
+    while i < len(words):
+        word = words[i]
+        if word in _VCS_GLOBAL_ARG_FLAGS:  # `git -C DIR grep …`, `git -c k=v grep …`
+            i += 2
+            continue
+        if word.startswith("-"):  # `--git-dir=…` and other attached globals
+            i += 1
+            continue
+        break
+    if i >= len(words) or words[i] != "grep":
+        return None
+    for word in words[i + 1 :]:
+        if word == "--":  # what follows is a pattern or a path, not a flag
+            break
+        if word.startswith("--"):
+            name = word[2:].partition("=")[0]
+            if len(name) >= 2 and _GIT_GREP_PAGER_LONG.startswith(name):
+                return "git grep --open-files-in-pager"
+            if len(name) >= 5 and "textconv".startswith(name):  # runs the diff driver's filter
+                return "git grep --textconv"
+        elif word.startswith("-") and _GIT_GREP_SHORT_PAGER.match(word):
+            return "git grep -O"
+    return None
+
+
+# ── #1043: a name split by quoting is still the name ────────────────────────
+# The shell joins adjacent quoted pieces, so `RIPGREP_'CONFIG_PATH'=…` sets the var
+# and `terraform "destroy"` runs the verb; no text check saw either. One mechanism
+# instead of a regex per spelling: every check also reads the command after quote
+# removal. A matching VIEW, never a parse — it only adds matches, so a rough edge
+# can flag a harmless command (ask, or deny in an autonomous mode such as
+# bypassPermissions) but never clears one the raw text flags.
+_ANSI_C_QUOTED = re.compile(r"\$'((?:[^'\\]|\\.)*)'", re.DOTALL)
+_ANSI_C_ESCAPE = re.compile(
+    r"\\(?:x([0-9A-Fa-f]{1,2})|u([0-9A-Fa-f]{1,4})|U([0-9A-Fa-f]{1,8})|([0-7]{1,3})|c(.)|(.))",
+    re.DOTALL,
+)
+_ANSI_C_LETTERS = {
+    "a": "\a",
+    "b": "\b",
+    "e": "\x1b",
+    "E": "\x1b",
+    "f": "\f",
+    "n": "\n",
+    "r": "\r",
+    "t": "\t",
+    "v": "\v",
+}
+
+
+def _ansi_c_escape(escape: re.Match[str]) -> str:
+    hexa, short, long, octal, control, other = escape.groups()
+    code = hexa or short or long
+    if code:
+        decoded = chr(min(int(code, 16), 0x10FFFF))
+    elif octal:
+        decoded = chr(int(octal, 8) & 0xFF)
+    elif control is not None:
+        decoded = chr(ord(control) & 0x1F)
+    else:
+        decoded = _ANSI_C_LETTERS.get(other, other)
+    # A word or environment name cannot hold a NUL byte, so bash drops a
+    # decoded NUL from it entirely: `terraform des$'\x00'troy` reaches bash as
+    # `terraform destroy`. Elide it here too (\0, \x00, \u0000, octal and
+    # control forms all land here), or the dequoted view still reads
+    # `des\0troy` and evaluate() never recognizes the spliced word (#1043
+    # review; PI-881 bump).
+    return "" if decoded == "\x00" else decoded
+
+
+def _dequoted(command: str) -> str:
+    """*command* after quote removal: `$'…'` decoded, quotes and backslashes gone."""
+    text = command.replace("\\\n", "")
+    text = _ANSI_C_QUOTED.sub(lambda m: _ANSI_C_ESCAPE.sub(_ansi_c_escape, m[1]), text)
+    text = text.replace('$"', '"')
+    return re.sub(r"\\(.)|['\"]", lambda m: m[1] or "", text, flags=re.DOTALL)
+
+
+# ── #1039: exec flags injected through a config file named in the environment ─
+# `RIPGREP_CONFIG_PATH=cfg rg` runs `--pre=CMD` from cfg; `ACKRC=cfg ack` runs its
+# `--pager`. Three review rounds each found another way to set the var (after
+# `env`, `+=`, `VAR=… export`, `declare -x`, inside `bash -c '…'`), so this is
+# presence-based, not a shell model: the var SET anywhere in the command beside
+# its tool named anywhere asks. Order is ignored on purpose — fail closed.
+_CONFIG_ENV: dict[str, str] = {"RIPGREP_CONFIG_PATH": "rg", "ACKRC": "ack"}
+
+
+def _config_env_runs_program(views: tuple[str, ...]) -> str | None:
+    """A config-path env var set beside the search tool that reads it, or None.
+
+    *views* are the prose-blanked command, raw and dequoted (#1043); a match in
+    either counts.
+    """
+    for var, tool in _CONFIG_ENV.items():
+        set_at = re.compile(rf"(?<![A-Za-z0-9_]){var}\+?=")
+        exported = re.compile(
+            rf"\b(?:export|declare|typeset|local|readonly)\b[^;&|\n]*(?<![A-Za-z0-9_]){var}\b"
+        )
+        tool_at = re.compile(rf"(?<![A-Za-z0-9_.-]){tool}(?![A-Za-z0-9_.-])")
+        set_here = any(set_at.search(view) or exported.search(view) for view in views)
+        named = any(tool_at.search(view) for view in views)
+        if named and (set_here or _inherited_config_runs(var, tool)):
+            return var
+    return None
+
+
+_CONFIG_READ_LIMIT = 64 * 1024
+
+
+def _inherited_config_runs(var: str, tool: str) -> bool:
+    """*var* came in with the session and its config file holds an exec flag.
+
+    The file is read, so a benign inherited config does not make every search ask;
+    an unreadable one fails closed. Both tools take one argument per line.
+    """
+    path = os.environ.get(var)
+    if not path:
+        return False
+    cfg = Path(path).expanduser()
+    try:
+        if not cfg.is_file():  # a FIFO or /dev/zero would hang every command
+            return True
+        with cfg.open("rb") as handle:
+            text = handle.read(_CONFIG_READ_LIMIT + 1)
+    except OSError:
+        return True
+    if len(text) > _CONFIG_READ_LIMIT:
+        return True
+    lines = text.decode("utf-8", errors="replace").splitlines()
+    args = [line.strip() for line in lines if line.strip() and not line.lstrip().startswith("#")]
+    return _tool_flag(tool, args) is not None
+
+
+# ── #1039: PS4 command substitution runs under xtrace ────────────────────────
+# With tracing on, the shell expands PS4 before every command, so a `$(…)` in PS4
+# runs each time: `PS4='$(id)'; set -x; echo hi` runs `id` (reproduced in bash and
+# zsh). Four review rounds found new ways to set PS4 (`+=`, `PS4[0]=`, inside
+# `bash -c`), so nothing is parsed: PS4 named anywhere, tracing enabled anywhere,
+# and anything in the command able to run a program — together they ask.
+_PS4_NAMED = re.compile(r"(?<![A-Za-z0-9_])PS4(?![A-Za-z0-9_])")
+_XTRACE_ON = re.compile(
+    r"(?i)\bx_?trace\b|\bset\s+(?:-[A-Za-z]+\s+)*-[A-Za-z]*x|"
+    r"(?<![A-Za-z0-9_])(?:ba|z|k|da)?sh\s+(?:-[A-Za-z]+\s+)*-[A-Za-z]*x"
+)
+# `$NAME` / `${NAME}` / `${NAME:-word}` read a variable and run nothing; any other
+# `$` or backtick (`$(…)`, `$((a[$(…)]))`, `${!ref}`, `${a[…]}`) may run a program.
+_PLAIN_PARAM = re.compile(
+    r"\$\{[A-Za-z_][A-Za-z0-9_]*(?:[:#%/^,]?[-=?+]?[A-Za-z0-9_ .:/+-]*)?\}"
+    r"|\$[A-Za-z_][A-Za-z0-9_]*|\$[0-9#?$!*@-]"
+)
+
+
+def _trace_runs_program(views: tuple[str, ...]) -> str | None:
+    """PS4 named beside xtrace and a construct able to run a program, or None.
+
+    *views* are the prose-blanked command, raw and dequoted (#1043), so
+    `bash -c '…'` bodies and lines that do not tokenise are seen as well.
+    """
+    named = any(_PS4_NAMED.search(view) for view in views)
+    if not (named and any(_XTRACE_ON.search(view) for view in views)):
+        return None
+    rests = [_PLAIN_PARAM.sub("", view) for view in views]
+    return "PS4 with set -x" if any("$" in rest or "`" in rest for rest in rests) else None
 
 
 # ── Secret-file exposure (PI-893) ───────────────────────────────────────────
@@ -1203,7 +1485,7 @@ def _takes_message(leaf: list[str], verb_at: int) -> bool:
 # the reader set, the exposure-safe set and the message carve-out alike.
 # Skipping the prefixes cannot open a bypass: the assignment TOKENS stay in the
 # list, so `FOO=<dotenv> cat x` still matches _SECRET_PATH on the value.
-_ASSIGN_PREFIX = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_ASSIGN_PREFIX = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=")  # `+=`, `a[i]=` (#1039)
 
 
 def _verb_index(leaf: list[str]) -> int:
@@ -1597,10 +1879,6 @@ def _port_root() -> Path | None:
     database when HOME is unset and would invent the default the contract says
     not to.
 
-    THE DEFAULT IS PER OS. Only the POSIX one is decided and the Windows one
-    is still open, so off POSIX an exported PORT_ROOT counts but nothing is
-    defaulted.
-
     Trailing slashes need no code: pathlib drops them at construction, so
     ``~/port/`` and ``~/port`` are one Path before the equality test. Resolved
     for the same reason ``start`` is — the stop compares physical paths, and a
@@ -1616,7 +1894,7 @@ def _port_root() -> Path | None:
         root = Path(exported)
     else:
         home = os.environ.get("HOME") or ""
-        if not home or os.name != "posix":
+        if not home:
             return None
         root = Path(home) / "port"
     with contextlib.suppress(OSError, RuntimeError):
@@ -1890,13 +2168,16 @@ def evaluate(
         return None
     # Computed once, not per rule: 20-odd rules over the same string.
     prose_free = _without_prose(command)
+    # #1043: every check also reads the command after quote removal, so
+    # `terraform "destroy"` is the verb it runs. Only the checks that consume
+    # `views` below — config-env and PS4 — read the prose-blanked forms.
+    views = (prose_free, _dequoted(prose_free))
+    pairs = ((command, views[0]), (_dequoted(command), views[1]))
     for pattern, label in DENY_RULES:
-        if pattern.search(command):
-            # #965: the verb is real only if it survives blanking the prose. A
-            # rule that matches ONLY inside a commit message or a grep pattern
-            # was reading documentation, not an operation.
-            if not pattern.search(prose_free):
-                continue
+        # #965: the verb is real only if it survives blanking the prose. A rule
+        # that matches ONLY inside a commit message or a grep pattern was
+        # reading documentation, not an operation.
+        if any(pattern.search(whole) and pattern.search(bare) for whole, bare in pairs):
             return _verdict(
                 f"prod_guard: '{label}' is a destructive operation. "
                 "If this is intentional and safe, add a matching regex to "
@@ -1906,12 +2187,22 @@ def evaluate(
                 permission_mode,
                 problems,
             )
-    runner = _search_runs_program(command)
+    runner = _search_runs_program(command) or _config_env_runs_program(views)
     if runner is not None:
         return _verdict(
             f"prod_guard: '{runner}' makes a search tool run another program, "
             "which no deny rule can inspect. Run that program directly so it is "
             "checked, add a matching regex to safety.allow in .agents/config.yaml, "
+            "or run the command yourself.",
+            permission_mode,
+            problems,
+        )
+    tracer = _trace_runs_program(views)
+    if tracer is not None:
+        return _verdict(
+            f"prod_guard: '{tracer}' runs a PS4 command substitution on every "
+            "traced command, which no deny rule can inspect. Drop the substitution "
+            "from PS4, add a matching regex to safety.allow in .agents/config.yaml, "
             "or run the command yourself.",
             permission_mode,
             problems,

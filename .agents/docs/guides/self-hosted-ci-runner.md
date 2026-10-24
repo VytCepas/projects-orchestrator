@@ -65,8 +65,8 @@ Assumed-present binaries:
 | `git` | checkout, every workflow step that touches the repo | `sudo apt install git` |
 | `curl` | download/API steps | `sudo apt install curl` |
 | `tar`, `gzip` | action tool downloads | usually present |
-| `gh` | `ci.yml`'s post-failure PR comment step runs `gh pr comment` on this runner whenever a PR job fails; also the lifecycle workflows, if you route them here | [cli.github.com](https://cli.github.com) |
-| `jq` | JSON parsing in the lifecycle workflows (`validate-pr`, `board-automation`, `issue-validation`, `review-status`) — bites only if you route those here | `sudo apt install jq` |
+| `gh` | `ci.yml`'s post-failure PR comment step runs `gh pr comment` on this runner whenever a PR job fails; `validate-pr` (a required check) runs `gh issue view` here on every PR | [cli.github.com](https://cli.github.com) |
+| `jq` | JSON parsing in `validate-pr`, which runs here on every PR, and in the pinned lifecycle workflows if you ever route those here | `sudo apt install jq` |
 | `shellcheck` | the shell-lint step (preinstalled on GitHub images — **absent on bare hosts**) | `sudo apt install shellcheck` |
 | `docker` | container image jobs, if enabled | [docs.docker.com/engine/install](https://docs.docker.com/engine/install/) |
 
@@ -97,19 +97,33 @@ The lifecycle scripts' CI wait defaults to 900s — set `PI_CI_TIMEOUT`
 (e.g. `PI_CI_TIMEOUT=1800`) so the merge flow survives sequential runs.
 
 
+**A hung job holds that runner.** Every `ci.yml` job carries a `timeout-minutes`
+(GitHub's default is 360). Container CPU limits do not change the CPU count tools
+see, so anything sized by it oversubscribes a small runner.
+`just test-mutation` runs one mutmut worker unless `MUTMUT_MAX_CHILDREN` is
+set for that run. `pytest -n auto` starts no more workers than the runner's cgroup
+has CPUs and memory for (512 MiB each; the root `conftest.py`); a heavier suite
+sets `PYTEST_XDIST_AUTO_NUM_WORKERS` or passes `-n N`.
+
 ## Trust model — read before enabling
 
 - Use this only on **private repos with trusted collaborators**. A
   self-hosted runner executes whatever the workflow (and the PR) tells it to,
   on your machine.
 - Never process public-fork PRs on a self-hosted runner.
-- Secret/PAT-bearing workflows (`board-automation`, `validate-pr`,
+- Secret/PAT-bearing workflows (`board-automation`,
   `issue-validation`, `project-init-upgrade`) — including any
   release/deploy/registry-publish workflows you enable — are **deliberately
   pinned** to GitHub-hosted ephemeral runners so tokens never materialize on
   your machine. They cost seconds and fit the free tier once `ci.yml` moves
   off. Do not point them at `CI_RUNS_ON`.
-- The `scorecard` job stays GitHub-hosted (an OSSF requirement).
+- Every job that stays GitHub-hosted — `scorecard` (an OSSF requirement) and
+  the pinned workflows above — carries `vars.CI_RUNS_ON == ''` in its `if:`,
+  so while `CI_RUNS_ON` is set it concludes **skipped**, not a failed run that
+  could never start. Unset the variable and they run again.
+- `validate-pr` follows `CI_RUNS_ON`: it is a required check, so pinned it
+  would block every merge during a lockout. It carries only the job's
+  read-only `github.token` (issues + pull-requests read), no PAT.
 
 ## Known-dead checks during the lockout (PI-837)
 

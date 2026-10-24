@@ -25,6 +25,7 @@ jobs:
   upgrade:
     name: Open scaffolding upgrade PR
     runs-on: ubuntu-24.04
+    if: ${{ vars.CI_RUNS_ON == '' }}  # hosted-only: skip (not fail) when CI_RUNS_ON routes CI to a self-hosted runner
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:

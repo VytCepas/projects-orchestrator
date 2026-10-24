@@ -198,7 +198,14 @@ fi
 echo ""
 echo "Provisioning GitHub Project board fields..."
 
-# The board's Type vocabulary as name:COLOR — the one list the create mutation,
+# GitHub reserves the field name "Type" (its built-in issue-type field), so a
+# new board's type field is "Work type"; must match TYPE_FIELD in
+# board-automation.yml (test-guarded, #1034). A board that already has a custom
+# "Type" single-select (created before the reservation) keeps using it.
+TYPE_FIELD="Work type"
+LEGACY_TYPE_FIELD="Type"
+
+# The board's type vocabulary as name:COLOR — the one list the create mutation,
 # the existing-field option sync and the manual-setup hint all read. It must
 # match the TYPE_LABEL selector in board-automation.yml (test-guarded, #1016).
 TYPE_OPTIONS="feature:BLUE bug:RED chore:GRAY documentation:PURPLE test:YELLOW spike:ORANGE tech-debt:PINK"
@@ -265,7 +272,7 @@ if [ -z "$PROJECT_ID" ]; then
   echo "  • Size         — options: XS, S, M, L, XL" >&2
   echo "  • Agent ready  — options: Yes, No" >&2
   echo "  • Confidence   — options: high, medium, low, unknown" >&2
-  echo "  • Type         — options: $(option_names "$TYPE_OPTIONS")" >&2
+  echo "  • $TYPE_FIELD    — options: $(option_names "$TYPE_OPTIONS")" >&2
   echo "  Settings: $WEB_BASE/users/$OWNER/projects/$PROJECT_NUMBER/settings/fields" >&2
 else
   EXISTING_FIELDS=$(owner_graphql "$PROJECT_QUERY" \
@@ -430,12 +437,17 @@ else
     TYPE_OPTIONS_GRAPHQL="$TYPE_OPTIONS_GRAPHQL
           { name: \"${o%%:*}\", color: ${o#*:}, description: \"\" }"
   done
-  ensure_single_select_field "Type" "
+  if printf '%s\n' "$EXISTING_FIELDS" | grep -Fxq "$LEGACY_TYPE_FIELD" &&
+    ! printf '%s\n' "$EXISTING_FIELDS" | grep -Fxq "$TYPE_FIELD"; then
+    echo "  Using the board's existing '$LEGACY_TYPE_FIELD' field as its type field"
+    TYPE_FIELD="$LEGACY_TYPE_FIELD"
+  fi
+  ensure_single_select_field "$TYPE_FIELD" "
     mutation(\$projectId: ID!) {
       createProjectV2Field(input: {
         projectId: \$projectId
         dataType: SINGLE_SELECT
-        name: \"Type\"
+        name: \"$TYPE_FIELD\"
         singleSelectOptions: [$TYPE_OPTIONS_GRAPHQL
         ]
       }) { projectV2Field { ... on ProjectV2SingleSelectField { id } } }
