@@ -8,11 +8,12 @@ its total, never twice.
 
 A repo passes when its ``just test`` exits 0 and counts no failure. A non-zero
 exit, a counted failure under a zero exit, a timeout, or a runner that could not
-start is a failure. A repo with no justfile, or whose clean ``just --summary``
-lists no ``test`` recipe, is skipped, never failed: an ungoverned repo declares
-no gate, and inventing a red for it is the false positive that gets a check
-switched off. A justfile ``just --summary`` cannot list (``just`` missing, a
-parse error, a timeout) is a failure: no tests ran, and a skip would read green.
+start is a failure. A governed repo (one with a project-init descriptor) with no
+justfile, or whose clean ``just --summary`` lists no ``test`` recipe, is a failure
+with that reason on its row (#967 item 5). A plain git repo admitted by
+``include_plain_repos`` is outside that rule: with no gate it is skipped, as before.
+A justfile ``just --summary`` cannot list (``just`` missing, a parse error, a
+timeout) is a failure for every repo: no tests ran, and a skip would read green.
 A missing summary line leaves the counts unknown (``?``) and lets the exit code
 decide. The summary line is the last one printed on either stream.
 
@@ -27,6 +28,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from projects_orchestrator.adapters.generic import NO_DESCRIPTOR_WARNING
 from projects_orchestrator.descriptor import ProjectDescriptor
 from projects_orchestrator.pool import map_ordered
 from projects_orchestrator.runner import RunResult, run_command
@@ -93,10 +95,17 @@ def _has_justfile(path: Path) -> bool:
         return True
 
 
+def _no_gate(descriptor: ProjectDescriptor, why: str) -> tuple[str, str]:
+    """A repo with no ``test`` gate: red when governed; a plain repo is outside the rule."""
+    if NO_DESCRIPTOR_WARNING in descriptor.warnings:
+        return SKIP, f"{why}; not governed"
+    return FAIL, why
+
+
 def _preflight(descriptor: ProjectDescriptor, run: Runner) -> tuple[str, str] | None:
     """``(status, detail)`` when the repo's ``just test`` is not run; ``None`` to run it."""
     if not _has_justfile(descriptor.path):
-        return SKIP, "no justfile"
+        return _no_gate(descriptor, "no justfile, so no `test` recipe")
     listed = run("just --summary", cwd=descriptor.path, timeout=_RECIPE_TIMEOUT)
     if listed.timed_out:
         return FAIL, f"`just --summary` timed out after {_RECIPE_TIMEOUT:.0f}s"
@@ -106,7 +115,7 @@ def _preflight(descriptor: ProjectDescriptor, run: Runner) -> tuple[str, str] | 
         first_error = listed.stderr.strip().splitlines()[:1]
         return FAIL, ": ".join([f"`just --summary` exited {listed.returncode}", *first_error])
     if "test" not in listed.stdout.split():
-        return SKIP, "no `test` recipe"
+        return _no_gate(descriptor, "no `test` recipe")
     return None
 
 

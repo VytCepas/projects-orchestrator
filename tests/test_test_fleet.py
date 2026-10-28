@@ -17,7 +17,7 @@ import pytest
 from projects_orchestrator import testfleet
 from projects_orchestrator.__main__ import main
 from projects_orchestrator.testfleet import parse_summary
-from tests.conftest import make_project
+from tests.conftest import git_init, make_project
 
 #: The registry id, spelled out: importing the module's own constant would let a
 #: changed stamp change the expectation with it.
@@ -91,17 +91,39 @@ def test_every_line_carries_the_check_id(
     assert all(line.startswith(STAMP + " ") for line in lines), out
 
 
-def test_a_repo_without_a_test_recipe_is_skipped_not_failed(
+def test_a_repo_without_a_test_recipe_is_red_not_skipped(
     fleet_dir: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """#967 item 5: a governed repo with no `test` recipe is a red row, never a skip."""
     _repo(fleet_dir, "alpha", "echo alpha: 3 passed, 0 failed")
     _repo(fleet_dir, "delta", None)
     (_repo(fleet_dir, "eps", None) / "justfile").write_text("lint:\n    @true\n", encoding="utf-8")
     rc, out = _run(fleet_dir, capsys=capsys)
+    assert rc == 1, out
+    rows = _rows(out)
+    assert rows["alpha"][-1] == "pass", out
+    assert rows["delta"] == ["?", "?", "-", "fail"], out
+    assert rows["eps"] == ["?", "?", "-", "fail"], out
+    assert "no justfile" in out and "no `test` recipe" in out, out
+
+
+def test_a_plain_repo_without_a_test_recipe_is_skipped_not_red(
+    fleet_dir: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#967 item 5: the red rule covers governed repos only. A plain git repo (no
+    project-init descriptor, admitted by include_plain_repos) keeps its skip."""
+    _repo(fleet_dir, "alpha", "echo alpha: 3 passed, 0 failed")
+    plain = fleet_dir / "legacy"
+    plain.mkdir()
+    git_init(plain, commit=False)
+    fleet_file = tmp_path / "fleet.yaml"
+    fleet_file.write_text(f"roots:\n  - {fleet_dir}\ninclude_plain_repos: true\n", encoding="utf-8")
+    rc = main(["test-fleet", "--fleet", str(fleet_file)])
+    out = capsys.readouterr().out
     assert rc == 0, out
     rows = _rows(out)
-    assert rows["delta"] == ["-", "-", "-", "skip"], out
-    assert rows["eps"] == ["-", "-", "-", "skip"], out
+    assert rows["legacy"] == ["-", "-", "-", "skip"], out
+    assert rows["alpha"][-1] == "pass", out
 
 
 def test_a_just_that_cannot_list_the_recipes_is_red_not_skipped(
