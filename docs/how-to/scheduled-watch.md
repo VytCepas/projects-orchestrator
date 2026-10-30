@@ -40,9 +40,9 @@ at it), **0** means quiet (within thresholds), **2** means no fleet was found
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp contrib/systemd/projects-orchestrator-watch.{service,timer} ~/.config/systemd/user/
+cp contrib/systemd/fleet-controller-watch.{service,timer} ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now projects-orchestrator-watch.timer
+systemctl --user enable --now fleet-controller-watch.timer
 ```
 
 Configuration is optional, via a private env file:
@@ -77,8 +77,8 @@ project, and `deploy: none` projects cost nothing.
 ## Check it
 
 ```bash
-systemctl --user list-timers projects-orchestrator-watch.timer
-journalctl --user -u projects-orchestrator-watch.service -n 30
+systemctl --user list-timers fleet-controller-watch.timer
+journalctl --user -u fleet-controller-watch.service -n 30
 ```
 
 An eventful pass logs the alerts and exits 1 — the unit counts that as

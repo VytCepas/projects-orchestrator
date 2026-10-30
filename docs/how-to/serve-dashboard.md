@@ -22,16 +22,16 @@ Skip that step to accept the defaults.
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp contrib/systemd/projects-orchestrator-serve.service ~/.config/systemd/user/
+cp contrib/systemd/fleet-controller-serve.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now projects-orchestrator-serve.service
+systemctl --user enable --now fleet-controller-serve.service
 ```
 
 Check it:
 
 ```bash
-systemctl --user status projects-orchestrator-serve.service        # running?
-journalctl --user -u projects-orchestrator-serve.service -n 30     # its log
+systemctl --user status fleet-controller-serve.service        # running?
+journalctl --user -u fleet-controller-serve.service -n 30     # its log
 curl -s http://127.0.0.1:8787/api/fleet | head -c 200              # answering?
 ```
 

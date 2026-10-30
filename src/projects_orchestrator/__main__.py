@@ -115,8 +115,8 @@ from projects_orchestrator.notify import (
 from projects_orchestrator.observability import filter_since, load_events
 from projects_orchestrator.pool import map_ordered
 from projects_orchestrator.registry import (
-    FLEET_FILENAME,
-    FLEET_ROOT_ENV,
+    REGISTRY_FILENAME,
+    ROOT_ENV_NAME,
     SCAN_ROOT_ERROR,
     Fleet,
     FleetConfig,
@@ -201,7 +201,7 @@ def _discover(args: argparse.Namespace) -> Fleet:
         print(
             f"warning: no projects discovered ({where}). A project needs"
             " .agents/config.yaml (or a legacy .claude/ one). Point discovery"
-            f" with --root/--fleet, or export {FLEET_ROOT_ENV}.",
+            f" with --root/--fleet, or export {ROOT_ENV_NAME}.",
             file=sys.stderr,
         )
     return fleet
@@ -795,7 +795,7 @@ def _cmd_register(args: argparse.Namespace) -> int:
     if result is None:
         print("not a project-init scaffold result (no 'target')", file=sys.stderr)
         return 1
-    fleet_file = Path(args.fleet) if args.fleet else Path.cwd() / FLEET_FILENAME
+    fleet_file = Path(args.fleet) if args.fleet else Path.cwd() / REGISTRY_FILENAME
     outcome = register_project(fleet_file, result.target)
     for warning in outcome.warnings:
         print(f"warning: {warning}", file=sys.stderr)

@@ -63,17 +63,17 @@ orchestrator itself is checked out.
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp contrib/systemd/projects-orchestrator-digest.* ~/.config/systemd/user/
+cp contrib/systemd/fleet-controller-digest.* ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now projects-orchestrator-digest.timer
+systemctl --user enable --now fleet-controller-digest.timer
 ```
 
 Check it:
 
 ```bash
-systemctl --user list-timers projects-orchestrator-digest.timer   # next firing
-systemctl --user start projects-orchestrator-digest.service       # run it now
-journalctl --user -u projects-orchestrator-digest.service -n 20   # what it said
+systemctl --user list-timers fleet-controller-digest.timer   # next firing
+systemctl --user start fleet-controller-digest.service       # run it now
+journalctl --user -u fleet-controller-digest.service -n 20   # what it said
 ```
 
 The unit expects the console script at `~/.local/bin/projects-orchestrator` (a

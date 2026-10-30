@@ -1,7 +1,7 @@
 """Optional LLM ``/ask`` mode — English in, an existing intent out.
 
 Off by default: the controller stays deterministic unless the operator sets
-``ORCHESTRATOR_ASK_MODEL`` (a Claude model id) and ``ANTHROPIC_API_KEY``.
+``FLEET_AGENT_ASK_MODEL`` (a Claude model id; the old name ``ORCHESTRATOR_ASK_MODEL`` is read until 2026-12-01) and ``ANTHROPIC_API_KEY``.
 When enabled, the model is shown the fleet's project names and the fixed
 intent list and must answer with one JSON object naming an existing intent —
 it only ever *selects among existing actions* (ADR-003); the deterministic
@@ -30,7 +30,9 @@ _log = logging.getLogger(__name__)
 if TYPE_CHECKING:
     import os
 
-ASK_MODEL_ENV = "ORCHESTRATOR_ASK_MODEL"
+ASK_MODEL_ENV = "FLEET_AGENT_ASK_MODEL"
+# The pre-naming-standard name, read as a fallback until 2026-12-01.
+LEGACY_ASK_MODEL_ENV = "ORCHESTRATOR_ASK_MODEL"
 API_KEY_ENV = "ANTHROPIC_API_KEY"
 
 DISABLED_MESSAGE = (
@@ -201,7 +203,7 @@ def resolve_ask(
         A dispatchable :class:`Intent`, or a human-readable line explaining
         why nothing will be dispatched. Never raises.
     """
-    model = env.get(ASK_MODEL_ENV, "").strip()
+    model = (env.get(ASK_MODEL_ENV) or env.get(LEGACY_ASK_MODEL_ENV) or "").strip()
     if not model:
         return DISABLED_MESSAGE
     if complete is None:

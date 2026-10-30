@@ -133,17 +133,17 @@ projects-orchestrator heal <project> --mode notify --issues
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp contrib/systemd/projects-orchestrator-heal.* ~/.config/systemd/user/
+cp contrib/systemd/fleet-controller-heal.* ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now projects-orchestrator-heal.timer
+systemctl --user enable --now fleet-controller-heal.timer
 ```
 
 Check it:
 
 ```bash
-systemctl --user list-timers projects-orchestrator-heal.timer   # next firing
-systemctl --user start projects-orchestrator-heal.service       # run it now
-journalctl --user -u projects-orchestrator-heal.service -n 30   # what it did
+systemctl --user list-timers fleet-controller-heal.timer   # next firing
+systemctl --user start fleet-controller-heal.service       # run it now
+journalctl --user -u fleet-controller-heal.service -n 30   # what it did
 ```
 
 The unit expects the console script at `~/.local/bin/projects-orchestrator` (a

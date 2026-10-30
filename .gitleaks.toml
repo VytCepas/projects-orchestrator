@@ -27,11 +27,13 @@ paths = [
   # this and every PR fails the gitleaks gate on 3 findings in old commits.
   '''\.claude/config\.yaml''',
   # Our own golden fixtures of that record, carrying the same manifest hashes
-  # (tests/test_contract.py). Same content hashes, same false positive.
+  # (tests/check/fleet/test_contract.py). Same content hashes, same false positive.
   # Named one by one rather than globbing the fixtures dir: a real credential
   # committed to some *other* fixture must still trip the gate.
+  '''fixtures/deploy/scaffolder/config-v[12]\.yaml''',
+  # The same two files at their pre-rename path: full history keeps it.
   '''tests/fixtures/project_init/config\.v[12]\.yaml''',
-  # HISTORICAL. This fixture was folded into config.v2.yaml and deleted (#103),
+  # HISTORICAL. This fixture was folded into config-v2.yaml and deleted (#103),
   # but the secret scan checks out FULL HISTORY (ci.yml: fetch-depth: 0) and the
   # commits that added it are on main — deleting a file does not delete its
   # manifest hashes from the past. Drop this entry and a full-history scan trips

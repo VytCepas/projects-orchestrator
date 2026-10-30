@@ -8,11 +8,11 @@ runtime, with nothing in this repo going red (#219).
 
 | Verb | Schema | Golden fixture | Top-level shape |
 |---|---|---|---|
-| `snapshot --json` | `snapshot.v1.schema.json` | `tests/fixtures/json_seam/snapshot.v1.json` | **bare array** |
-| `events --json` | `events.v1.schema.json` | `tests/fixtures/json_seam/events.v1.json` | **bare array** |
-| `audit --json --digest` | `audit-digest.v1.schema.json` | `tests/fixtures/json_seam/audit-digest.v1.json` | **object** |
+| `snapshot --json` | `snapshot.v1.schema.json` | `fixtures/check/json-seam/snapshot-v1.json` | **bare array** |
+| `events --json` | `events.v1.schema.json` | `fixtures/check/json-seam/events-v1.json` | **bare array** |
+| `audit --json --digest` | `audit-digest.v1.schema.json` | `fixtures/check/json-seam/audit-digest-v1.json` | **object** |
 
-Enforced by `tests/test_json_seam.py`, which holds two separate guarantees:
+Enforced by `tests/check/fleet/test_json_seam.py`, which holds two separate guarantees:
 the **live** output of each verb validates (catches the producer drifting), and
 the **committed fixture** validates (catches the schema drifting). The negative
 cases are what give the positives meaning — a null-padded array, a dropped
@@ -74,7 +74,7 @@ Until then the schema says what is known and no more.
 ## Changing a payload
 
 1. **Additive** (a new key, a new enum member): edit the schema, regenerate the
-   fixture, keep the version. `tests/test_json_seam.py` must stay green.
+   fixture, keep the version. `tests/check/fleet/test_json_seam.py` must stay green.
 2. **Breaking** (rename, retype, remove, or wrapping an array in an envelope):
    bump to `v2` as a **new file** (`snapshot.v2.schema.json`), keep `v1` until
    every consumer has migrated, and land it lock-step with the consumer. Do not edit a

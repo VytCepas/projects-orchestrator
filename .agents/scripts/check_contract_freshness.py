@@ -14,7 +14,7 @@ Exit codes are chosen for a scheduled job:
   0  fresh, or unknown (upstream unreachable — a flaky network is not a
      contract change, and a job that cried wolf on every blip gets muted)
   1  stale — the vendored schema or the golden fixture's pinned project-init
-     version has diverged (re-vendor per tests/fixtures/project_init/README.md),
+     version has diverged (re-vendor per fixtures/deploy/scaffolder/README.md),
      or upstream emits a contract version this orchestrator does not understand
 
 Run it locally with `just contract-freshness`.
@@ -41,8 +41,8 @@ from projects_orchestrator.freshness import (  # noqa: E402
     render,
 )
 
-_VENDORED_SCHEMA = REPO / "tests/fixtures/project_init/schemas/descriptor.schema.json"
-_GOLDEN_FIXTURE = REPO / "tests/fixtures/project_init/config.v2.yaml"
+_VENDORED_SCHEMA = REPO / "fixtures/deploy/scaffolder/schemas/descriptor.schema.json"
+_GOLDEN_FIXTURE = REPO / "fixtures/deploy/scaffolder/config-v2.yaml"
 _VERSION_RE = re.compile(r"^\s*project_init_version:\s*(\S+)", re.MULTILINE)
 
 
