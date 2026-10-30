@@ -190,7 +190,7 @@ TIER_RAG = 3
 #: declared tier that contradicts its stack stripped surfaces with no signal: a
 #: tier-2 child edited to ``tier: 0`` lost its graph and vault while ``doctor``
 #: said ``[ok]``. Pinned to the vendored descriptor schema by
-#: ``tests/test_contract.py``, so a producer change to the ladder fails here.
+#: ``tests/check/fleet/test_contract.py``, so a producer change to the ladder fails here.
 STACK_TIERS: dict[str, int] = {
     "auto": 0,
     "obsidian-only": 1,

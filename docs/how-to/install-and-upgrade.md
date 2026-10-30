@@ -103,7 +103,7 @@ so the built wheel reads the same literal that `--version` prints. To cut a
 release:
 
 1. Move the `Unreleased` entries in `CHANGELOG.md` under the new version heading.
-2. Set `__version__` to that version. `tests/test_version.py` fails if the two
+2. Set `__version__` to that version. `tests/status/fleet/test_version.py` fails if the two
    disagree.
 3. Merge, then `git tag vX.Y.Z && git push origin vX.Y.Z`. Push that one tag, not
    `--tags`: every `v*` tag that reaches GitHub starts a release run. The release

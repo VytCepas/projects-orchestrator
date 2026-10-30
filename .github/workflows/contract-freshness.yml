@@ -1,6 +1,6 @@
 # Is the vendored project-init contract still the contract upstream ships?
 #
-# tests/test_contract.py is a tripwire against a producer change — but only
+# tests/check/fleet/test_contract.py is a tripwire against a producer change — but only
 # against the copy vendored HERE. If project-init changes the contract and nobody
 # re-vendors, those tests keep passing on a stale copy and the drift ships
 # silently: the exact failure the tripwire exists to prevent, one level up.
@@ -73,7 +73,7 @@ jobs:
         run: |
           title="Contract drift: the vendored project-init contract is stale"
           existing=$(gh issue list --state all --search "$title in:title" --json number,state --jq '.[0] // empty')
-          body=$(printf '%s\n\n---\nDetected by the scheduled `Contract freshness` workflow (#106).\nRe-vendor per `tests/fixtures/project_init/README.md`, then this issue can close.\n' "$REPORT")
+          body=$(printf '%s\n\n---\nDetected by the scheduled `Contract freshness` workflow (#106).\nRe-vendor per `fixtures/deploy/scaffolder/README.md`, then this issue can close.\n' "$REPORT")
           if [ -n "$existing" ]; then
             number=$(echo "$existing" | jq -r .number)
             state=$(echo "$existing" | jq -r .state)

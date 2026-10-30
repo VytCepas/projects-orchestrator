@@ -141,8 +141,8 @@ child tree (ADR-003).
 project-init ships a shared `descriptor.schema.json` (VytCepas/project-init#603),
 packaged as a consumable via #786 (`project_init.schema.load_descriptor_schema`),
 as the machine-checkable definition of the surfaces above. Validating the golden
-fixtures under `tests/fixtures/project_init/` against it directly is tracked in
-PO #90. Meanwhile the producer→consumer contract test (`tests/test_contract.py`)
+fixtures under `fixtures/deploy/scaffolder/` against it directly is tracked in
+PO #90. Meanwhile the producer→consumer contract test (`tests/check/fleet/test_contract.py`)
 is the tripwire: it parses **real** project-init scaffolds — a legacy `.claude/`
 v1 and a current `.agents/` v2 — through every reader above, so an upstream shape
 change or relocation fails CI. See [contract v2](descriptor-contract-v2.md).

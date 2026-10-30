@@ -1,8 +1,8 @@
 """Is the vendored project-init contract still the contract upstream ships?
 
-The contract tests (``tests/test_contract.py``) are a tripwire against a
+The contract tests (``tests/check/fleet/test_contract.py``) are a tripwire against a
 *producer* change — but only against the producer copy **vendored here**: the
-golden fixture and `descriptor.schema.json` under ``tests/fixtures/project_init/``.
+golden fixture and `descriptor.schema.json` under ``fixtures/deploy/scaffolder/``.
 If project-init changes the contract and nobody re-vendors, those tests keep
 passing on a stale copy and the drift ships silently. That is the exact failure
 the tripwire was built to prevent, one level up.
@@ -330,7 +330,7 @@ def render(report: FreshnessReport) -> str:
     # knows which remedy applies (Codex on #291).
     if any(d.surface != "contract-version" for d in report.drifts):
         lines.append("")
-        lines.append("Re-vendor: see tests/fixtures/project_init/README.md")
+        lines.append("Re-vendor: see fixtures/deploy/scaffolder/README.md")
     if any(d.surface == "contract-version" for d in report.drifts):
         lines.append("")
         lines.append(

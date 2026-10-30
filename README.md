@@ -136,7 +136,7 @@ and feeds the status table's `Running` column.
 In the TUI, selecting a row opens the per-project Detail tab (descriptor,
 last-known checks, recent commits, memory) with `l`/`t` running that
 project's lint/test gates. The controller's `/ask <question>` mode is
-optional and off by default: set `ORCHESTRATOR_ASK_MODEL` (a Claude model
+optional and off by default: set `FLEET_AGENT_ASK_MODEL` (a Claude model
 id) and `ANTHROPIC_API_KEY` to let a model *select among the existing
 commands* — the deterministic dispatcher still executes them.
 

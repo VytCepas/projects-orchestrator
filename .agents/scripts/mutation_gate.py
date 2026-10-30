@@ -15,7 +15,7 @@ night, silently. The check that exists to catch tests which cannot fail was
 itself a check that could not fail, and nobody could tell, because there was
 nothing to run it against.
 
-Its behaviour is now pinned by `tests/test_mutation_gate.py`.
+Its behaviour is now pinned by `tests/check/fleet/test_mutation_gate.py`.
 
 Exit codes: 0 = at or above the floor. 1 = below it, or nothing was tested.
 """

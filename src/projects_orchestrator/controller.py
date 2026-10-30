@@ -68,7 +68,7 @@ commands:
   refresh                 re-discover the fleet
   help                    this text
   quit                    leave the controller
-  /ask <question>         natural-language mode (opt-in via ORCHESTRATOR_ASK_MODEL)"""
+  /ask <question>         natural-language mode (opt-in via FLEET_AGENT_ASK_MODEL)"""
 
 _TASK_VERBS = {"lint": ("lint",), "test": ("test",), "checks": ("lint", "test")}
 

@@ -7,7 +7,7 @@ here as `project-init ADR-NNN`. A bare `ADR-NNN` always means a file in this
 directory.
 
 Every `project-init ADR-NNN` cited in this repo must have a row below, and every
-row must be cited somewhere. `tests/test_adr_citations.py` enforces both, so a
+row must be cited somewhere. `tests/check/fleet/test_decision_record_citations.py` enforces both, so a
 mistyped number fails instead of pointing at nothing.
 
 | Cited as | File in project-init `docs/adr/` | Cited here for |

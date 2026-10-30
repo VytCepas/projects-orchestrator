@@ -116,8 +116,8 @@ Undeclared (or v1) keeps the globbing fallback.
 
 `descriptor.py` parses all of the above behind `contract_version >= 2`
 (`DeployConfig`, `observability_path`, `hooks_expected`), covered by
-`tests/test_descriptor.py` and — against a **real** `.agents/`-layout v2 scaffold
-— by `tests/test_contract.py`. v0/v1 children are unaffected: the fields stay at
+`tests/status/fleet/test_descriptor.py` and — against a **real** `.agents/`-layout v2 scaffold
+— by `tests/check/fleet/test_contract.py`. v0/v1 children are unaffected: the fields stay at
 their empty defaults and every consumer falls back to the v1 behavior.
 
 **Read-surface hardening (orchestrator-side, done).** `memory_path` and
@@ -128,7 +128,7 @@ claiming full conformance; the observability timestamp format is pinned above.
 
 **Emitted upstream.** project-init emits `project_init_contract_version: 2` with
 the `deploy` / `observability.path` / `hooks.expected` blocks and `run_command`
-(verified by the golden `config.v2.yaml` fixture and `tests/test_contract.py`).
+(verified by the golden `config-v2.yaml` fixture and `tests/check/fleet/test_contract.py`).
 The orchestrator still `shlex.quote`s `deploy.app`/`region` defensively; a
 stricter `^[A-Za-z0-9._-]+$` constraint at scaffold time would be a nice-to-have
 upstream hardening, not a blocker.
@@ -137,7 +137,7 @@ upstream hardening, not a blocker.
 `descriptor.schema.json` + `usage-event.schema.json` (VytCepas/project-init#603,
 packaged as a consumable via #786 — `project_init.schema.load_descriptor_schema`).
 Validating the golden fixtures directly against it is tracked in PO #90; until
-that lands, the producer→consumer contract test (`tests/test_contract.py`) —
+that lands, the producer→consumer contract test (`tests/check/fleet/test_contract.py`) —
 which parses the real `.agents/`-layout v2 fixture through every reader — is the
 tripwire.
 

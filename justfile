@@ -14,7 +14,7 @@ setup:
 # `ruff format --check` verifies formatting without writing — `just format`
 # writes. Without this, an unformatted file merged green (#726).
 # The discovery check runs with this repo's two deliberate collection gaps lifted:
-# addopts ignores tests/integration (CI's own job runs it) and test_properties.py
+# addopts ignores tests/check/integration (CI's own job runs it) and test_properties.py
 # skips without hypothesis, so a plain collection would flag both as "run nowhere".
 [doc("lint project code (docstring + complexity gates per ruff.toml).")]
 lint:

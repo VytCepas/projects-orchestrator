@@ -1,0 +1,20 @@
+# naming-exemptions.tsv — the names in this repo the box's naming lint does not judge, and why.
+#
+# Rows are appended to the standard's exemptions.tsv by gates/naming-check.sh; same columns,
+# same kinds (tool-required, world-name, legacy). A legacy row expires on remove_by and the list only shrinks.
+#
+# COLUMNS  id <TAB> rule <TAB> subject <TAB> kind <TAB> remove_by <TAB> reason
+id	rule	subject	kind	remove_by	reason
+fleet-0001	*	.agents/	tool-required	-	project-init, the scaffolder, writes and upgrades .agents/ and records its names in .agents/.upgrade-base.json
+fleet-0002	*	.claude/	tool-required	-	Claude Code reads .claude/ by name; it is project-init's generated copy of .agents/
+fleet-0003	name.separator	.github/pull_request_template.md	tool-required	-	GitHub reads pull_request_template.md by that exact name
+fleet-0004	name.alias	.github/workflows/project-init-upgrade.yml	tool-required	-	project-init generates this workflow and its upgrade rewrites it by name; a workflow rename is a patch the operator applies
+fleet-0005	name.extension	mypy.ini	tool-required	-	mypy reads mypy.ini by name
+fleet-0006	name.alias	src/projects_orchestrator	legacy	2026-12-28	the Python package is the import name, the wheel and the console script other repos' tooling run; renamed fleet with the module wave
+fleet-0007	name.separator	src/projects_orchestrator	legacy	2026-12-28	same package as fleet-0006: snake_case is a Python import name, renamed with it
+fleet-0008	name.alias	src/projects_orchestrator/adapters/project_init.py	legacy	2026-12-28	the adapter module is imported by that path and named in fleet.yaml's adapter kinds; renamed scaffolder with the module wave
+fleet-0009	name.extension	schemas/audit-digest.v1.schema.json	legacy	2026-12-28	published seam schema: the ambient layer vendors it by this name and its $id is this path; a rename lands lock-step with that consumer (schemas/README.md)
+fleet-0010	name.extension	schemas/events.v1.schema.json	legacy	2026-12-28	published seam schema: vendored by the ambient layer by this name; see fleet-0009
+fleet-0011	name.extension	schemas/snapshot.v1.schema.json	legacy	2026-12-28	published seam schema: vendored by the ambient layer by this name; see fleet-0009
+fleet-0012	name.alias	env:ORCHESTRATOR_ASK_MODEL	legacy	2026-12-01	renamed FLEET_AGENT_ASK_MODEL; the old name is still read as a fallback (src/projects_orchestrator/ask.py) until this date
+fleet-0013	name.env	env:ORCHESTRATOR_ASK_MODEL	legacy	2026-12-01	same fallback as fleet-0012

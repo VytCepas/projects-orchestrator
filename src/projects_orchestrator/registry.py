@@ -38,7 +38,7 @@ from projects_orchestrator.models import DEFAULT_TABLE, ModelChoice, ModelTableE
 
 _log = logging.getLogger(__name__)
 
-FLEET_FILENAME = "fleet.yaml"
+REGISTRY_FILENAME = "fleet.yaml"
 #: Prefix of the warning `_scan_root` appends for an unreadable root — a stable
 #: marker a caller can match on to tell "a root could not be scanned" apart
 #: from every other discovery warning, without re-parsing the free text (#320).
@@ -163,7 +163,7 @@ def load_fleet_config(fleet_file: Path) -> FleetConfig:
     )
 
 
-FLEET_ROOT_ENV = "PO_FLEET_ROOT"
+ROOT_ENV_NAME = "PO_FLEET_ROOT"
 #: The directory every governed repository lives in, side by side (#313).
 PORT_ROOT_ENV = "PORT_ROOT"
 
@@ -208,7 +208,7 @@ def port_root(env: Mapping[str, str] | None = None) -> str | None:
 _NO_ROOT_WARNING = (
     f"no fleet root: {PORT_ROOT_ENV} and HOME are both unset, and $HOME/port is not"
     " guessed as /port — pass --root or --fleet, or export"
-    f" {FLEET_ROOT_ENV} or {PORT_ROOT_ENV}"
+    f" {ROOT_ENV_NAME} or {PORT_ROOT_ENV}"
 )
 
 
@@ -250,19 +250,19 @@ def default_fleet_config(
     it replaces found the fleet only from inside a sibling checkout.
     """
     cwd = (cwd or Path.cwd()).resolve()
-    fleet_file = cwd / FLEET_FILENAME
+    fleet_file = cwd / REGISTRY_FILENAME
     if fleet_file.is_file():
         return load_fleet_config(fleet_file)
     source = os.environ if env is None else env
     warnings: tuple[str, ...] = ()
-    declared = (source.get(FLEET_ROOT_ENV) or "").strip()
+    declared = (source.get(ROOT_ENV_NAME) or "").strip()
     if declared:
         candidate = Path(declared).expanduser()
         if candidate.is_dir():
             return FleetConfig(roots=(candidate.resolve(),))
         # Set but unusable. Saying so beats silently scanning somewhere else and
         # reporting an empty fleet the operator cannot explain.
-        warnings = (f"{FLEET_ROOT_ENV}={declared!r} is not a directory — ignoring it",)
+        warnings = (f"{ROOT_ENV_NAME}={declared!r} is not a directory — ignoring it",)
     root = port_root(source)
     if root is None:
         return FleetConfig(warnings=(*warnings, _NO_ROOT_WARNING))

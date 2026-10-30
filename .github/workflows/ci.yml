@@ -363,11 +363,11 @@ jobs:
       # This prevents masking real test failures with "No integration tests" message
       - name: Run integration tests
         run: |
-          if [ -d tests/integration/ ]; then
-            uv run pytest tests/integration/ -v --tb=short
+          if [ -d tests/check/integration/ ]; then
+            uv run pytest tests/check/integration/ -v --tb=short
           else
-            echo "No integration tests directory found (tests/integration/)"
-            echo "Create tests/integration/ when you have integration tests to run"
+            echo "No integration tests directory found (tests/check/integration/)"
+            echo "Create tests/check/integration/ when you have integration tests to run"
           fi
 
   # Test-quality verification via mutation testing (PI-138/#563). Mutmut is
@@ -434,7 +434,7 @@ jobs:
       # tested is a gate that cannot be trusted — and this one had exactly the
       # defect it exists to detect (#132): it scored an empty run as 100% and
       # passed, nightly, in silence. Its behaviour is now pinned by
-      # tests/test_mutation_gate.py, which runs in the ordinary suite.
+      # tests/check/fleet/test_mutation_gate.py, which runs in the ordinary suite.
       #
       # --floor is a RATCHET. Raise it when the score rises; never lower it to turn
       # a red build green. 100% is not the target and never will be: some mutants
