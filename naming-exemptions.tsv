@@ -18,3 +18,8 @@ fleet-0010	name.extension	schemas/events.v1.schema.json	legacy	2026-12-28	publis
 fleet-0011	name.extension	schemas/snapshot.v1.schema.json	legacy	2026-12-28	published seam schema: vendored by the ambient layer by this name; see fleet-0009
 fleet-0012	name.alias	env:ORCHESTRATOR_ASK_MODEL	legacy	2026-12-01	renamed FLEET_AGENT_ASK_MODEL; the old name is still read as a fallback (src/projects_orchestrator/ask.py) until this date
 fleet-0013	name.env	env:ORCHESTRATOR_ASK_MODEL	legacy	2026-12-01	same fallback as fleet-0012
+fleet-0014	name.word-unregistered	src/projects_orchestrator/procs.py	legacy	2026-12-28	module renamed with the module wave (to src/fleet/session/procs.py); imported by supervisor, runs and work
+fleet-0015	name.word-unregistered	src/projects_orchestrator/testfleet.py	legacy	2026-12-28	module renamed with the module wave (src/fleet/test/); imported by __main__
+fleet-0016	name.word-unregistered	src/projects_orchestrator/urlguard.py	legacy	2026-12-28	module renamed with the module wave (src/fleet/admission/); imported by the cloud and status adapters
+fleet-0017	name.word-unregistered	tests/access/adapter/test_urlguard.py	legacy	2026-12-28	mirrors src/projects_orchestrator/urlguard.py (fleet-0016); renamed with it
+fleet-0018	name.word-unregistered	tests/agent/fleet/test_procs.py	legacy	2026-12-28	mirrors src/projects_orchestrator/procs.py (fleet-0014); renamed with it
